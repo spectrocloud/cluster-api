@@ -3,7 +3,7 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     cert-manager.io/inject-ca-from: capi-webhook-system/capi-kubeadm-control-plane-serving-cert
-    controller-gen.kubebuilder.io/version: v0.2.6
+    controller-gen.kubebuilder.io/version: v0.2.9
   creationTimestamp: null
   labels:
     cluster.x-k8s.io/provider: control-plane-kubeadm
@@ -854,6 +854,15 @@ spec:
                     items:
                       type: string
                     type: array
+                  useExperimentalRetryJoin:
+                    description: "UseExperimentalRetryJoin replaces a basic kubeadm
+                      command with a shell script with retries for joins. \n This
+                      is meant to be an experimental temporary workaround on some
+                      environments where joins fail due to timing (and other issues).
+                      The long term goal is to add retries to kubeadm proper and use
+                      that functionality. \n This will add about 40KB to userdata
+                      \n For more information, refer to https://github.com/kubernetes-sigs/cluster-api/pull/2763#discussion_r397306055."
+                    type: boolean
                   users:
                     description: Users specifies extra users to add
                     items:
@@ -1030,6 +1039,7 @@ webhooks:
     - UPDATE
     resources:
     - kubeadmcontrolplanes
+  sideEffects: None
 ---
 apiVersion: v1
 kind: Service
@@ -1157,3 +1167,4 @@ webhooks:
     - UPDATE
     resources:
     - kubeadmcontrolplanes
+  sideEffects: None
