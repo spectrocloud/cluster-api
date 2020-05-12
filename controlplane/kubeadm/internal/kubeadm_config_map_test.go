@@ -20,31 +20,83 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/onsi/gomega"
+	. "github.com/onsi/gomega"
 
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	kubeadmv1 "sigs.k8s.io/cluster-api/bootstrap/kubeadm/types/v1beta1"
 	"sigs.k8s.io/yaml"
 )
 
-var (
-	HaveOccurred     = gomega.HaveOccurred
-	Succeed          = gomega.Succeed
-	SatisfyAll       = gomega.SatisfyAll
-	HaveLen          = gomega.HaveLen
-	HaveKey          = gomega.HaveKey
-	HaveKeyWithValue = gomega.HaveKeyWithValue
-	WithTransform    = gomega.WithTransform
-	BeEmpty          = gomega.BeEmpty
-	Equal            = gomega.Equal
-	BeEquivalentTo   = gomega.BeEquivalentTo
-	BeTrue           = gomega.BeTrue
-	ContainSubstring = gomega.ContainSubstring
-	ConsistOf        = gomega.ConsistOf
-)
+func TestUpdateKubernetesVersion(t *testing.T) {
+	kconf := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "kubeadmconfig",
+			Namespace: metav1.NamespaceSystem,
+		},
+		Data: map[string]string{
+			clusterConfigurationKey: `
+apiVersion: kubeadm.k8s.io/v1beta2
+kind: ClusterConfiguration
+kubernetesVersion: v1.16.1
+`,
+		},
+	}
+
+	kubeadmConfigNoKey := kconf.DeepCopy()
+	delete(kubeadmConfigNoKey.Data, clusterConfigurationKey)
+
+	kubeadmConfigBadData := kconf.DeepCopy()
+	kubeadmConfigBadData.Data[clusterConfigurationKey] = `something`
+
+	tests := []struct {
+		name      string
+		version   string
+		config    *corev1.ConfigMap
+		expectErr bool
+	}{
+		{
+			name:      "updates the config map",
+			version:   "v1.17.2",
+			config:    kconf,
+			expectErr: false,
+		},
+		{
+			name:      "returns error if cannot find config map",
+			expectErr: true,
+		},
+		{
+			name:      "returns error if config has bad data",
+			config:    kubeadmConfigBadData,
+			expectErr: true,
+		},
+		{
+			name:      "returns error if config doesn't have cluster config key",
+			config:    kubeadmConfigNoKey,
+			expectErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			g := NewWithT(t)
+			conf := tt.config.DeepCopy()
+			k := kubeadmConfig{
+				ConfigMap: conf,
+			}
+			err := k.UpdateKubernetesVersion(tt.version)
+			if tt.expectErr {
+				g.Expect(err).To(HaveOccurred())
+				return
+			}
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(conf.Data[clusterConfigurationKey]).To(ContainSubstring("kubernetesVersion: v1.17.2"))
+		})
+	}
+}
 
 func Test_kubeadmConfig_RemoveAPIEndpoint(t *testing.T) {
-	g := gomega.NewWithT(t)
+	g := NewWithT(t)
 	original := &corev1.ConfigMap{
 		Data: map[string]string{
 			"ClusterStatus": `apiEndpoints:
@@ -198,7 +250,7 @@ etcd:
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			g := gomega.NewWithT(t)
+			g := NewWithT(t)
 
 			kconfig := &kubeadmConfig{
 				ConfigMap: &corev1.ConfigMap{
@@ -213,16 +265,16 @@ etcd:
 				g.Expect(err).ToNot(HaveOccurred())
 			} else {
 				g.Expect(err).To(HaveOccurred())
-				g.Expect(err.Error()).To(gomega.ContainSubstring(test.expectErr.Error()))
+				g.Expect(err.Error()).To(ContainSubstring(test.expectErr.Error()))
 			}
 
-			g.Expect(changed).To(gomega.Equal(test.expectChanged))
+			g.Expect(changed).To(Equal(test.expectChanged))
 			if changed {
 				if test.imageRepository != "" {
-					g.Expect(kconfig.ConfigMap.Data[clusterConfigurationKey]).To(gomega.ContainSubstring(test.imageRepository))
+					g.Expect(kconfig.ConfigMap.Data[clusterConfigurationKey]).To(ContainSubstring(test.imageRepository))
 				}
 				if test.imageTag != "" {
-					g.Expect(kconfig.ConfigMap.Data[clusterConfigurationKey]).To(gomega.ContainSubstring(test.imageTag))
+					g.Expect(kconfig.ConfigMap.Data[clusterConfigurationKey]).To(ContainSubstring(test.imageTag))
 				}
 			}
 
@@ -294,7 +346,7 @@ scheduler: {}`,
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			g := gomega.NewWithT(t)
+			g := NewWithT(t)
 			imageRepository := "gcr.io/example"
 			imageTag := "v1.0.1-sometag"
 			kc := kubeadmConfig{ConfigMap: tt.cm}
@@ -320,6 +372,77 @@ scheduler: {}`,
 			g.Expect(actualDNS.Type).To(BeEquivalentTo(kubeadmv1.CoreDNS))
 			g.Expect(actualDNS.ImageRepository).To(Equal(imageRepository))
 			g.Expect(actualDNS.ImageTag).To(Equal(imageTag))
+		})
+	}
+}
+
+func TestUpdateImageRepository(t *testing.T) {
+
+	tests := []struct {
+		name            string
+		data            map[string]string
+		imageRepository string
+		expected        string
+		expectErr       error
+	}{
+		{
+			name: "it should set the values, if they were empty",
+			data: map[string]string{
+				clusterConfigurationKey: `
+apiVersion: kubeadm.k8s.io/v1beta2
+kind: ClusterConfiguration
+imageRepository: k8s.gcr.io
+`},
+			imageRepository: "example.com/k8s",
+			expected:        "example.com/k8s",
+		},
+		{
+			name: "it shouldn't write empty strings",
+			data: map[string]string{
+				clusterConfigurationKey: `
+apiVersion: kubeadm.k8s.io/v1beta2
+kind: ClusterConfiguration
+imageRepository: k8s.gcr.io
+`},
+			imageRepository: "",
+			expected:        "k8s.gcr.io",
+		},
+		{
+			name: "it should error if it's not a valid k8s object",
+			data: map[string]string{
+				clusterConfigurationKey: `
+imageRepository: "cool"
+`},
+			imageRepository: "example.com/k8s",
+			expectErr:       errors.New("Object 'Kind' is missing"),
+		},
+		{
+			name:            "returns an error if config map doesn't have the cluster config data key",
+			data:            map[string]string{},
+			imageRepository: "example.com/k8s",
+			expectErr:       errors.New("unable to find \"ClusterConfiguration\" key in kubeadm ConfigMap"),
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			g := NewWithT(t)
+
+			kconfig := &kubeadmConfig{
+				ConfigMap: &corev1.ConfigMap{
+					Data: test.data,
+				},
+			}
+
+			err := kconfig.UpdateImageRepository(test.imageRepository)
+			if test.expectErr == nil {
+				g.Expect(err).ToNot(HaveOccurred())
+			} else {
+				g.Expect(err).To(HaveOccurred())
+				g.Expect(err.Error()).To(ContainSubstring(test.expectErr.Error()))
+			}
+
+			g.Expect(kconfig.ConfigMap.Data[clusterConfigurationKey]).To(ContainSubstring(test.expected))
 		})
 	}
 }

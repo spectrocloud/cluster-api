@@ -19,9 +19,10 @@ package v1alpha3
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
+
 	"github.com/coredns/corefile-migration/migration"
 	kubeadmv1 "sigs.k8s.io/cluster-api/bootstrap/kubeadm/types/v1beta1"
-	"strings"
 
 	"github.com/blang/semver"
 	jsonpatch "github.com/evanphx/json-patch"
@@ -29,6 +30,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	"sigs.k8s.io/cluster-api/util"
+	"sigs.k8s.io/cluster-api/util/container"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 )
@@ -39,8 +41,8 @@ func (in *KubeadmControlPlane) SetupWebhookWithManager(mgr ctrl.Manager) error {
 		Complete()
 }
 
-// +kubebuilder:webhook:verbs=create;update,path=/mutate-controlplane-cluster-x-k8s-io-v1alpha3-kubeadmcontrolplane,mutating=true,failurePolicy=fail,matchPolicy=Equivalent,groups=controlplane.cluster.x-k8s.io,resources=kubeadmcontrolplanes,versions=v1alpha3,name=default.kubeadmcontrolplane.controlplane.cluster.x-k8s.io
-// +kubebuilder:webhook:verbs=create;update,path=/validate-controlplane-cluster-x-k8s-io-v1alpha3-kubeadmcontrolplane,mutating=false,failurePolicy=fail,matchPolicy=Equivalent,groups=controlplane.cluster.x-k8s.io,resources=kubeadmcontrolplanes,versions=v1alpha3,name=validation.kubeadmcontrolplane.controlplane.cluster.x-k8s.io
+// +kubebuilder:webhook:verbs=create;update,path=/mutate-controlplane-cluster-x-k8s-io-v1alpha3-kubeadmcontrolplane,mutating=true,failurePolicy=fail,matchPolicy=Equivalent,groups=controlplane.cluster.x-k8s.io,resources=kubeadmcontrolplanes,versions=v1alpha3,name=default.kubeadmcontrolplane.controlplane.cluster.x-k8s.io,sideEffects=None
+// +kubebuilder:webhook:verbs=create;update,path=/validate-controlplane-cluster-x-k8s-io-v1alpha3-kubeadmcontrolplane,mutating=false,failurePolicy=fail,matchPolicy=Equivalent,groups=controlplane.cluster.x-k8s.io,resources=kubeadmcontrolplanes,versions=v1alpha3,name=validation.kubeadmcontrolplane.controlplane.cluster.x-k8s.io,sideEffects=None
 
 var _ webhook.Defaulter = &KubeadmControlPlane{}
 var _ webhook.Validator = &KubeadmControlPlane{}
@@ -84,6 +86,7 @@ func (in *KubeadmControlPlane) ValidateUpdate(old runtime.Object) error {
 		{spec, kubeadmConfigSpec, clusterConfiguration, "etcd", "local", "imageTag"},
 		{spec, kubeadmConfigSpec, clusterConfiguration, "dns", "imageRepository"},
 		{spec, kubeadmConfigSpec, clusterConfiguration, "dns", "imageTag"},
+		{spec, kubeadmConfigSpec, clusterConfiguration, "imageRepository"},
 		{spec, "infrastructureTemplate", "name"},
 		{spec, "replicas"},
 		{spec, "version"},
@@ -250,7 +253,7 @@ func (in *KubeadmControlPlane) validateCoreDNSImage() (allErrs field.ErrorList) 
 		return allErrs
 	}
 	// TODO: Remove when kubeadm types include OpenAPI validation
-	if !util.ImageTagIsValid(in.Spec.KubeadmConfigSpec.ClusterConfiguration.DNS.ImageTag) {
+	if !container.ImageTagIsValid(in.Spec.KubeadmConfigSpec.ClusterConfiguration.DNS.ImageTag) {
 		allErrs = append(
 			allErrs,
 			field.Forbidden(
@@ -266,12 +269,13 @@ func (in *KubeadmControlPlane) validateCoreDNSVersion(prev *KubeadmControlPlane)
 	if in.Spec.KubeadmConfigSpec.ClusterConfiguration == nil || prev.Spec.KubeadmConfigSpec.ClusterConfiguration == nil {
 		return allErrs
 	}
-	if prev.Spec.KubeadmConfigSpec.ClusterConfiguration.DNS.ImageTag == "" {
+	//return if either current or target versions is empty
+	if prev.Spec.KubeadmConfigSpec.ClusterConfiguration.DNS.ImageTag == "" || in.Spec.KubeadmConfigSpec.ClusterConfiguration.DNS.ImageTag == "" {
 		return allErrs
 	}
-	dns := &in.Spec.KubeadmConfigSpec.ClusterConfiguration.DNS
+	targetDNS := &in.Spec.KubeadmConfigSpec.ClusterConfiguration.DNS
 	//return if the type is anything other than empty (default), or CoreDNS.
-	if dns.Type != "" && dns.Type != kubeadmv1.CoreDNS {
+	if targetDNS.Type != "" && targetDNS.Type != kubeadmv1.CoreDNS {
 		return allErrs
 	}
 
@@ -286,13 +290,13 @@ func (in *KubeadmControlPlane) validateCoreDNSVersion(prev *KubeadmControlPlane)
 		return allErrs
 	}
 
-	toVersion, err := util.ParseMajorMinorPatch(dns.ImageTag)
+	toVersion, err := util.ParseMajorMinorPatch(targetDNS.ImageTag)
 	if err != nil {
 		allErrs = append(allErrs,
 			field.Invalid(
 				field.NewPath("spec", "kubeadmConfigSpec", "clusterConfiguration", "dns", "imageTag"),
-				dns.ImageTag,
-				fmt.Sprintf("failed to parse CoreDNS target version: %v", dns.ImageTag),
+				targetDNS.ImageTag,
+				fmt.Sprintf("failed to parse CoreDNS target version: %v", targetDNS.ImageTag),
 			),
 		)
 		return allErrs
@@ -317,7 +321,7 @@ func (in *KubeadmControlPlane) validateEtcd(prev *KubeadmControlPlane) (allErrs 
 	}
 
 	// TODO: Remove when kubeadm types include OpenAPI validation
-	if in.Spec.KubeadmConfigSpec.ClusterConfiguration.Etcd.Local != nil && !util.ImageTagIsValid(in.Spec.KubeadmConfigSpec.ClusterConfiguration.Etcd.Local.ImageTag) {
+	if in.Spec.KubeadmConfigSpec.ClusterConfiguration.Etcd.Local != nil && !container.ImageTagIsValid(in.Spec.KubeadmConfigSpec.ClusterConfiguration.Etcd.Local.ImageTag) {
 		allErrs = append(
 			allErrs,
 			field.Forbidden(

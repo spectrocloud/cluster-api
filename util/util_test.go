@@ -18,17 +18,18 @@ package util
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/blang/semver"
 	. "github.com/onsi/gomega"
-
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha3"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
@@ -477,19 +478,8 @@ func TestGetMachinesForCluster(t *testing.T) {
 	g.Expect(machines.Items[0].Labels[clusterv1.ClusterLabelName]).To(Equal(cluster.Name))
 }
 
-func TestModifyImageTag(t *testing.T) {
-	g := NewGomegaWithT(t)
-	t.Run("should ensure image is a docker compatible tag", func(t *testing.T) {
-		testTag := "v1.17.4+build1"
-		image := "example.com/image:1.17.3"
-		res, err := ModifyImageTag(image, testTag)
-		g.Expect(err).NotTo(HaveOccurred())
-		g.Expect(res).To(Equal("example.com/image:v1.17.4_build1"))
-	})
-}
-
 func TestEnsureOwnerRef(t *testing.T) {
-	g := NewGomegaWithT(t)
+	g := NewWithT(t)
 
 	t.Run("should set ownerRef on an empty list", func(t *testing.T) {
 		obj := &clusterv1.Machine{}
@@ -549,4 +539,126 @@ func TestEnsureOwnerRef(t *testing.T) {
 		g.Expect(obj.OwnerReferences).Should(ContainElement(ref))
 		g.Expect(obj.OwnerReferences).Should(HaveLen(1))
 	})
+}
+
+func TestClusterToObjectsMapper(t *testing.T) {
+	g := NewWithT(t)
+
+	scheme := runtime.NewScheme()
+	g.Expect(clusterv1.AddToScheme(scheme)).To(Succeed())
+
+	cluster := &clusterv1.Cluster{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "test1",
+		},
+	}
+
+	table := []struct {
+		name        string
+		objects     []runtime.Object
+		input       runtime.Object
+		output      []ctrl.Request
+		expectError bool
+	}{
+		{
+			name:  "should return a list of requests with labelled machines",
+			input: &clusterv1.MachineList{},
+			objects: []runtime.Object{
+				&clusterv1.Machine{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "machine1",
+						Labels: map[string]string{
+							clusterv1.ClusterLabelName: "test1",
+						},
+					},
+				},
+				&clusterv1.Machine{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "machine2",
+						Labels: map[string]string{
+							clusterv1.ClusterLabelName: "test1",
+						},
+					},
+				},
+			},
+			output: []ctrl.Request{
+				{NamespacedName: client.ObjectKey{Name: "machine1"}},
+				{NamespacedName: client.ObjectKey{Name: "machine2"}},
+			},
+		},
+		{
+			name:  "should return a list of requests with labelled MachineDeployments",
+			input: &clusterv1.MachineDeploymentList{},
+			objects: []runtime.Object{
+				&clusterv1.MachineDeployment{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "md1",
+						Labels: map[string]string{
+							clusterv1.ClusterLabelName: "test1",
+						},
+					},
+				},
+				&clusterv1.MachineDeployment{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "md2",
+						Labels: map[string]string{
+							clusterv1.ClusterLabelName: "test2",
+						},
+					},
+				},
+				&clusterv1.MachineDeployment{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "md3",
+						Labels: map[string]string{
+							clusterv1.ClusterLabelName: "test1",
+						},
+					},
+				},
+				&clusterv1.MachineDeployment{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "md4",
+					},
+				},
+			},
+			output: []ctrl.Request{
+				{NamespacedName: client.ObjectKey{Name: "md1"}},
+				{NamespacedName: client.ObjectKey{Name: "md3"}},
+			},
+		},
+	}
+
+	for _, tc := range table {
+		tc.objects = append(tc.objects, cluster)
+		client := fake.NewFakeClientWithScheme(scheme, tc.objects...)
+
+		f, err := ClusterToObjectsMapper(client, tc.input, scheme)
+		g.Expect(err != nil, err).To(Equal(tc.expectError))
+		g.Expect(f.Map(handler.MapObject{Object: cluster})).To(ConsistOf(tc.output))
+	}
+}
+
+func TestOrdinalize(t *testing.T) {
+	tests := []struct {
+		input    int
+		expected string
+	}{
+		{0, "0th"},
+		{1, "1st"},
+		{2, "2nd"},
+		{43, "43rd"},
+		{5, "5th"},
+		{6, "6th"},
+		{207, "207th"},
+		{1008, "1008th"},
+		{-109, "-109th"},
+		{-0, "0th"},
+	}
+
+	for _, tt := range tests {
+		t.Run(fmt.Sprintf("ordinalize %d", tt.input), func(t *testing.T) {
+			g := NewWithT(t)
+			g.Expect(Ordinalize(tt.input)).To(Equal(tt.expected))
+		})
+	}
+
 }

@@ -91,18 +91,33 @@ func newInventoryClient(proxy Proxy, pollImmediateWaiter PollImmediateWaiter) *i
 func (p *inventoryClient) EnsureCustomResourceDefinitions() error {
 	log := logf.Log
 
-	c, err := p.proxy.NewClient()
+	if err := p.proxy.ValidateKubernetesVersion(); err != nil {
+		return err
+	}
+
+	// Being this the first connection of many clusterctl operations, we want to fail fast if there is no
+	// connectivity to the cluster, so we try to get a client as a first thing.
+	// NB. NewClient has an internal retry loop that should mitigate temporary connection glitch; here we are
+	// trying to detect persistent connection problems (>10s) before entering in longer retry loops while executing
+	// clusterctl operations.
+	_, err := p.proxy.NewClient()
 	if err != nil {
 		return err
 	}
 
 	// Check the CRDs already exists, if yes, exit immediately.
-	l := &clusterctlv1.ProviderList{}
-	if err = c.List(ctx, l); err == nil {
-		return nil
+	// Nb. The operation is wrapped in a retry loop to make EnsureCustomResourceDefinitions more resilient to unexpected conditions.
+	var crdIsIstalled bool
+	listInventoryBackoff := newReadBackoff()
+	if err := retryWithExponentialBackoff(listInventoryBackoff, func() error {
+		var err error
+		crdIsIstalled, err = checkInventoryCRDs(p.proxy)
+		return err
+	}); err != nil {
+		return err
 	}
-	if !apimeta.IsNoMatchError(err) {
-		return errors.Wrap(err, "failed to check if the clusterctl inventory CRD exists")
+	if crdIsIstalled {
+		return nil
 	}
 
 	log.V(1).Info("Installing the clusterctl inventory CRD")
@@ -120,7 +135,7 @@ func (p *inventoryClient) EnsureCustomResourceDefinitions() error {
 	}
 
 	// Install the CRDs.
-	createInventoryObjectBackoff := newBackoff()
+	createInventoryObjectBackoff := newWriteBackoff()
 	for i := range objs {
 		o := objs[i]
 		log.V(5).Info("Creating", logf.UnstructuredToValues(o)...)
@@ -166,6 +181,23 @@ func (p *inventoryClient) EnsureCustomResourceDefinitions() error {
 	return nil
 }
 
+// checkInventoryCRDs checks if the inventory CRDs are installed in the cluster.
+func checkInventoryCRDs(proxy Proxy) (bool, error) {
+	c, err := proxy.NewClient()
+	if err != nil {
+		return false, err
+	}
+
+	l := &clusterctlv1.ProviderList{}
+	if err = c.List(ctx, l); err == nil {
+		return true, nil
+	}
+	if !apimeta.IsNoMatchError(err) {
+		return false, errors.Wrap(err, "failed to check if the clusterctl inventory CRD exists")
+	}
+	return false, nil
+}
+
 func (p *inventoryClient) createObj(o unstructured.Unstructured) error {
 	c, err := p.proxy.NewClient()
 	if err != nil {
@@ -189,49 +221,66 @@ func (p *inventoryClient) createObj(o unstructured.Unstructured) error {
 }
 
 func (p *inventoryClient) Create(m clusterctlv1.Provider) error {
-	cl, err := p.proxy.NewClient()
+	// Create the Kubernetes object.
+	createInventoryObjectBackoff := newWriteBackoff()
+	return retryWithExponentialBackoff(createInventoryObjectBackoff, func() error {
+		cl, err := p.proxy.NewClient()
+		if err != nil {
+			return err
+		}
+
+		currentProvider := &clusterctlv1.Provider{}
+		key := client.ObjectKey{
+			Namespace: m.Namespace,
+			Name:      m.Name,
+		}
+		if err := cl.Get(ctx, key, currentProvider); err != nil {
+			if !apierrors.IsNotFound(err) {
+				return errors.Wrapf(err, "failed to get current provider object")
+			}
+
+			//if it does not exists, create the provider object
+			if err := cl.Create(ctx, &m); err != nil {
+				return errors.Wrapf(err, "failed to create provider object")
+			}
+			return nil
+		}
+
+		// otherwise patch the provider object
+		// NB. we are using client.Merge PatchOption so the new objects gets compared with the current one server side
+		m.SetResourceVersion(currentProvider.GetResourceVersion())
+		if err := cl.Patch(ctx, &m, client.Merge); err != nil {
+			return errors.Wrapf(err, "failed to patch provider object")
+		}
+
+		return nil
+	})
+}
+
+func (p *inventoryClient) List() (*clusterctlv1.ProviderList, error) {
+	providerList := &clusterctlv1.ProviderList{}
+
+	listProvidersBackoff := newReadBackoff()
+	if err := retryWithExponentialBackoff(listProvidersBackoff, func() error {
+		return listProviders(p.proxy, providerList)
+	}); err != nil {
+		return nil, err
+	}
+
+	return providerList, nil
+}
+
+// listProviders retrieves the list of provider inventory objects.
+func listProviders(proxy Proxy, providerList *clusterctlv1.ProviderList) error {
+	cl, err := proxy.NewClient()
 	if err != nil {
 		return err
 	}
 
-	currentProvider := &clusterctlv1.Provider{}
-	key := client.ObjectKey{
-		Namespace: m.Namespace,
-		Name:      m.Name,
-	}
-	if err := cl.Get(ctx, key, currentProvider); err != nil {
-		if !apierrors.IsNotFound(err) {
-			return errors.Wrapf(err, "failed to get current provider object")
-		}
-
-		//if it does not exists, create the provider object
-		if err := cl.Create(ctx, &m); err != nil {
-			return errors.Wrapf(err, "failed to create provider object")
-		}
-		return nil
-	}
-
-	// otherwise patch the provider object
-	// NB. we are using client.Merge PatchOption so the new objects gets compared with the current one server side
-	m.SetResourceVersion(currentProvider.GetResourceVersion())
-	if err := cl.Patch(ctx, &m, client.Merge); err != nil {
-		return errors.Wrapf(err, "failed to patch provider object")
-	}
-
-	return nil
-}
-
-func (p *inventoryClient) List() (*clusterctlv1.ProviderList, error) {
-	cl, err := p.proxy.NewClient()
-	if err != nil {
-		return nil, err
-	}
-
-	providerList := &clusterctlv1.ProviderList{}
 	if err := cl.List(ctx, providerList); err != nil {
-		return nil, errors.Wrap(err, "failed get providers")
+		return errors.Wrap(err, "failed get providers")
 	}
-	return providerList, nil
+	return nil
 }
 
 func (p *inventoryClient) GetDefaultProviderName(providerType clusterctlv1.ProviderType) (string, error) {

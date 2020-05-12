@@ -20,8 +20,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"testing"
+
+	. "github.com/onsi/gomega"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -56,6 +57,8 @@ func TestCheckStaticPodReadyCondition(t *testing.T) {
 	}
 	for _, test := range table {
 		t.Run(test.name, func(t *testing.T) {
+			g := NewWithT(t)
+
 			pod := corev1.Pod{
 				ObjectMeta: metav1.ObjectMeta{
 					Name: "test-pod",
@@ -63,9 +66,7 @@ func TestCheckStaticPodReadyCondition(t *testing.T) {
 				Spec:   corev1.PodSpec{},
 				Status: corev1.PodStatus{Conditions: test.conditions},
 			}
-			if err := checkStaticPodReadyCondition(pod); err != nil {
-				t.Fatalf("should not have gotten an error: %v", err)
-			}
+			g.Expect(checkStaticPodReadyCondition(pod)).To(Succeed())
 		})
 	}
 }
@@ -82,6 +83,8 @@ func TestCheckStaticPodNotReadyCondition(t *testing.T) {
 	}
 	for _, test := range table {
 		t.Run(test.name, func(t *testing.T) {
+			g := NewWithT(t)
+
 			pod := corev1.Pod{
 				ObjectMeta: metav1.ObjectMeta{
 					Name: "test-pod",
@@ -89,14 +92,14 @@ func TestCheckStaticPodNotReadyCondition(t *testing.T) {
 				Spec:   corev1.PodSpec{},
 				Status: corev1.PodStatus{Conditions: test.conditions},
 			}
-			if err := checkStaticPodReadyCondition(pod); err == nil {
-				t.Fatal("should have returned an error")
-			}
+			g.Expect(checkStaticPodReadyCondition(pod)).NotTo(Succeed())
 		})
 	}
 }
 
 func TestControlPlaneIsHealthy(t *testing.T) {
+	g := NewWithT(t)
+
 	readyStatus := corev1.PodStatus{
 		Conditions: []corev1.PodCondition{
 			{
@@ -120,15 +123,9 @@ func TestControlPlaneIsHealthy(t *testing.T) {
 	}
 
 	health, err := workloadCluster.ControlPlaneIsHealthy(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(health) == 0 {
-		t.Fatal("no nodes were checked")
-	}
-	if len(health) != len(nodeListForTestControlPlaneIsHealthy().Items) {
-		t.Fatal("not all nodes were checked")
-	}
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(health).NotTo(HaveLen(0))
+	g.Expect(health).To(HaveLen(len(nodeListForTestControlPlaneIsHealthy().Items)))
 }
 
 func nodeNamed(name string, options ...func(n corev1.Node) corev1.Node) corev1.Node {
@@ -154,6 +151,8 @@ func nodeListForTestControlPlaneIsHealthy() *corev1.NodeList {
 }
 
 func TestGetMachinesForCluster(t *testing.T) {
+	g := NewWithT(t)
+
 	m := Management{Client: &fakeClient{
 		list: machineListForTestGetMachinesForCluster(),
 	}}
@@ -162,33 +161,21 @@ func TestGetMachinesForCluster(t *testing.T) {
 		Name:      "my-cluster",
 	}
 	machines, err := m.GetMachinesForCluster(context.Background(), clusterKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(machines) != 3 {
-		t.Fatalf("expected 3 machines but found %d", len(machines))
-	}
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(machines).To(HaveLen(3))
 
 	// Test the OwnedControlPlaneMachines works
 	machines, err = m.GetMachinesForCluster(context.Background(), clusterKey, machinefilters.OwnedControlPlaneMachines("my-control-plane"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(machines) != 1 {
-		t.Fatalf("expected 1 control plane machine but got %d", len(machines))
-	}
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(machines).To(HaveLen(1))
 
 	// Test that the filters use AND logic instead of OR logic
 	nameFilter := func(cluster *clusterv1.Machine) bool {
 		return cluster.Name == "first-machine"
 	}
 	machines, err = m.GetMachinesForCluster(context.Background(), clusterKey, machinefilters.OwnedControlPlaneMachines("my-control-plane"), nameFilter)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(machines) != 1 {
-		t.Fatalf("expected 1 control plane machine but got %d", len(machines))
-	}
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(machines).To(HaveLen(1))
 }
 
 func machineListForTestGetMachinesForCluster() *clusterv1.MachineList {
@@ -236,6 +223,7 @@ type fakeClient struct {
 	getErr       error
 	patchErr     error
 	updateErr    error
+	listErr      error
 }
 
 func (f *fakeClient) Get(_ context.Context, key client.ObjectKey, obj runtime.Object) error {
@@ -264,6 +252,9 @@ func (f *fakeClient) Get(_ context.Context, key client.ObjectKey, obj runtime.Ob
 }
 
 func (f *fakeClient) List(_ context.Context, list runtime.Object, _ ...client.ListOption) error {
+	if f.listErr != nil {
+		return f.listErr
+	}
 	switch l := f.list.(type) {
 	case *clusterv1.MachineList:
 		l.DeepCopyInto(list.(*clusterv1.MachineList))
@@ -329,13 +320,13 @@ func TestManagementCluster_healthCheck_NoError(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			g := NewWithT(t)
+
 			ctx := context.Background()
 			m := &Management{
 				Client: &fakeClient{list: tt.machineList},
 			}
-			if err := m.healthCheck(ctx, tt.check, tt.clusterKey, tt.controlPlaneName); err != nil {
-				t.Fatal("did not expect an error?")
-			}
+			g.Expect(m.healthCheck(ctx, tt.check, tt.clusterKey, tt.controlPlaneName)).To(Succeed())
 		})
 	}
 }
@@ -437,6 +428,8 @@ func TestManagementCluster_healthCheck_Errors(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			g := NewWithT(t)
+
 			ctx := context.Background()
 			clusterKey := client.ObjectKey{Namespace: "default", Name: "cluster-name"}
 			controlPlaneName := "control-plane-name"
@@ -445,13 +438,10 @@ func TestManagementCluster_healthCheck_Errors(t *testing.T) {
 				Client: &fakeClient{list: tt.machineList},
 			}
 			err := m.healthCheck(ctx, tt.check, clusterKey, controlPlaneName)
-			if err == nil {
-				t.Fatal("Expected an error")
-			}
+			g.Expect(err).To(HaveOccurred())
+
 			for _, expectedError := range tt.expectedErrors {
-				if !strings.Contains(err.Error(), expectedError) {
-					t.Fatalf("Expected %q to contain %q", err.Error(), expectedError)
-				}
+				g.Expect(err).To(MatchError(ContainSubstring(expectedError)))
 			}
 		})
 	}
@@ -483,39 +473,4 @@ func controlPlaneMachine(name string) clusterv1.Machine {
 func nilNodeRef(machine clusterv1.Machine) clusterv1.Machine {
 	machine.Status.NodeRef = nil
 	return machine
-}
-
-func TestRemoveMemberForNode_ErrControlPlaneMinNodes(t *testing.T) {
-	t.Run("do not remove the etcd member if the cluster has fewer than 2 control plane nodes", func(t *testing.T) {
-		expectedErr := ErrControlPlaneMinNodes
-
-		workloadCluster := &Workload{
-			Client: &fakeClient{
-				list: &corev1.NodeList{
-					Items: []corev1.Node{
-						nodeNamed("first-control-plane"),
-					},
-				},
-			},
-		}
-
-		err := workloadCluster.removeMemberForNode(context.Background(), "first-control-plane")
-		if err == nil {
-			t.Fatalf("expected %v, got no error", expectedErr)
-		}
-		if !errors.Is(err, expectedErr) {
-			t.Fatalf("expected %v, got %v", expectedErr, err)
-		}
-	})
-}
-
-func TestPickFirstNodeNotMatching(t *testing.T) {
-	name := "first-control-plane"
-	anotherNode := firstNodeNotMatchingName(name, nodeListForTestControlPlaneIsHealthy().Items)
-	if anotherNode == nil {
-		t.Fatalf("expected to find another node")
-	}
-	if anotherNode.Name == name {
-		t.Fatalf("expected any node other than %s", name)
-	}
 }

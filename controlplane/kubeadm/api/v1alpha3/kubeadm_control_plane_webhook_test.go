@@ -21,6 +21,7 @@ import (
 	"time"
 
 	. "github.com/onsi/gomega"
+
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/pointer"
@@ -309,6 +310,14 @@ func TestKubeadmControlPlaneValidateUpdate(t *testing.T) {
 		},
 	}
 
+	unsetCoreDNSToVersion := dns.DeepCopy()
+	unsetCoreDNSToVersion.Spec.KubeadmConfigSpec.ClusterConfiguration.DNS = kubeadmv1beta1.DNS{
+		ImageMeta: kubeadmv1beta1.ImageMeta{
+			ImageRepository: "",
+			ImageTag:        "",
+		},
+	}
+
 	certificatesDir := before.DeepCopy()
 	certificatesDir.Spec.KubeadmConfigSpec.ClusterConfiguration.CertificatesDir = "a new certificates directory"
 
@@ -506,6 +515,12 @@ func TestKubeadmControlPlaneValidateUpdate(t *testing.T) {
 			kcp:       validCoreDNSCustomToVersion,
 		},
 		{
+			name:      "should succeed when CoreDNS ImageTag is unset",
+			expectErr: false,
+			before:    dns,
+			kcp:       unsetCoreDNSToVersion,
+		},
+		{
 			name:      "should succeed when using an valid DNS build",
 			expectErr: false,
 			before:    before,
@@ -531,7 +546,7 @@ func TestKubeadmControlPlaneValidateUpdate(t *testing.T) {
 		},
 		{
 			name:      "should fail when making a change to the cluster config's imageRepository",
-			expectErr: true,
+			expectErr: false,
 			before:    before,
 			kcp:       imageRepository,
 		},

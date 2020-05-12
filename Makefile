@@ -48,7 +48,8 @@ RELEASE_NOTES_BIN := bin/release-notes
 RELEASE_NOTES := $(TOOLS_DIR)/$(RELEASE_NOTES_BIN)
 LINK_CHECKER_BIN := bin/liche
 LINK_CHECKER := $(TOOLS_DIR)/$(LINK_CHECKER_BIN)
-CLUSTERCTL_E2E_DIR := cmd/clusterctl/test/e2e
+GO_APIDIFF_BIN := bin/go-apidiff
+GO_APIDIFF := $(TOOLS_DIR)/$(GO_APIDIFF_BIN)
 
 # Binaries.
 # Need to use abspath so we can invoke these from subdirectories
@@ -60,7 +61,9 @@ CONVERSION_GEN := $(abspath $(TOOLS_BIN_DIR)/conversion-gen)
 # Bindata.
 GOBINDATA := $(abspath $(TOOLS_BIN_DIR)/go-bindata)
 GOBINDATA_CLUSTERCTL_DIR := cmd/clusterctl/config
-CERTMANAGER_COMPONENTS_GENERATED_FILE := cert-manager.yaml
+CLOUDINIT_PKG_DIR := bootstrap/kubeadm/internal/cloudinit
+CLOUDINIT_GENERATED := $(CLOUDINIT_PKG_DIR)/zz_generated.bindata.go
+CLOUDINIT_SCRIPT := $(CLOUDINIT_PKG_DIR)/kubeadm-bootstrap-script.sh
 
 # Define Docker related variables. Releases should modify and double check these vars.
 REGISTRY ?= gcr.io/$(shell gcloud config get-value project)
@@ -82,6 +85,8 @@ KUBEADM_CONTROL_PLANE_CONTROLLER_IMG ?= $(REGISTRY)/$(KUBEADM_CONTROL_PLANE_IMAG
 TAG ?= dev
 ARCH ?= amd64
 ALL_ARCH = amd64 arm arm64 ppc64le s390x
+
+GINKGO_NODES ?= 1
 
 # Allow overriding the imagePullPolicy
 PULL_POLICY ?= Always
@@ -129,21 +134,37 @@ test-capd-e2e: ## Rebuild the docker provider and run the capd-e2e tests
 	$(MAKE) -C test/infrastructure/docker docker-build REGISTRY=gcr.io/k8s-staging-capi-docker
 	$(MAKE) -C test/infrastructure/docker run-e2e
 
+E2E_FLAGS := REGISTRY=gcr.io/k8s-staging-cluster-api TAG=dev ARCH=amd64 PULL_POLICY=IfNotPresent GINKGO_FOCUS="$(GINKGO_FOCUS)" GINKGO_NODES=$(GINKGO_NODES) GINKGO_NOCOLOR=false E2E_CONF_FILE=config/docker-dev.yaml ARTIFACTS=$(abspath _artifacts) SKIP_RESOURCE_CLEANUP=false USE_EXISTING_CLUSTER=false
+
+.PHONY: e2e
+e2e: ## Run clusterctl e2e
+	mkdir -p _artifacts
+	$(E2E_FLAGS) $(MAKE) docker-build
+	$(E2E_FLAGS) $(MAKE) -C test/infrastructure/docker docker-build
+	docker pull quay.io/jetstack/cert-manager-cainjector:v0.11.0
+	docker pull quay.io/jetstack/cert-manager-webhook:v0.11.0
+	docker pull quay.io/jetstack/cert-manager-controller:v0.11.0
+	$(E2E_FLAGS) $(MAKE) -C test/e2e run
+
+.PHONY: clean-e2e
+clean-e2e: clean-manifests ## Clean-up after clusterctl e2e
+	rm -rf _artifacts
+
 ## --------------------------------------
 ## Binaries
 ## --------------------------------------
 
 .PHONY: manager-core
 manager-core: ## Build core manager binary
-	go build -o $(BIN_DIR)/manager sigs.k8s.io/cluster-api
+	go build -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/manager sigs.k8s.io/cluster-api
 
 .PHONY: manager-kubeadm-bootstrap
 manager-kubeadm-bootstrap: ## Build kubeadm bootstrap manager
-	go build -o $(BIN_DIR)/kubeadm-bootstrap-manager sigs.k8s.io/cluster-api/bootstrap/kubeadm
+	go build -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/kubeadm-bootstrap-manager sigs.k8s.io/cluster-api/bootstrap/kubeadm
 
 .PHONY: manager-kubeadm-control-plane
 manager-kubeadm-control-plane: ## Build kubeadm control plane manager
-	go build -o $(BIN_DIR)/kubeadm-control-plane-manager sigs.k8s.io/cluster-api/controlplane/kubeadm
+	go build -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/kubeadm-control-plane-manager sigs.k8s.io/cluster-api/controlplane/kubeadm
 
 .PHONY: managers
 managers: ## Build all managers
@@ -176,6 +197,9 @@ $(RELEASE_NOTES): $(TOOLS_DIR)/go.mod
 $(LINK_CHECKER): $(TOOLS_DIR)/go.mod
 	cd $(TOOLS_DIR) && go build -tags=tools -o $(LINK_CHECKER_BIN) github.com/raviqqe/liche
 
+$(GO_APIDIFF): $(TOOLS_DIR)/go.mod
+	cd $(TOOLS_DIR) && go build -tags=tools -o $(GO_APIDIFF_BIN) github.com/joelanford/go-apidiff
+
 .PHONY: e2e-framework
 e2e-framework: ## Builds the CAPI e2e framework
 	cd $(E2E_FRAMEWORK_DIR); go build ./...
@@ -194,6 +218,9 @@ lint-full: $(GOLANGCI_LINT) ## Run slower linters to detect possible issues
 	$(GOLANGCI_LINT) run -v --fast=false
 	cd $(E2E_FRAMEWORK_DIR); $(GOLANGCI_LINT) run -v --fast=false
 	cd $(CAPD_DIR); $(GOLANGCI_LINT) run -v --fast=false
+
+apidiff: $(GO_APIDIFF) ## Check for API differences
+	$(GO_APIDIFF) $(shell git rev-parse origin/master) --print-compatible
 
 ## --------------------------------------
 ## Generate / Manifests
@@ -242,18 +269,21 @@ generate-go-kubeadm-control-plane: $(CONTROLLER_GEN) $(CONVERSION_GEN) ## Runs G
 		paths=./controlplane/kubeadm/api/...
 
 .PHONY: generate-bindata
-generate-bindata: $(KUSTOMIZE) $(GOBINDATA) clean-bindata ## Generate code for embedding the clusterctl api manifest
+generate-bindata: $(KUSTOMIZE) $(GOBINDATA) clean-bindata $(CLOUDINIT_GENERATED) ## Generate code for embedding the clusterctl api manifest
 	# Package manifest YAML into a single file.
 	mkdir -p $(GOBINDATA_CLUSTERCTL_DIR)/manifest/
 	$(KUSTOMIZE) build $(GOBINDATA_CLUSTERCTL_DIR)/crd > $(GOBINDATA_CLUSTERCTL_DIR)/manifest/clusterctl-api.yaml
-	# Fetch the cert-manager manifest
-	curl -sL https://github.com/jetstack/cert-manager/releases/download/v0.11.0/cert-manager.yaml > "$(GOBINDATA_CLUSTERCTL_DIR)/manifest/${CERTMANAGER_COMPONENTS_GENERATED_FILE}"
 	# Generate go-bindata, add boilerplate, then cleanup.
-	$(GOBINDATA) -mode=420 -modtime=1 -pkg=config -o=$(GOBINDATA_CLUSTERCTL_DIR)/zz_generated.bindata.go $(GOBINDATA_CLUSTERCTL_DIR)/manifest/
+	$(GOBINDATA) -mode=420 -modtime=1 -pkg=config -o=$(GOBINDATA_CLUSTERCTL_DIR)/zz_generated.bindata.go $(GOBINDATA_CLUSTERCTL_DIR)/manifest/ $(GOBINDATA_CLUSTERCTL_DIR)/assets
 	cat ./hack/boilerplate/boilerplate.generatego.txt $(GOBINDATA_CLUSTERCTL_DIR)/zz_generated.bindata.go > $(GOBINDATA_CLUSTERCTL_DIR)/manifest/manifests.go
 	cp $(GOBINDATA_CLUSTERCTL_DIR)/manifest/manifests.go $(GOBINDATA_CLUSTERCTL_DIR)/zz_generated.bindata.go
 	# Cleanup the manifest folder.
 	$(MAKE) clean-bindata
+
+$(CLOUDINIT_GENERATED): $(GOBINDATA) $(CLOUDINIT_SCRIPT)
+	$(GOBINDATA) -mode=420 -modtime=1 -pkg=cloudinit -o=$(CLOUDINIT_GENERATED).tmp $(CLOUDINIT_SCRIPT)
+	cat ./hack/boilerplate/boilerplate.generatego.txt $(CLOUDINIT_GENERATED).tmp > $(CLOUDINIT_GENERATED)
+	rm $(CLOUDINIT_GENERATED).tmp
 
 .PHONY: generate-manifests
 generate-manifests: ## Generate manifests e.g. CRD, RBAC etc.
@@ -310,7 +340,6 @@ modules: ## Runs go mod to ensure modules are up to date.
 	go mod tidy
 	cd $(TOOLS_DIR); go mod tidy
 	$(MAKE) -C $(CAPD_DIR) modules
-	$(MAKE) -C $(CLUSTERCTL_E2E_DIR) modules
 
 ## --------------------------------------
 ## Docker
@@ -417,6 +446,8 @@ release: clean-release ## Builds and push container images using the latest git 
 	@if [ -z "${RELEASE_TAG}" ]; then echo "RELEASE_TAG is not set"; exit 1; fi
 	@if ! [ -z "$$(git status --porcelain)" ]; then echo "Your local git repository contains uncommitted changes, use git clean before proceeding."; exit 1; fi
 	git checkout "${RELEASE_TAG}"
+	# Build binaries first.
+	$(MAKE) release-binaries
 	# Set the core manifest image to the production bucket.
 	$(MAKE) set-manifest-image \
 		MANIFEST_IMG=$(PROD_REGISTRY)/$(IMAGE_NAME) MANIFEST_TAG=$(RELEASE_TAG) \
@@ -433,7 +464,6 @@ release: clean-release ## Builds and push container images using the latest git 
 	$(MAKE) set-manifest-pull-policy PULL_POLICY=IfNotPresent TARGET_RESOURCE="./bootstrap/kubeadm/config/manager/manager_pull_policy.yaml"
 	$(MAKE) set-manifest-pull-policy PULL_POLICY=IfNotPresent TARGET_RESOURCE="./controlplane/kubeadm/config/manager/manager_pull_policy.yaml"
 	$(MAKE) release-manifests
-	$(MAKE) release-binaries
 
 .PHONY: release-manifests
 release-manifests: $(RELEASE_DIR) $(KUSTOMIZE) ## Builds the manifests to publish with a release
@@ -519,6 +549,11 @@ clean-book: ## Remove all generated GitBook files
 .PHONY: clean-bindata
 clean-bindata: ## Remove bindata generated folder
 	rm -rf $(GOBINDATA_CLUSTERCTL_DIR)/manifest
+
+.PHONY: clean-manifests ## Reset manifests in config directories back to master
+clean-manifests:
+	@read -p "WARNING: This will reset all config directories to local master. Press [ENTER] to continue."
+	git checkout master config bootstrap/kubeadm/config controlplane/kubeadm/config test/infrastructure/docker/config
 
 .PHONY: format-tiltfile
 format-tiltfile: ## Format Tiltfile

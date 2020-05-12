@@ -36,8 +36,6 @@ var metadataYaml = []byte("apiVersion: clusterctl.cluster.x-k8s.io/v1alpha3\n" +
 	"")
 
 func Test_metadataClient_Get(t *testing.T) {
-	g := NewWithT(t)
-
 	type fields struct {
 		provider   config.Provider
 		version    string
@@ -136,10 +134,13 @@ func Test_metadataClient_Get(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			g := NewWithT(t)
+
 			f := &metadataClient{
-				provider:   tt.fields.provider,
-				version:    tt.fields.version,
-				repository: tt.fields.repository,
+				configVarClient: test.NewFakeVariableClient(),
+				provider:        tt.fields.provider,
+				version:         tt.fields.version,
+				repository:      tt.fields.repository,
 			}
 			got, err := f.Get()
 			if tt.wantErr {

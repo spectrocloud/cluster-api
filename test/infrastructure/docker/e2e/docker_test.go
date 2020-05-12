@@ -19,7 +19,6 @@ limitations under the License.
 package e2e
 
 import (
-	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -37,207 +36,202 @@ import (
 	"sigs.k8s.io/cluster-api/test/framework"
 	infrav1 "sigs.k8s.io/cluster-api/test/infrastructure/docker/api/v1alpha3"
 	"sigs.k8s.io/cluster-api/util"
-	"sigs.k8s.io/cluster-api/util/patch"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-var _ = Describe("Docker", func() {
-	Describe("Cluster Creation", func() {
+var _ = Describe("Docker Create", func() {
+	var (
+		namespace  = "default"
+		clusterGen = newClusterGenerator("create")
+		mgmtClient ctrlclient.Client
+		cluster    *clusterv1.Cluster
+	)
+	SetDefaultEventuallyTimeout(15 * time.Minute)
+	SetDefaultEventuallyPollingInterval(10 * time.Second)
+
+	AfterEach(func() {
+		// Delete the workload cluster
+		deleteClusterInput := framework.DeleteClusterInput{
+			Deleter: mgmtClient,
+			Cluster: cluster,
+		}
+		framework.DeleteCluster(ctx, deleteClusterInput)
+
+		waitForClusterDeletedInput := framework.WaitForClusterDeletedInput{
+			Getter:  mgmtClient,
+			Cluster: cluster,
+		}
+		framework.WaitForClusterDeleted(ctx, waitForClusterDeletedInput)
+
+		assertAllClusterAPIResourcesAreGoneInput := framework.AssertAllClusterAPIResourcesAreGoneInput{
+			Lister:  mgmtClient,
+			Cluster: cluster,
+		}
+		framework.AssertAllClusterAPIResourcesAreGone(ctx, assertAllClusterAPIResourcesAreGoneInput)
+
+		ensureDockerDeletedInput := ensureDockerArtifactsDeletedInput{
+			Lister:  mgmtClient,
+			Cluster: cluster,
+		}
+		ensureDockerArtifactsDeleted(ensureDockerDeletedInput)
+
+		// Dump cluster API and docker related resources to artifacts before deleting them.
+		Expect(framework.DumpResources(mgmt, resourcesPath, GinkgoWriter)).To(Succeed())
+		resources := map[string]runtime.Object{
+			"DockerCluster":         &infrav1.DockerClusterList{},
+			"DockerMachine":         &infrav1.DockerMachineList{},
+			"DockerMachineTemplate": &infrav1.DockerMachineTemplateList{},
+		}
+		Expect(framework.DumpProviderResources(mgmt, resources, resourcesPath, GinkgoWriter)).To(Succeed())
+	})
+
+	Specify("multi-node cluster with failure domains", func() {
+		replicas := 3
 		var (
-			namespace  string
-			client     ctrlclient.Client
-			clusterGen = &ClusterGenerator{}
-			cluster    *clusterv1.Cluster
+			infraCluster *infrav1.DockerCluster
+			template     *infrav1.DockerMachineTemplate
+			controlPlane *controlplanev1.KubeadmControlPlane
+			err          error
 		)
-		SetDefaultEventuallyTimeout(3 * time.Minute)
-		SetDefaultEventuallyPollingInterval(10 * time.Second)
+		cluster, infraCluster, controlPlane, template = clusterGen.GenerateCluster(namespace, int32(replicas))
+		// Set failure domains here
+		infraCluster.Spec.FailureDomains = clusterv1.FailureDomains{
+			"domain-one":   {ControlPlane: true},
+			"domain-two":   {ControlPlane: true},
+			"domain-three": {ControlPlane: true},
+			"domain-four":  {ControlPlane: false},
+		}
 
-		BeforeEach(func() {
-			namespace = "default"
-		})
+		md, infraTemplate, bootstrapTemplate := GenerateMachineDeployment(cluster, 1)
 
-		AfterEach(func() {
-			// Dump cluster API and docker related resources to artifacts before deleting them.
-			Expect(framework.DumpResources(mgmt, resourcesPath, GinkgoWriter)).To(Succeed())
-			resources := map[string]runtime.Object{
-				"DockerCluster":         &infrav1.DockerClusterList{},
-				"DockerMachine":         &infrav1.DockerMachineList{},
-				"DockerMachineTemplate": &infrav1.DockerMachineTemplateList{},
+		// Set up the client to the management cluster
+		mgmtClient, err = mgmt.GetClient()
+		Expect(err).NotTo(HaveOccurred())
+
+		// Set up the cluster object
+		createClusterInput := framework.CreateClusterInput{
+			Creator:      mgmtClient,
+			Cluster:      cluster,
+			InfraCluster: infraCluster,
+		}
+		framework.CreateCluster(ctx, createClusterInput)
+
+		// Set up the KubeadmControlPlane
+		createKubeadmControlPlaneInput := framework.CreateKubeadmControlPlaneInput{
+			Creator:         mgmtClient,
+			ControlPlane:    controlPlane,
+			MachineTemplate: template,
+		}
+		framework.CreateKubeadmControlPlane(ctx, createKubeadmControlPlaneInput)
+
+		// Wait for the cluster to provision.
+		assertClusterProvisionsInput := framework.WaitForClusterToProvisionInput{
+			Getter:  mgmtClient,
+			Cluster: cluster,
+		}
+		framework.WaitForClusterToProvision(ctx, assertClusterProvisionsInput)
+
+		// Wait for at least one control plane node to be ready
+		waitForOneKubeadmControlPlaneMachineToExistInput := framework.WaitForOneKubeadmControlPlaneMachineToExistInput{
+			Lister:       mgmtClient,
+			Cluster:      cluster,
+			ControlPlane: controlPlane,
+		}
+		framework.WaitForOneKubeadmControlPlaneMachineToExist(ctx, waitForOneKubeadmControlPlaneMachineToExistInput, "15m")
+
+		// Insatll a networking solution on the workload cluster
+		workloadClient, err := mgmt.GetWorkloadClient(ctx, cluster.Namespace, cluster.Name)
+		Expect(err).ToNot(HaveOccurred())
+		applyYAMLURLInput := framework.ApplyYAMLURLInput{
+			Client:        workloadClient,
+			HTTPGetter:    http.DefaultClient,
+			NetworkingURL: "https://docs.projectcalico.org/manifests/calico.yaml",
+			Scheme:        mgmt.Scheme,
+		}
+		framework.ApplyYAMLURL(ctx, applyYAMLURLInput)
+
+		// Wait for the controlplane nodes to exist
+		assertKubeadmControlPlaneNodesExistInput := framework.WaitForKubeadmControlPlaneMachinesToExistInput{
+			Lister:       mgmtClient,
+			Cluster:      cluster,
+			ControlPlane: controlPlane,
+		}
+		framework.WaitForKubeadmControlPlaneMachinesToExist(ctx, assertKubeadmControlPlaneNodesExistInput, "15m", "10s")
+
+		// Create the workload nodes
+		createMachineDeploymentinput := framework.CreateMachineDeploymentInput{
+			Creator:                 mgmtClient,
+			MachineDeployment:       md,
+			BootstrapConfigTemplate: bootstrapTemplate,
+			InfraMachineTemplate:    infraTemplate,
+		}
+		framework.CreateMachineDeployment(ctx, createMachineDeploymentinput)
+
+		// Wait for the workload nodes to exist
+		waitForMachineDeploymentNodesToExistInput := framework.WaitForMachineDeploymentNodesToExistInput{
+			Lister:            mgmtClient,
+			Cluster:           cluster,
+			MachineDeployment: md,
+		}
+		framework.WaitForMachineDeploymentNodesToExist(ctx, waitForMachineDeploymentNodesToExistInput)
+
+		// Wait for the control plane to be ready
+		waitForControlPlaneToBeReadyInput := framework.WaitForControlPlaneToBeReadyInput{
+			Getter:       mgmtClient,
+			ControlPlane: controlPlane,
+		}
+		framework.WaitForControlPlaneToBeReady(ctx, waitForControlPlaneToBeReadyInput)
+
+		// Assert failure domain is working as expected
+		assertControlPlaneFailureDomainInput := framework.AssertControlPlaneFailureDomainsInput{
+			GetLister:  mgmtClient,
+			ClusterKey: util.ObjectKey(cluster),
+			ExpectedFailureDomains: map[string]int{
+				"domain-one":   1,
+				"domain-two":   1,
+				"domain-three": 1,
+				"domain-four":  0,
+			},
+		}
+		framework.AssertControlPlaneFailureDomains(ctx, assertControlPlaneFailureDomainInput)
+
+		Describe("Docker recover from manual workload machine deletion", func() {
+			By("cleaning up etcd members and kubeadm configMap")
+			inClustersNamespaceListOption := ctrlclient.InNamespace(cluster.Namespace)
+			// ControlPlane labels
+			matchClusterListOption := ctrlclient.MatchingLabels{
+				clusterv1.MachineControlPlaneLabelName: "",
+				clusterv1.ClusterLabelName:             cluster.Name,
 			}
-			Expect(framework.DumpProviderResources(mgmt, resources, resourcesPath, GinkgoWriter)).To(Succeed())
 
-			deleteClusterInput := framework.DeleteClusterInput{
-				Deleter: client,
-				Cluster: cluster,
-			}
-			framework.DeleteCluster(ctx, deleteClusterInput)
+			machineList := &clusterv1.MachineList{}
+			err = mgmtClient.List(ctx, machineList, inClustersNamespaceListOption, matchClusterListOption)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(machineList.Items).To(HaveLen(int(*controlPlane.Spec.Replicas)))
 
-			waitForClusterDeletedInput := framework.WaitForClusterDeletedInput{
-				Getter:  client,
-				Cluster: cluster,
-			}
-			framework.WaitForClusterDeleted(ctx, waitForClusterDeletedInput)
+			Expect(mgmtClient.Delete(ctx, &machineList.Items[0])).To(Succeed())
 
-			assertAllClusterAPIResourcesAreGoneInput := framework.AssertAllClusterAPIResourcesAreGoneInput{
-				Lister:  client,
-				Cluster: cluster,
-			}
-			framework.AssertAllClusterAPIResourcesAreGone(ctx, assertAllClusterAPIResourcesAreGoneInput)
-
-			ensureDockerDeletedInput := ensureDockerArtifactsDeletedInput{
-				Lister:  client,
-				Cluster: cluster,
-			}
-			ensureDockerArtifactsDeleted(ensureDockerDeletedInput)
-		})
-
-		Describe("Multi-node controlplane cluster", func() {
-			var controlPlane *controlplanev1.KubeadmControlPlane
-
-			Specify("Basic create", func() {
-				replicas := 3
-				var (
-					infraCluster *infrav1.DockerCluster
-					template     *infrav1.DockerMachineTemplate
-					err          error
-				)
-				cluster, infraCluster, controlPlane, template = clusterGen.GenerateCluster(namespace, int32(replicas))
-				// Set failure domains here
-				infraCluster.Spec.FailureDomains = clusterv1.FailureDomains{
-					"domain-one":   {ControlPlane: true},
-					"domain-two":   {ControlPlane: true},
-					"domain-three": {ControlPlane: true},
-					"domain-four":  {ControlPlane: false},
+			Eventually(func() (int, error) {
+				machineList := &clusterv1.MachineList{}
+				if err := mgmtClient.List(ctx, machineList, inClustersNamespaceListOption, matchClusterListOption); err != nil {
+					fmt.Println(err)
+					return 0, err
 				}
+				return len(machineList.Items), nil
+			}, "15m", "5s").Should(Equal(int(*controlPlane.Spec.Replicas) - 1))
 
-				md, infraTemplate, bootstrapTemplate := GenerateMachineDeployment(cluster, 1)
-
-				// Set up the client to the management cluster
-				client, err = mgmt.GetClient()
-				Expect(err).NotTo(HaveOccurred())
-
-				// Set up the cluster object
-				createClusterInput := framework.CreateClusterInput{
-					Creator:      client,
-					Cluster:      cluster,
-					InfraCluster: infraCluster,
+			By("ensuring a replacement machine is created")
+			Eventually(func() (int, error) {
+				machineList := &clusterv1.MachineList{}
+				if err := mgmtClient.List(ctx, machineList, inClustersNamespaceListOption, matchClusterListOption); err != nil {
+					fmt.Println(err)
+					return 0, err
 				}
-				framework.CreateCluster(ctx, createClusterInput)
-
-				// Set up the KubeadmControlPlane
-				createKubeadmControlPlaneInput := framework.CreateKubeadmControlPlaneInput{
-					Creator:         client,
-					ControlPlane:    controlPlane,
-					MachineTemplate: template,
-				}
-				framework.CreateKubeadmControlPlane(ctx, createKubeadmControlPlaneInput)
-
-				// Wait for the cluster to provision.
-				assertClusterProvisionsInput := framework.WaitForClusterToProvisionInput{
-					Getter:  client,
-					Cluster: cluster,
-				}
-				framework.WaitForClusterToProvision(ctx, assertClusterProvisionsInput)
-
-				// Wait for at least one control plane node to be ready
-				waitForOneKubeadmControlPlaneMachineToExistInput := framework.WaitForOneKubeadmControlPlaneMachineToExistInput{
-					Lister:       client,
-					Cluster:      cluster,
-					ControlPlane: controlPlane,
-				}
-				framework.WaitForOneKubeadmControlPlaneMachineToExist(ctx, waitForOneKubeadmControlPlaneMachineToExistInput)
-
-				// Insatll a networking solution on the workload cluster
-				workloadClient, err := mgmt.GetWorkloadClient(ctx, cluster.Namespace, cluster.Name)
-				Expect(err).ToNot(HaveOccurred())
-				applyYAMLURLInput := framework.ApplyYAMLURLInput{
-					Client:        workloadClient,
-					HTTPGetter:    http.DefaultClient,
-					NetworkingURL: "https://docs.projectcalico.org/manifests/calico.yaml",
-					Scheme:        mgmt.Scheme,
-				}
-				framework.ApplyYAMLURL(ctx, applyYAMLURLInput)
-
-				// Wait for the controlplane nodes to exist
-				assertKubeadmControlPlaneNodesExistInput := framework.WaitForKubeadmControlPlaneMachinesToExistInput{
-					Lister:       client,
-					Cluster:      cluster,
-					ControlPlane: controlPlane,
-				}
-				framework.WaitForKubeadmControlPlaneMachinesToExist(ctx, assertKubeadmControlPlaneNodesExistInput, "10m", "10s")
-
-				// Create the workload nodes
-				createMachineDeploymentinput := framework.CreateMachineDeploymentInput{
-					Creator:                 client,
-					MachineDeployment:       md,
-					BootstrapConfigTemplate: bootstrapTemplate,
-					InfraMachineTemplate:    infraTemplate,
-				}
-				framework.CreateMachineDeployment(ctx, createMachineDeploymentinput)
-
-				// Wait for the workload nodes to exist
-				waitForMachineDeploymentNodesToExistInput := framework.WaitForMachineDeploymentNodesToExistInput{
-					Lister:            client,
-					Cluster:           cluster,
-					MachineDeployment: md,
-				}
-				framework.WaitForMachineDeploymentNodesToExist(ctx, waitForMachineDeploymentNodesToExistInput)
-
-				// Wait for the control plane to be ready
-				waitForControlPlaneToBeReadyInput := framework.WaitForControlPlaneToBeReadyInput{
-					Getter:       client,
-					ControlPlane: controlPlane,
-				}
-				framework.WaitForControlPlaneToBeReady(ctx, waitForControlPlaneToBeReadyInput)
-
-				// Assert failure domain is working as expected
-				assertControlPlaneFailureDomainInput := framework.AssertControlPlaneFailureDomainsInput{
-					GetLister:  client,
-					ClusterKey: util.ObjectKey(cluster),
-					ExpectedFailureDomains: map[string]int{
-						"domain-one":   1,
-						"domain-two":   1,
-						"domain-three": 1,
-						"domain-four":  0,
-					},
-				}
-				framework.AssertControlPlaneFailureDomains(ctx, assertControlPlaneFailureDomainInput)
-			})
-
-			Specify("Full upgrade", func() {
-				By("upgrading the control plane object to a new version")
-				patchHelper, err := patch.NewHelper(controlPlane, client)
-				Expect(err).ToNot(HaveOccurred())
-				controlPlane.Spec.Version = "v1.17.2"
-				Expect(patchHelper.Patch(ctx, controlPlane)).To(Succeed())
-				By("waiting for all control plane nodes to exist")
-				inClustersNamespaceListOption := ctrlclient.InNamespace(cluster.Namespace)
-				// ControlPlane labels
-				matchClusterListOption := ctrlclient.MatchingLabels{
-					clusterv1.MachineControlPlaneLabelName: "",
-					clusterv1.ClusterLabelName:             cluster.Name,
-				}
-
-				Eventually(func() (int, error) {
-					machineList := &clusterv1.MachineList{}
-					if err := client.List(ctx, machineList, inClustersNamespaceListOption, matchClusterListOption); err != nil {
-						fmt.Println(err)
-						return 0, err
-					}
-					upgraded := 0
-					for _, machine := range machineList.Items {
-						if *machine.Spec.Version == controlPlane.Spec.Version {
-							upgraded++
-						}
-					}
-					if len(machineList.Items) > upgraded {
-						return 0, errors.New("old nodes remain")
-					}
-					return upgraded, nil
-				}, "10m", "30s").Should(Equal(int(*controlPlane.Spec.Replicas)))
-			})
+				return len(machineList.Items), nil
+			}, "15m", "30s").Should(Equal(int(*controlPlane.Spec.Replicas)))
 		})
 	})
+
 })
 
 func GenerateMachineDeployment(cluster *clusterv1.Cluster, replicas int32) (*clusterv1.MachineDeployment, *infrav1.DockerMachineTemplate, *bootstrapv1.KubeadmConfigTemplate) {
@@ -304,12 +298,26 @@ func GenerateMachineDeployment(cluster *clusterv1.Cluster, replicas int32) (*clu
 	return machineDeployment, infraTemplate, bootstrap
 }
 
-type ClusterGenerator struct {
+type clusterGenerator struct {
+	prefix  string
 	counter int
 }
 
-func (c *ClusterGenerator) GenerateCluster(namespace string, replicas int32) (*clusterv1.Cluster, *infrav1.DockerCluster, *controlplanev1.KubeadmControlPlane, *infrav1.DockerMachineTemplate) {
-	generatedName := fmt.Sprintf("test-%d", c.counter)
+func newClusterGenerator(name string) *clusterGenerator {
+	var prefix string
+	if len(name) != 0 {
+		prefix = fmt.Sprintf("test-%s-", name)
+	} else {
+		prefix = "test-"
+	}
+
+	return &clusterGenerator{
+		prefix: prefix,
+	}
+}
+
+func (c *clusterGenerator) GenerateCluster(namespace string, replicas int32) (*clusterv1.Cluster, *infrav1.DockerCluster, *controlplanev1.KubeadmControlPlane, *infrav1.DockerMachineTemplate) {
+	generatedName := fmt.Sprintf("%s%d", c.prefix, c.counter)
 	c.counter++
 	version := "v1.16.3"
 

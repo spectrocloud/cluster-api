@@ -38,8 +38,10 @@ import (
 	"sigs.k8s.io/cluster-api/controllers/noderefutil"
 	"sigs.k8s.io/cluster-api/controllers/remote"
 	"sigs.k8s.io/cluster-api/util"
+	"sigs.k8s.io/cluster-api/util/annotations"
 	utilconversion "sigs.k8s.io/cluster-api/util/conversion"
 	"sigs.k8s.io/cluster-api/util/patch"
+	"sigs.k8s.io/cluster-api/util/predicates"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
@@ -75,7 +77,12 @@ type MachineSetReconciler struct {
 }
 
 func (r *MachineSetReconciler) SetupWithManager(mgr ctrl.Manager, options controller.Options) error {
-	err := ctrl.NewControllerManagedBy(mgr).
+	clusterToMachineSets, err := util.ClusterToObjectsMapper(mgr.GetClient(), &clusterv1.MachineSetList{}, mgr.GetScheme())
+	if err != nil {
+		return err
+	}
+
+	c, err := ctrl.NewControllerManagedBy(mgr).
 		For(&clusterv1.MachineSet{}).
 		Owns(&clusterv1.Machine{}).
 		Watches(
@@ -83,10 +90,20 @@ func (r *MachineSetReconciler) SetupWithManager(mgr ctrl.Manager, options contro
 			&handler.EnqueueRequestsFromMapFunc{ToRequests: handler.ToRequestsFunc(r.MachineToMachineSets)},
 		).
 		WithOptions(options).
-		Complete(r)
-
+		WithEventFilter(predicates.ResourceNotPaused(r.Log)).
+		Build(r)
 	if err != nil {
 		return errors.Wrap(err, "failed setting up with a controller manager")
+	}
+
+	err = c.Watch(
+		&source.Kind{Type: &clusterv1.Cluster{}},
+		&handler.EnqueueRequestsFromMapFunc{ToRequests: clusterToMachineSets},
+		// TODO: should this wait for Cluster.Status.InfrastructureReady similar to Infra Machine resources?
+		predicates.ClusterUnpaused(r.Log),
+	)
+	if err != nil {
+		return errors.Wrap(err, "failed to add Watch for Clusters to controller manager")
 	}
 
 	r.recorder = mgr.GetEventRecorderFor("machineset-controller")
@@ -115,8 +132,8 @@ func (r *MachineSetReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) 
 	}
 
 	// Return early if the object or Cluster is paused.
-	if util.IsPaused(cluster, machineSet) {
-		logger.V(3).Info("reconciliation is paused for this object")
+	if annotations.IsPaused(cluster, machineSet) {
+		logger.Info("Reconciliation is paused for this object")
 		return ctrl.Result{}, nil
 	}
 
@@ -662,17 +679,7 @@ func (r *MachineSetReconciler) patchMachineSetStatus(ctx context.Context, ms *cl
 
 	newStatus.DeepCopyInto(&ms.Status)
 	if err := r.Client.Status().Patch(ctx, ms, patch); err != nil {
-		// TODO(vincepri): Try to fix this once we upgrade to CRDv1.
-		// Our Status.Replicas field is a required non-pointer integer, Go defaults this field to "0" value when decoding
-		// the data from the API server. For this reason, when we try to write the value "0", the patch is going to think
-		// the value is already there and shouldn't be patched, making it fail validation.
-		// Fallback to Update.
-		if !apierrors.IsInvalid(err) {
-			return nil, err
-		}
-		if err := r.Client.Status().Update(ctx, ms); err != nil {
-			return nil, err
-		}
+		return nil, err
 	}
 	return ms, nil
 }

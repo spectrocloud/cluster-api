@@ -7,6 +7,7 @@ In this tutorial we'll cover the basics of how to use Cluster API to create one 
 ### Common Prerequisites
 
 - Install and setup [kubectl] in your local environment
+- Install [Kind] and [Docker]
 
 ### Install and/or configure a kubernetes cluster
 
@@ -21,7 +22,7 @@ Choose one of the options below:
 
 1. **Existing Management Cluster**
 
-For production use-cases a "real" Kubernetes cluster should be used with appropriate backup and DR policies and procedures in place.
+For production use-cases a "real" Kubernetes cluster should be used with appropriate backup and DR policies and procedures in place. The Kubernetes cluster must be at least v1.16+.
 
 ```bash
 export KUBECONFIG=<...>
@@ -35,7 +36,7 @@ export KUBECONFIG=<...>
 
 [kind] is not designed for production use.
 
-**Minimum [kind] supported version**: v0.6.x
+**Minimum [kind] supported version**: v0.7.0
 
 </aside>
 
@@ -100,8 +101,8 @@ clusterctl version
 
 ### Initialize the management cluster
 
-Now that we've got clusterctl installed and all the prerequisites in places, let's transforms the Kubernetes cluster
-into a management cluster by using the  `clusterctl init`.
+Now that we've got clusterctl installed and all the prerequisites in place, let's transform the Kubernetes cluster
+into a management cluster by using `clusterctl init`.
 
 The command accepts as input a list of providers to install; when executed for the first time, `clusterctl init`
 automatically adds to the list the `cluster-api` core provider, and if unspecified, it also adds the `kubeadm` bootstrap
@@ -131,15 +132,26 @@ before getting started with Cluster API.
 
 Download the latest binary of `clusterawsadm` from the [AWS provider releases] and make sure to place it in your path.
 
+The clusterawsadm command line utility assists with identity and access management (IAM) for Cluster API Provider AWS.
+
 ```bash
-$ export AWS_REGION=us-east-1 # This is used to help encode your environment variables
+export AWS_REGION=us-east-1 # This is used to help encode your environment variables
+export AWS_ACCESS_KEY_ID=<your-access-key>
+export AWS_SECRET_ACCESS_KEY=<your-secret-access-key>
+export AWS_SESSION_TOKEN=<session-token> # If you are using Multi-Factor Auth.
+
+# The clusterawsadm utility takes the credentials that you set as environment
+# variables and uses them to create a CloudFormation stack in your AWS account
+# with the correct IAM resources.
+clusterawsadm alpha bootstrap create-stack
+
 # Create the base64 encoded credentials using clusterawsadm.
 # This command uses your environment variables and encodes
 # them in a value to be stored in a Kubernetes Secret.
-$ export AWS_B64ENCODED_CREDENTIALS=$(clusterawsadm alpha bootstrap encode-aws-credentials)
+export AWS_B64ENCODED_CREDENTIALS=$(clusterawsadm alpha bootstrap encode-aws-credentials)
 
 # Finally, initialize the management cluster
-$ clusterctl init --infrastructure aws
+clusterctl init --infrastructure aws
 ```
 
 See the [AWS provider prerequisites] document for more details.
@@ -150,13 +162,20 @@ See the [AWS provider prerequisites] document for more details.
 For more information about authorization, AAD, or requirements for Azure, visit the [Azure provider prerequisites] document.
 
 ```bash
-$ export AZURE_SUBSCRIPTION_ID_B64="$(echo -n "$AZURE_SUBSCRIPTION_ID" | base64 | tr -d '\n')"
-$ export AZURE_TENANT_ID_B64="$(echo -n "$AZURE_TENANT_ID" | base64 | tr -d '\n')"
-$ export AZURE_CLIENT_ID_B64="$(echo -n "$AZURE_CLIENT_ID" | base64 | tr -d '\n')"
-$ export AZURE_CLIENT_SECRET_B64="$(echo -n "$AZURE_CLIENT_SECRET" | base64 | tr -d '\n')"
+export AZURE_SUBSCRIPTION_ID=<SubscriptionId>
+
+# Create an Azure Service Principal and paste the output here
+export AZURE_TENANT_ID=<Tenant>
+export AZURE_CLIENT_ID=<AppId>
+export AZURE_CLIENT_SECRET=<Password>
+
+export AZURE_SUBSCRIPTION_ID_B64="$(echo -n "$AZURE_SUBSCRIPTION_ID" | base64 | tr -d '\n')"
+export AZURE_TENANT_ID_B64="$(echo -n "$AZURE_TENANT_ID" | base64 | tr -d '\n')"
+export AZURE_CLIENT_ID_B64="$(echo -n "$AZURE_CLIENT_ID" | base64 | tr -d '\n')"
+export AZURE_CLIENT_SECRET_B64="$(echo -n "$AZURE_CLIENT_SECRET" | base64 | tr -d '\n')"
 
 # Finally, initialize the management cluster
-$ clusterctl init --infrastructure azure
+clusterctl init --infrastructure azure
 ```
 
 {{#/tab }}
@@ -172,10 +191,10 @@ steps described in the [developer instruction][docker-provider] page.
 # Create the base64 encoded credentials by catting your credentials json.
 # This command uses your environment variables and encodes
 # them in a value to be stored in a Kubernetes Secret.
-$ export GCP_B64ENCODED_CREDENTIALS=$( cat /path/to/gcp-credentials.json | base64 | tr -d '\n' )
+export GCP_B64ENCODED_CREDENTIALS=$( cat /path/to/gcp-credentials.json | base64 | tr -d '\n' )
 
 # Finally, initialize the management cluster
-$ clusterctl init --infrastructure gcp
+clusterctl init --infrastructure gcp
 ```
 
 {{#/tab }}
@@ -183,14 +202,14 @@ $ clusterctl init --infrastructure gcp
 
 ```bash
 # The username used to access the remote vSphere endpoint
-$ export VSPHERE_USERNAME="vi-admin@vsphere.local"
+export VSPHERE_USERNAME="vi-admin@vsphere.local"
 # The password used to access the remote vSphere endpoint
 # You may want to set this in ~/.cluster-api/clusterctl.yaml so your password is not in
 # bash history
-$ export VSPHERE_PASSWORD="admin!23"
+export VSPHERE_PASSWORD="admin!23"
 
 # Finally, initialize the management cluster
-$ clusterctl init --infrastructure vsphere
+clusterctl init --infrastructure vsphere
 ```
 
 For more information about prerequisites, credentials management, or permissions for vSphere, see the [vSphere
@@ -199,7 +218,10 @@ project][vSphere getting started guide].
 {{#/tab }}
 {{#tab OpenStack}}
 
-Please visit the [OpenStack project][OpenStack getting started guide].
+```bash
+# Initialize the management cluster
+clusterctl init --infrastructure openstack
+```
 
 {{#/tab }}
 {{#tab Metal3}}
@@ -271,7 +293,6 @@ discover the list of variables required by a cluster templates.
 
 </aside>
 
-
 #### Required configuration for common providers
 
 Depending on the infrastructure provider you are planning to use, some additional prerequisites should be satisfied
@@ -282,15 +303,13 @@ before configuring a cluster with Cluster API.
 
 Download the latest binary of `clusterawsadm` from the [AWS provider releases] and make sure to place it in your path.
 
-
 ```bash
-$ export AWS_REGION=us-east-1
-$ export AWS_SSH_KEY_NAME=default
+export AWS_REGION=us-east-1
+export AWS_SSH_KEY_NAME=default
 # Select instance types
-$ export AWS_CONTROL_PLANE_MACHINE_TYPE=t3.large
-$ export AWS_NODE_MACHINE_TYPE=t3.large
+export AWS_CONTROL_PLANE_MACHINE_TYPE=t3.large
+export AWS_NODE_MACHINE_TYPE=t3.large
 ```
-
 
 See the [AWS provider prerequisites] document for more details.
 
@@ -298,21 +317,26 @@ See the [AWS provider prerequisites] document for more details.
 {{#tab Azure}}
 
 ```bash
+export CLUSTER_NAME="capi-quickstart"
+# Name of the virtual network in which to provision the cluster.
+export AZURE_VNET_NAME=${CLUSTER_NAME}-vnet
 # Name of the resource group to provision into
-$ export AZURE_RESOURCE_GROUP="kubernetesResourceGroup"
+export AZURE_RESOURCE_GROUP=${CLUSTER_NAME}
 # Name of the Azure datacenter location
-$ export AZURE_LOCATION="centralus"
-# Name of the virtual network in which to provision the cluster
-$ export AZURE_VNET_NAME="kubernetesNetwork"
+export AZURE_LOCATION="centralus"
 # Select machine types
-$ export AZURE_CONTROL_PLANE_MACHINE_TYPE="Standard_D4a_v4"
-$ export AZURE_NODE_MACHINE_TYPE="Standard_D4a_v4"
-# A SSH key to use for break-glass access
-$ export AZURE_SSH_PUBLIC_KEY="ssh-rsa AAAAB3N..."
+export AZURE_CONTROL_PLANE_MACHINE_TYPE="Standard_D2s_v3"
+export AZURE_NODE_MACHINE_TYPE="Standard_D2s_v3"
+# Generate SSH key.
+# If you want to provide your own key, skip this step and set AZURE_SSH_PUBLIC_KEY to your existing public key.
+SSH_KEY_FILE=.sshkey
+rm -f "${SSH_KEY_FILE}" 2>/dev/null
+ssh-keygen -t rsa -b 2048 -f "${SSH_KEY_FILE}" -N '' 1>/dev/null
+echo "Machine SSH key generated in ${SSH_KEY_FILE}"
+export AZURE_SSH_PUBLIC_KEY=$(cat "${SSH_KEY_FILE}.pub" | base64 | tr -d '\r\n')
 ```
 
 For more information about authorization, AAD, or requirements for Azure, visit the [Azure provider prerequisites] document.
-
 
 {{#/tab }}
 {{#tab Docker}}
@@ -332,25 +356,25 @@ It is required to use an official CAPV machine images for your vSphere VM templa
 
 ```bash
 # The vCenter server IP or FQDN
-$ export VSPHERE_SERVER="10.0.0.1"
+export VSPHERE_SERVER="10.0.0.1"
 # The vSphere datacenter to deploy the management cluster on
-$ export VSPHERE_DATACENTER="SDDC-Datacenter"
+export VSPHERE_DATACENTER="SDDC-Datacenter"
 # The vSphere datastore to deploy the management cluster on
-$ export VSPHERE_DATASTORE="vsanDatastore"
+export VSPHERE_DATASTORE="vsanDatastore"
 # The VM network to deploy the management cluster on
-$ export VSPHERE_NETWORK="VM Network"
- # The vSphere resource pool for your VMs
-$ export VSPHERE_RESOURCE_POOL="*/Resources"
+export VSPHERE_NETWORK="VM Network"
+# The vSphere resource pool for your VMs
+export VSPHERE_RESOURCE_POOL="*/Resources"
 # The VM folder for your VMs. Set to "" to use the root vSphere folder
-$ export VSPHERE_FOLDER: "vm"
- # The VM template to use for your
-$ export VSPHERE_TEMPLATE: "ubuntu-1804-kube-v1.17.3"                 m
-# The VM template to use for the HAProxy load balanceranagement cluster.
-$ export VSPHERE_HAPROXY_TEMPLATE: "capv-haproxy-v0.6.0-rc.2"
-   # The public ssh authorized key on all machines
-$ export VSPHERE_SSH_AUTHORIZED_KEY: "ssh-rsa AAAAB3N..."
+export VSPHERE_FOLDER="vm"
+# The VM template to use for your VMs
+export VSPHERE_TEMPLATE="ubuntu-1804-kube-v1.17.3"
+# The VM template to use for the HAProxy load balancer of the management cluster
+export VSPHERE_HAPROXY_TEMPLATE="capv-haproxy-v0.6.0-rc.2"
+# The public ssh authorized key on all machines
+export VSPHERE_SSH_AUTHORIZED_KEY="ssh-rsa AAAAB3N..."
 
-$ clusterctl init --infrastructure vsphere
+clusterctl init --infrastructure vsphere
 ```
 
 For more information about prerequisites, credentials management, or permissions for vSphere, see the [vSphere getting started guide].
@@ -358,7 +382,24 @@ For more information about prerequisites, credentials management, or permissions
 {{#/tab }}
 {{#tab OpenStack}}
 
-Please visit the [OpenStack getting started guide].
+A ClusterAPI compatible image must be available in your OpenStack. For instructions on how to build a compatible image
+see [image-builder](https://image-builder.sigs.k8s.io/capi/capi.html).
+Depending on your OpenStack and underlying hypervisor the following options might be of interest:
+* [image-builder (OpenStack)](https://image-builder.sigs.k8s.io/capi/providers/openstack.html)
+* [image-builder (vSphere)](https://image-builder.sigs.k8s.io/capi/providers/vsphere.html)
+
+To see all required OpenStack environment variables execute:
+```bash
+clusterctl config cluster --infrastructure openstack --list-variables capi-quickstart
+```
+
+The following script can be used to export some of them:
+```bash
+wget https://raw.githubusercontent.com/kubernetes-sigs/cluster-api-provider-openstack/master/templates/env.rc -O /tmp/env.rc
+source /tmp/env.rc <path/to/clouds.yaml> <cloud>
+```
+
+A full configuration reference can be found in [configuration.md](https://github.com/kubernetes-sigs/cluster-api-provider-openstack/blob/master/docs/configuration.md).
 
 {{#/tab }}
 {{#tab Metal3}}
@@ -370,13 +411,13 @@ Please visit the [Metal3 getting started guide].
 
 #### Generating the cluster configuration
 
-For the purpose of this tutorial, we’ll name our cluster capi-quickstart.
+For the purpose of this tutorial, we'll name our cluster capi-quickstart.
 
-```
+```bash
 clusterctl config cluster capi-quickstart --kubernetes-version v1.17.3 --control-plane-machine-count=3 --worker-machine-count=3 > capi-quickstart.yaml
 ```
 
-Creates a YAML file named `capi-quickstart.yaml` with a predefined list of Cluster API objects; Cluster, Machines,
+This creates a YAML file named `capi-quickstart.yaml` with a predefined list of Cluster API objects; Cluster, Machines,
 Machine Deployments, etc.
 
 The file can be eventually modified using your editor of choice.
@@ -387,13 +428,13 @@ See `[clusterctl config cluster]` for more details.
 
 When ready, run the following command to apply the cluster manifest.
 
-```
+```bash
 kubectl apply -f capi-quickstart.yaml
 ```
 
 The output is similar to this:
 
-```
+```bash
 cluster.cluster.x-k8s.io/capi-quickstart created
 awscluster.infrastructure.cluster.x-k8s.io/capi-quickstart created
 kubeadmcontrolplane.controlplane.cluster.x-k8s.io/capi-quickstart-control-plane created
@@ -405,19 +446,34 @@ kubeadmconfigtemplate.bootstrap.cluster.x-k8s.io/capi-quickstart-md-0 created
 
 #### Accessing the workload cluster
 
-To verify the control plane is up, check if the control plane is ready.
+The cluster will now start provisioning. You can check status with:
+
+```bash
+kubectl get cluster --all-namespaces
 ```
+
+To verify the first control plane is up:
+
+```bash
 kubectl get kubeadmcontrolplane --all-namespaces
 ```
 
-If the control plane is deployed using a control plane provider, such as
-[KubeadmControlPlane] ensure the control plane is
-ready.
-```
-kubectl get clusters --output jsonpath="{range .items[*]} [{.metadata.name} {.status.ControlPlaneInitialized} {.status.ControlPlaneReady}] {end}"
+You should see an output is similar to this:
+
+```bash
+NAME                              READY   INITIALIZED   REPLICAS   READY REPLICAS   UPDATED REPLICAS   UNAVAILABLE REPLICAS
+capi-quickstart-control-plane             true          3                           3                  3
 ```
 
-After the control plane node is up and ready, we can retrieve the [workload cluster] Kubeconfig:
+<aside class="note warning">
+
+<h1> Warning </h1>
+
+The control planes won't be `Ready` until we install a CNI in the next step.
+
+</aside>
+
+After the first control plane node is up and running, we can retrieve the [workload cluster] Kubeconfig:
 
 ```bash
 kubectl --namespace=default get secret/capi-quickstart-kubeconfig -o jsonpath={.data.value} \
@@ -429,6 +485,8 @@ kubectl --namespace=default get secret/capi-quickstart-kubeconfig -o jsonpath={.
 
 Calico is used here as an example.
 
+{{#tabs name:"tab-deploy-cni" tabs:"AWS|Docker|GCP|vSphere|OpenStack|Metal3,Azure"}}
+{{#tab AWS|Docker|GCP|vSphere|OpenStack|Metal3}}
 
 ```bash
 kubectl --kubeconfig=./capi-quickstart.kubeconfig \
@@ -442,6 +500,26 @@ let's check the status using `kubectl get nodes`:
 kubectl --kubeconfig=./capi-quickstart.kubeconfig get nodes
 ```
 
+{{#/tab }}
+{{#tab Azure}}
+
+Azure [does not currently support Calico networking](https://docs.projectcalico.org/reference/public-cloud/azure). As a workaround, it is recommended that Azure clusters use the Calico spec below that uses VXLAN.
+
+```bash
+kubectl --kubeconfig=./capi-quickstart.kubeconfig \
+  apply -f https://raw.githubusercontent.com/kubernetes-sigs/cluster-api-provider-azure/master/templates/addons/calico.yaml
+```
+
+After a short while, our nodes should be running and in `Ready` state,
+let's check the status using `kubectl get nodes`:
+
+```bash
+kubectl --kubeconfig=./capi-quickstart.kubeconfig get nodes
+```
+
+{{#/tab }}
+{{#/tabs }}
+
 ## Next steps
 
 See the [clusterctl] documentation for more detail about clusterctl supported actions.
@@ -454,6 +532,7 @@ See the [clusterctl] documentation for more detail about clusterctl supported ac
 [capv-upload-images]: https://github.com/kubernetes-sigs/cluster-api-provider-vsphere/blob/master/docs/getting_started.md#uploading-the-machine-images
 [clusterctl config cluster]: ../clusterctl/commands/config-cluster.md
 [clusterctl]: ../clusterctl/overview.md
+[Docker]: https://www.docker.com/
 [docker-provider]: ../clusterctl/developers.md#additional-steps-in-order-to-use-the-docker-provider
 [GCP provider]: https://github.com/kubernetes-sigs/cluster-api-provider-gcp
 [infrastructure provider]: ../reference/glossary.md#infrastructure-provider
@@ -462,7 +541,6 @@ See the [clusterctl] documentation for more detail about clusterctl supported ac
 [kubectl]: https://kubernetes.io/docs/tasks/tools/install-kubectl/
 [management cluster]: ../reference/glossary.md#management-cluster
 [Metal3 getting started guide]: https://github.com/metal3-io/cluster-api-provider-metal3/
-[OpenStack getting started guide]: https://github.com/kubernetes-sigs/cluster-api-provider-openstack/
 [provider components]: ../reference/glossary.md#provider-components
 [vSphere getting started guide]: https://github.com/kubernetes-sigs/cluster-api-provider-vsphere/
 [workload cluster]: ../reference/glossary.md#workload-cluster

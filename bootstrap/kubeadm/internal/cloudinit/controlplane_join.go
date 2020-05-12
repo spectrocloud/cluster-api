@@ -18,21 +18,20 @@ package cloudinit
 
 import (
 	"github.com/pkg/errors"
-
 	"sigs.k8s.io/cluster-api/util/secret"
 )
 
 const (
 	controlPlaneJoinCloudInit = `{{.Header}}
 {{template "files" .WriteFiles}}
--   path: /tmp/kubeadm-controlplane-join-config.yaml
+-   path: /tmp/kubeadm-join-config.yaml
     owner: root:root
     permissions: '0640'
     content: |
 {{.JoinConfiguration | Indent 6}}
 runcmd:
 {{- template "commands" .PreKubeadmCommands }}
-  - 'kubeadm join --config /tmp/kubeadm-controlplane-join-config.yaml {{.KubeadmVerbosity}}'
+  - {{ .KubeadmCommand }}
 {{- template "commands" .PostKubeadmCommands }}
 {{- template "ntp" .NTP }}
 {{- template "users" .Users }}
@@ -43,17 +42,18 @@ runcmd:
 type ControlPlaneJoinInput struct {
 	BaseUserData
 	secret.Certificates
-
 	BootstrapToken    string
 	JoinConfiguration string
 }
 
 // NewJoinControlPlane returns the user data string to be used on a new control plane instance.
 func NewJoinControlPlane(input *ControlPlaneJoinInput) ([]byte, error) {
-	input.Header = cloudConfigHeader
 	// TODO: Consider validating that the correct certificates exist. It is different for external/stacked etcd
 	input.WriteFiles = input.Certificates.AsFiles()
-	input.WriteFiles = append(input.WriteFiles, input.AdditionalFiles...)
+	input.ControlPlane = true
+	if err := input.prepare(); err != nil {
+		return nil, err
+	}
 	userData, err := generate("JoinControlplane", controlPlaneJoinCloudInit, input)
 	if err != nil {
 		return nil, errors.Wrapf(err, "failed to generate user data for machine joining control plane")

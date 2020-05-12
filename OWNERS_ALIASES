@@ -5,6 +5,7 @@ aliases:
   - neolit123
   - justinsb
   - timothysc
+  - fabriziopandini
 
   # -----------------------------------------------------------
   # OWNER_ALIASES for Cluster API
@@ -24,13 +25,13 @@ aliases:
   - detiber
   - ncdc
   - vincepri
-  - chuckha
 
   # folks who can review and LGTM any PRs in the repo
   cluster-api-reviewers:
   - CecileRobertMichon
   - vincepri
   - JoelSpeed
+  - benmoss
 
   # -----------------------------------------------------------
   # OWNER_ALIASES for docs/book
@@ -46,7 +47,6 @@ aliases:
   # -----------------------------------------------------------
 
   cluster-api-provider-docker-maintainers:
-  - chuckha
   - ncdc
 
   # -----------------------------------------------------------
@@ -54,13 +54,11 @@ aliases:
   # -----------------------------------------------------------
 
   cluster-api-bootstrap-provider-kubeadm-maintainers:
-  - chuckha
   - fabriziopandini
   - ncdc
   - SataQiu
 
   cluster-api-bootstrap-provider-kubeadm-reviewers:
-  - chuckha
   - fabriziopandini
   - ncdc
 

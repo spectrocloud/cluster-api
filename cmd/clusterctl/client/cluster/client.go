@@ -23,16 +23,30 @@ import (
 	"github.com/pkg/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/client-go/rest"
 	"sigs.k8s.io/cluster-api/cmd/clusterctl/client/config"
 	"sigs.k8s.io/cluster-api/cmd/clusterctl/client/repository"
-	"sigs.k8s.io/cluster-api/cmd/clusterctl/internal/test"
 	logf "sigs.k8s.io/cluster-api/cmd/clusterctl/log"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+)
+
+const (
+	minimumKubernetesVersion = "v1.16.0"
 )
 
 var (
 	ctx = context.TODO()
 )
+
+// Kubeconfig is a type that specifies inputs related to the actual
+// kubeconfig.
+type Kubeconfig struct {
+	// Path to the kubeconfig file
+	Path string
+	// Specify context within the kubeconfig file. If empty, cluster client
+	// will use the current context.
+	Context string
+}
 
 // Client is used to interact with a management cluster.
 // A management cluster contains following categories of objects:
@@ -40,8 +54,8 @@ var (
 // - provider inventory items (e.g. the list of installed providers/versions)
 // - provider objects (e.g. clusters, AWS clusters, machines etc.)
 type Client interface {
-	// Kubeconfig return the path to kubeconfig used to access to a management cluster.
-	Kubeconfig() string
+	// Kubeconfig returns the kubeconfig used to access to a management cluster.
+	Kubeconfig() Kubeconfig
 
 	// Proxy return the Proxy used for operating objects in the management cluster.
 	Proxy() Proxy
@@ -79,7 +93,7 @@ type PollImmediateWaiter func(interval, timeout time.Duration, condition wait.Co
 // clusterClient implements Client.
 type clusterClient struct {
 	configClient            config.Client
-	kubeconfig              string
+	kubeconfig              Kubeconfig
 	proxy                   Proxy
 	repositoryClientFactory RepositoryClientFactory
 	pollImmediateWaiter     PollImmediateWaiter
@@ -90,7 +104,7 @@ type RepositoryClientFactory func(provider config.Provider, configClient config.
 // ensure clusterClient implements Client.
 var _ Client = &clusterClient{}
 
-func (c *clusterClient) Kubeconfig() string {
+func (c *clusterClient) Kubeconfig() Kubeconfig {
 	return c.kubeconfig
 }
 
@@ -152,11 +166,11 @@ func InjectPollImmediateWaiter(pollImmediateWaiter PollImmediateWaiter) Option {
 }
 
 // New returns a cluster.Client.
-func New(kubeconfig string, configClient config.Client, options ...Option) Client {
+func New(kubeconfig Kubeconfig, configClient config.Client, options ...Option) Client {
 	return newClusterClient(kubeconfig, configClient, options...)
 }
 
-func newClusterClient(kubeconfig string, configClient config.Client, options ...Option) *clusterClient {
+func newClusterClient(kubeconfig Kubeconfig, configClient config.Client, options ...Option) *clusterClient {
 	client := &clusterClient{
 		configClient: configClient,
 		kubeconfig:   kubeconfig,
@@ -167,7 +181,7 @@ func newClusterClient(kubeconfig string, configClient config.Client, options ...
 
 	// if there is an injected proxy, use it, otherwise use a default one
 	if client.proxy == nil {
-		client.proxy = newProxy(kubeconfig)
+		client.proxy = newProxy(client.kubeconfig)
 	}
 
 	// if there is an injected repositoryClientFactory, use it, otherwise use the default one
@@ -184,8 +198,14 @@ func newClusterClient(kubeconfig string, configClient config.Client, options ...
 }
 
 type Proxy interface {
+	// GetConfig returns the rest.Config
+	GetConfig() (*rest.Config, error)
+
 	// CurrentNamespace returns the namespace from the current context in the kubeconfig file
 	CurrentNamespace() (string, error)
+
+	// ValidateKubernetesVersion returns an error if management cluster version less than minimumKubernetesVersion
+	ValidateKubernetesVersion() error
 
 	// NewClient returns a new controller runtime Client object for working on the management cluster
 	NewClient() (client.Client, error)
@@ -193,8 +213,6 @@ type Proxy interface {
 	// ListResources returns all the Kubernetes objects with the given labels existing the listed namespaces.
 	ListResources(labels map[string]string, namespaces ...string) ([]unstructured.Unstructured, error)
 }
-
-var _ Proxy = &test.FakeProxy{}
 
 // retryWithExponentialBackoff repeats an operation until it passes or the exponential backoff times out.
 func retryWithExponentialBackoff(opts wait.Backoff, operation func() error) error { //nolint:unparam
@@ -205,7 +223,7 @@ func retryWithExponentialBackoff(opts wait.Backoff, operation func() error) erro
 		i++
 		if err := operation(); err != nil {
 			if i < opts.Steps {
-				log.V(5).Info("Operation failed, retry", "Error", err)
+				log.V(5).Info("Operation failed, retrying with backoff", "Cause", err.Error())
 				return false, nil
 			}
 			return false, err
@@ -218,8 +236,8 @@ func retryWithExponentialBackoff(opts wait.Backoff, operation func() error) erro
 	return nil
 }
 
-// newBackoff creates a new API Machinery backoff parameter set suitable for use with clusterctl operations.
-func newBackoff() wait.Backoff {
+// newWriteBackoff creates a new API Machinery backoff parameter set suitable for use with clusterctl write operations.
+func newWriteBackoff() wait.Backoff {
 	// Return a exponential backoff configuration which returns durations for a total time of ~40s.
 	// Example: 0, .5s, 1.2s, 2.3s, 4s, 6s, 10s, 16s, 24s, 37s
 	// Jitter is added as a random fraction of the duration multiplied by the jitter factor.
@@ -228,5 +246,31 @@ func newBackoff() wait.Backoff {
 		Factor:   1.5,
 		Steps:    10,
 		Jitter:   0.4,
+	}
+}
+
+// newConnectBackoff creates a new API Machinery backoff parameter set suitable for use when clusterctl connect to a cluster.
+func newConnectBackoff() wait.Backoff {
+	// Return a exponential backoff configuration which returns durations for a total time of ~15s.
+	// Example: 0, .25s, .6s, 1.2, 2.1s, 3.4s, 5.5s, 8s, 12s
+	// Jitter is added as a random fraction of the duration multiplied by the jitter factor.
+	return wait.Backoff{
+		Duration: 250 * time.Millisecond,
+		Factor:   1.5,
+		Steps:    9,
+		Jitter:   0.1,
+	}
+}
+
+// newReadBackoff creates a new API Machinery backoff parameter set suitable for use with clusterctl read operations.
+func newReadBackoff() wait.Backoff {
+	// Return a exponential backoff configuration which returns durations for a total time of ~15s.
+	// Example: 0, .25s, .6s, 1.2, 2.1s, 3.4s, 5.5s, 8s, 12s
+	// Jitter is added as a random fraction of the duration multiplied by the jitter factor.
+	return wait.Backoff{
+		Duration: 250 * time.Millisecond,
+		Factor:   1.5,
+		Steps:    9,
+		Jitter:   0.1,
 	}
 }

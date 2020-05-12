@@ -42,22 +42,23 @@ import (
 	capierrors "sigs.k8s.io/cluster-api/errors"
 	kubedrain "sigs.k8s.io/cluster-api/third_party/kubernetes-drain"
 	"sigs.k8s.io/cluster-api/util"
+	"sigs.k8s.io/cluster-api/util/annotations"
 	"sigs.k8s.io/cluster-api/util/patch"
+	"sigs.k8s.io/cluster-api/util/predicates"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
-	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
-	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"sigs.k8s.io/controller-runtime/pkg/source"
 )
 
 var (
-	errNilNodeRef           = errors.New("noderef is nil")
-	errLastControlPlaneNode = errors.New("last control plane member")
-	errNoControlPlaneNodes  = errors.New("no control plane members")
+	errNilNodeRef            = errors.New("noderef is nil")
+	errLastControlPlaneNode  = errors.New("last control plane member")
+	errNoControlPlaneNodes   = errors.New("no control plane members")
+	errClusterIsBeingDeleted = errors.New("cluster is being deleted")
 )
 
 // +kubebuilder:rbac:groups=core,resources=events,verbs=get;list;watch;create;patch
@@ -79,37 +80,30 @@ type MachineReconciler struct {
 }
 
 func (r *MachineReconciler) SetupWithManager(mgr ctrl.Manager, options controller.Options) error {
+	clusterToMachines, err := util.ClusterToObjectsMapper(mgr.GetClient(), &clusterv1.MachineList{}, mgr.GetScheme())
+	if err != nil {
+		return err
+	}
+
 	controller, err := ctrl.NewControllerManagedBy(mgr).
 		For(&clusterv1.Machine{}).
 		WithOptions(options).
+		WithEventFilter(predicates.ResourceNotPaused(r.Log)).
 		Build(r)
-
 	if err != nil {
 		return errors.Wrap(err, "failed setting up with a controller manager")
 	}
 
-	// Watch Clusters and trigger Reconciles for Machines
-	// when the cluster paused status is changed
 	err = controller.Watch(
 		&source.Kind{Type: &clusterv1.Cluster{}},
 		&handler.EnqueueRequestsFromMapFunc{
-			ToRequests: handler.ToRequestsFunc(r.clusterToActiveMachines),
+			ToRequests: clusterToMachines,
 		},
-		predicate.Funcs{
-			UpdateFunc: func(e event.UpdateEvent) bool {
-				oldCluster := e.ObjectOld.(*clusterv1.Cluster)
-				newCluster := e.ObjectNew.(*clusterv1.Cluster)
-				return oldCluster.Spec.Paused && !newCluster.Spec.Paused
-			},
-			CreateFunc: func(e event.CreateEvent) bool {
-				if _, ok := e.Meta.GetAnnotations()[clusterv1.PausedAnnotation]; !ok {
-					return false
-				}
-				return true
-			},
-		})
+		// TODO: should this wait for Cluster.Status.InfrastructureReady similar to Infra Machine resources?
+		predicates.ClusterUnpaused(r.Log),
+	)
 	if err != nil {
-		return err
+		return errors.Wrap(err, "failed to add Watch for Clusters to controller manager")
 	}
 
 	r.recorder = mgr.GetEventRecorderFor("machine-controller")
@@ -160,8 +154,8 @@ func (r *MachineReconciler) Reconcile(req ctrl.Request) (_ ctrl.Result, reterr e
 	}
 
 	// Return early if the object or Cluster is paused.
-	if util.IsPaused(cluster, m) {
-		logger.V(3).Info("reconciliation is paused for this object")
+	if annotations.IsPaused(cluster, m) {
+		logger.Info("Reconciliation is paused for this object")
 		return ctrl.Result{}, nil
 	}
 
@@ -261,22 +255,19 @@ func (r *MachineReconciler) reconcileDelete(ctx context.Context, cluster *cluste
 	logger := r.Log.WithValues("machine", m.Name, "namespace", m.Namespace)
 	logger = logger.WithValues("cluster", cluster.Name)
 
-	err := r.isDeleteNodeAllowed(ctx, m)
+	err := r.isDeleteNodeAllowed(ctx, cluster, m)
 	isDeleteNodeAllowed := err == nil
 	if err != nil {
 		switch err {
-		case errNilNodeRef:
-			logger.Error(err, "Deleting node is not allowed")
-		case errNoControlPlaneNodes, errLastControlPlaneNode:
-			logger.Error(err, "Deleting node is not allowed", "node", m.Status.NodeRef.Name)
+		case errNoControlPlaneNodes, errLastControlPlaneNode, errNilNodeRef, errClusterIsBeingDeleted:
+			logger.Info("Deleting Kubernetes Node associated with Machine is not allowed", "node", m.Status.NodeRef, "cause", err)
 		default:
-			logger.Error(err, "IsDeleteNodeAllowed check failed")
-			return ctrl.Result{}, err
+			return ctrl.Result{}, errors.Wrapf(err, "failed to check if Kubernetes Node deletion is allowed")
 		}
 	}
 
 	if isDeleteNodeAllowed {
-		// Drain node before deletion
+		// Drain node before deletion.
 		if _, exists := m.ObjectMeta.Annotations[clusterv1.ExcludeNodeDrainingAnnotation]; !exists {
 			logger.Info("Draining node", "node", m.Status.NodeRef.Name)
 			if err := r.drainNode(ctx, cluster, m.Status.NodeRef.Name, m.Name); err != nil {
@@ -317,7 +308,12 @@ func (r *MachineReconciler) reconcileDelete(ctx context.Context, cluster *cluste
 
 // isDeleteNodeAllowed returns nil only if the Machine's NodeRef is not nil
 // and if the Machine is not the last control plane node in the cluster.
-func (r *MachineReconciler) isDeleteNodeAllowed(ctx context.Context, machine *clusterv1.Machine) error {
+func (r *MachineReconciler) isDeleteNodeAllowed(ctx context.Context, cluster *clusterv1.Cluster, machine *clusterv1.Machine) error {
+	// Return early if the cluster is being deleted.
+	if !cluster.DeletionTimestamp.IsZero() {
+		return errClusterIsBeingDeleted
+	}
+
 	// Cannot delete something that doesn't exist.
 	if machine.Status.NodeRef == nil {
 		return errNilNodeRef
@@ -337,10 +333,6 @@ func (r *MachineReconciler) isDeleteNodeAllowed(ctx context.Context, machine *cl
 		// Do not delete the NodeRef if there are no remaining members of
 		// the control plane.
 		return errNoControlPlaneNodes
-	case numControlPlaneMachines == 1 && util.IsControlPlaneMachine(machine):
-		// Do not delete the NodeRef if this is the last member of the
-		// control plane.
-		return errLastControlPlaneNode
 	default:
 		// Otherwise it is okay to delete the NodeRef.
 		return nil
@@ -410,7 +402,7 @@ func (r *MachineReconciler) drainNode(ctx context.Context, cluster *clusterv1.Cl
 		return &capierrors.RequeueAfterError{RequeueAfter: 20 * time.Second}
 	}
 
-	logger.Info("Drain successful")
+	logger.Info("Drain successful", "")
 	return nil
 }
 

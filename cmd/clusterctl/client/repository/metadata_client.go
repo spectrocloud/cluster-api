@@ -36,20 +36,22 @@ type MetadataClient interface {
 
 // metadataClient implements MetadataClient.
 type metadataClient struct {
-	provider   config.Provider
-	version    string
-	repository Repository
+	configVarClient config.VariablesClient
+	provider        config.Provider
+	version         string
+	repository      Repository
 }
 
 // ensure metadataClient implements MetadataClient.
 var _ MetadataClient = &metadataClient{}
 
 // newMetadataClient returns a metadataClient.
-func newMetadataClient(provider config.Provider, version string, repository Repository) *metadataClient {
+func newMetadataClient(provider config.Provider, version string, repository Repository, config config.VariablesClient) *metadataClient {
 	return &metadataClient{
-		provider:   provider,
-		version:    version,
-		repository: repository,
+		configVarClient: config,
+		provider:        provider,
+		version:         version,
+		repository:      repository,
 	}
 }
 
@@ -60,7 +62,12 @@ func (f *metadataClient) Get() (*clusterctlv1.Metadata, error) {
 	version := f.version
 	name := "metadata.yaml"
 
-	file, err := getLocalOverride(f.provider, version, name)
+	file, err := getLocalOverride(&newOverrideInput{
+		configVariablesClient: f.configVarClient,
+		provider:              f.provider,
+		version:               version,
+		filePath:              name,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -197,6 +204,17 @@ func (f *metadataClient) getEmbeddedMetadata() *clusterctlv1.Metadata {
 					// v1alpha2 release series are supported only for upgrades
 					{Major: 0, Minor: 2, Contract: "v1alpha2"},
 					// older version are not supported by clusterctl
+				},
+			}
+		case config.OpenStackProviderName:
+			return &clusterctlv1.Metadata{
+				TypeMeta: metav1.TypeMeta{
+					APIVersion: clusterctlv1.GroupVersion.String(),
+					Kind:       "Metadata",
+				},
+				ReleaseSeries: []clusterctlv1.ReleaseSeries{
+					// v1alpha3 release series
+					{Major: 0, Minor: 3, Contract: "v1alpha3"},
 				},
 			}
 		case config.VSphereProviderName:

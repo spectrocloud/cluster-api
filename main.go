@@ -17,6 +17,7 @@ package main
 
 import (
 	"flag"
+	"math/rand"
 	"net/http"
 	_ "net/http/pprof"
 	"os"
@@ -31,6 +32,7 @@ import (
 	"k8s.io/klog/klogr"
 	clusterv1alpha2 "sigs.k8s.io/cluster-api/api/v1alpha2"
 	clusterv1alpha3 "sigs.k8s.io/cluster-api/api/v1alpha3"
+	"sigs.k8s.io/cluster-api/cmd/version"
 	"sigs.k8s.io/cluster-api/controllers"
 	expv1alpha3 "sigs.k8s.io/cluster-api/exp/api/v1alpha3"
 	expcontrollers "sigs.k8s.io/cluster-api/exp/controllers"
@@ -131,6 +133,8 @@ func InitFlags(fs *pflag.FlagSet) {
 }
 
 func main() {
+	rand.Seed(time.Now().UnixNano())
+
 	InitFlags(pflag.CommandLine)
 	pflag.CommandLine.AddGoFlagSet(flag.CommandLine)
 	pflag.Parse()
@@ -168,7 +172,7 @@ func main() {
 	setupWebhooks(mgr)
 
 	// +kubebuilder:scaffold:builder
-	setupLog.Info("starting manager")
+	setupLog.Info("starting manager", "version", version.Get().String())
 	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
 		setupLog.Error(err, "problem running manager")
 		os.Exit(1)
@@ -191,6 +195,7 @@ func setupReconcilers(mgr ctrl.Manager) {
 	if webhookPort != 0 {
 		return
 	}
+
 	if err := (&controllers.ClusterReconciler{
 		Client: mgr.GetClient(),
 		Log:    ctrl.Log.WithName("controllers").WithName("Cluster"),

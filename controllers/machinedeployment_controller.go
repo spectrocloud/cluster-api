@@ -30,7 +30,9 @@ import (
 	"k8s.io/client-go/tools/record"
 	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha3"
 	"sigs.k8s.io/cluster-api/util"
+	"sigs.k8s.io/cluster-api/util/annotations"
 	"sigs.k8s.io/cluster-api/util/patch"
+	"sigs.k8s.io/cluster-api/util/predicates"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
@@ -58,7 +60,12 @@ type MachineDeploymentReconciler struct {
 }
 
 func (r *MachineDeploymentReconciler) SetupWithManager(mgr ctrl.Manager, options controller.Options) error {
-	err := ctrl.NewControllerManagedBy(mgr).
+	clusterToMachineDeployments, err := util.ClusterToObjectsMapper(mgr.GetClient(), &clusterv1.MachineDeploymentList{}, mgr.GetScheme())
+	if err != nil {
+		return err
+	}
+
+	c, err := ctrl.NewControllerManagedBy(mgr).
 		For(&clusterv1.MachineDeployment{}).
 		Owns(&clusterv1.MachineSet{}).
 		Watches(
@@ -66,10 +73,22 @@ func (r *MachineDeploymentReconciler) SetupWithManager(mgr ctrl.Manager, options
 			&handler.EnqueueRequestsFromMapFunc{ToRequests: handler.ToRequestsFunc(r.MachineSetToDeployments)},
 		).
 		WithOptions(options).
-		Complete(r)
-
+		WithEventFilter(predicates.ResourceNotPaused(r.Log)).
+		Build(r)
 	if err != nil {
 		return errors.Wrap(err, "failed setting up with a controller manager")
+	}
+
+	err = c.Watch(
+		&source.Kind{Type: &clusterv1.Cluster{}},
+		&handler.EnqueueRequestsFromMapFunc{
+			ToRequests: clusterToMachineDeployments,
+		},
+		// TODO: should this wait for Cluster.Status.InfrastructureReady similar to Infra Machine resources?
+		predicates.ClusterUnpaused(r.Log),
+	)
+	if err != nil {
+		return errors.Wrap(err, "failed to add Watch for Clusters to controller manager")
 	}
 
 	r.recorder = mgr.GetEventRecorderFor("machinedeployment-controller")
@@ -98,8 +117,8 @@ func (r *MachineDeploymentReconciler) Reconcile(req ctrl.Request) (_ ctrl.Result
 	}
 
 	// Return early if the object or Cluster is paused.
-	if util.IsPaused(cluster, deployment) {
-		logger.V(3).Info("reconciliation is paused for this object")
+	if annotations.IsPaused(cluster, deployment) {
+		logger.Info("Reconciliation is paused for this object")
 		return ctrl.Result{}, nil
 	}
 
@@ -127,8 +146,7 @@ func (r *MachineDeploymentReconciler) Reconcile(req ctrl.Request) (_ ctrl.Result
 		logger.Error(err, "Failed to reconcile MachineDeployment")
 		r.recorder.Eventf(deployment, corev1.EventTypeWarning, "ReconcileError", "%v", err)
 	}
-
-	return result, nil
+	return result, err
 }
 
 func (r *MachineDeploymentReconciler) reconcile(ctx context.Context, cluster *clusterv1.Cluster, d *clusterv1.MachineDeployment) (ctrl.Result, error) {

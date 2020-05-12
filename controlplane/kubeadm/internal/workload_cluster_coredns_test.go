@@ -20,7 +20,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/onsi/gomega"
+	. "github.com/onsi/gomega"
+
 	"github.com/pkg/errors"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -94,7 +95,7 @@ func TestValidateCoreDNSImageTag(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			g := gomega.NewWithT(t)
+			g := NewWithT(t)
 			err := validateCoreDNSImageTag(tt.fromVer, tt.toVer)
 			if tt.expectErrSubStr != "" {
 				g.Expect(err.Error()).To(ContainSubstring(tt.expectErrSubStr))
@@ -152,7 +153,7 @@ func TestUpdateCoreDNSCorefile(t *testing.T) {
 	}
 
 	t.Run("returns error if migrate failed to update corefile", func(t *testing.T) {
-		g := gomega.NewWithT(t)
+		g := NewWithT(t)
 		objs := []runtime.Object{depl, cm}
 		fakeClient := fake.NewFakeClientWithScheme(scheme.Scheme, objs...)
 		fakeMigrator := &fakeMigrator{
@@ -182,7 +183,7 @@ func TestUpdateCoreDNSCorefile(t *testing.T) {
 	})
 
 	t.Run("creates a backup of the corefile", func(t *testing.T) {
-		g := gomega.NewWithT(t)
+		g := NewWithT(t)
 		// Not including the deployment so as to fail early and verify that
 		// the intermediate config map update occurred
 		objs := []runtime.Object{cm}
@@ -214,7 +215,7 @@ func TestUpdateCoreDNSCorefile(t *testing.T) {
 	})
 
 	t.Run("patches the core dns deployment to point to the backup corefile before migration", func(t *testing.T) {
-		g := gomega.NewWithT(t)
+		g := NewWithT(t)
 		objs := []runtime.Object{depl, cm}
 		fakeClient := fake.NewFakeClientWithScheme(scheme.Scheme, objs...)
 		fakeMigrator := &fakeMigrator{
@@ -265,7 +266,7 @@ func TestUpdateCoreDNSCorefile(t *testing.T) {
 
 func TestGetCoreDNSInfo(t *testing.T) {
 	t.Run("get coredns info", func(t *testing.T) {
-		expectedImage := "k8s.gcr.io/coredns:1.6.2"
+		expectedImage := "k8s.gcr.io/some-folder/coredns:1.6.2"
 		depl := &appsv1.Deployment{
 			TypeMeta: v1.TypeMeta{
 				Kind:       "Deployment",
@@ -316,78 +317,109 @@ func TestGetCoreDNSInfo(t *testing.T) {
 		badSemverContainerDepl := depl.DeepCopy()
 		badSemverContainerDepl.Spec.Template.Spec.Containers[0].Image = "k8s.gcr.io/coredns:v1X6.2"
 
-		dns := &kubeadmv1.DNS{
-			ImageMeta: kubeadmv1.ImageMeta{
-				ImageRepository: "myrepo",
-				ImageTag:        "1.7.2-foobar.1",
+		clusterConfig := &kubeadmv1.ClusterConfiguration{
+			DNS: kubeadmv1.DNS{
+				ImageMeta: kubeadmv1.ImageMeta{
+					ImageRepository: "myrepo",
+					ImageTag:        "1.7.2-foobar.1",
+				},
 			},
 		}
-		badImgTagDNS := dns.DeepCopy()
-		badImgTagDNS.ImageTag = "v1X6.2-foobar.1"
+		badImgTagDNS := clusterConfig.DeepCopy()
+		badImgTagDNS.DNS.ImageTag = "v1X6.2-foobar.1"
 
 		tests := []struct {
-			name      string
-			expectErr bool
-			objs      []runtime.Object
-			dns       *kubeadmv1.DNS
+			name          string
+			expectErr     bool
+			objs          []runtime.Object
+			clusterConfig *kubeadmv1.ClusterConfiguration
+			toImage       string
 		}{
 			{
-				name: "returns core dns info",
+				name:          "returns core dns info",
+				objs:          []runtime.Object{depl, cm},
+				clusterConfig: clusterConfig,
+				toImage:       "myrepo/coredns:1.7.2-foobar.1",
+			},
+			{
+				name: "uses global config ImageRepository if DNS ImageRepository is not set",
 				objs: []runtime.Object{depl, cm},
-				dns:  dns,
+				clusterConfig: &kubeadmv1.ClusterConfiguration{
+					ImageRepository: "globalRepo/sub-path",
+					DNS: kubeadmv1.DNS{
+						ImageMeta: kubeadmv1.ImageMeta{
+							ImageTag: "1.7.2-foobar.1",
+						},
+					},
+				},
+				toImage: "globalRepo/sub-path/coredns:1.7.2-foobar.1",
 			},
 			{
-				name:      "returns error if unable to find coredns config map",
-				objs:      []runtime.Object{depl},
-				dns:       dns,
-				expectErr: true,
+				name: "uses DNS ImageRepository config if both global and DNS-level are set",
+				objs: []runtime.Object{depl, cm},
+				clusterConfig: &kubeadmv1.ClusterConfiguration{
+					ImageRepository: "globalRepo",
+					DNS: kubeadmv1.DNS{
+						ImageMeta: kubeadmv1.ImageMeta{
+							ImageRepository: "dnsRepo",
+							ImageTag:        "1.7.2-foobar.1",
+						},
+					},
+				},
+				toImage: "dnsRepo/coredns:1.7.2-foobar.1",
 			},
 			{
-				name:      "returns error if unable to find coredns deployment",
-				objs:      []runtime.Object{cm},
-				dns:       dns,
-				expectErr: true,
+				name:          "returns error if unable to find coredns config map",
+				objs:          []runtime.Object{depl},
+				clusterConfig: clusterConfig,
+				expectErr:     true,
 			},
 			{
-				name:      "returns error if coredns deployment doesn't have coredns container",
-				objs:      []runtime.Object{emptyDepl, cm},
-				dns:       dns,
-				expectErr: true,
+				name:          "returns error if unable to find coredns deployment",
+				objs:          []runtime.Object{cm},
+				clusterConfig: clusterConfig,
+				expectErr:     true,
 			},
 			{
-				name:      "returns error if unable to find coredns corefile",
-				objs:      []runtime.Object{depl, emptycm},
-				dns:       dns,
-				expectErr: true,
+				name:          "returns error if coredns deployment doesn't have coredns container",
+				objs:          []runtime.Object{emptyDepl, cm},
+				clusterConfig: clusterConfig,
+				expectErr:     true,
 			},
 			{
-				name:      "returns error if unable to parse the container image",
-				objs:      []runtime.Object{badContainerDepl, cm},
-				dns:       dns,
-				expectErr: true,
+				name:          "returns error if unable to find coredns corefile",
+				objs:          []runtime.Object{depl, emptycm},
+				clusterConfig: clusterConfig,
+				expectErr:     true,
 			},
 			{
-				name:      "returns error if container image has not tag",
-				objs:      []runtime.Object{noTagContainerDepl, cm},
-				dns:       dns,
-				expectErr: true,
+				name:          "returns error if unable to parse the container image",
+				objs:          []runtime.Object{badContainerDepl, cm},
+				clusterConfig: clusterConfig,
+				expectErr:     true,
 			},
 			{
-				name:      "returns error if unable to semver parse container image",
-				objs:      []runtime.Object{badSemverContainerDepl, cm},
-				dns:       dns,
-				expectErr: true,
+				name:          "returns error if container image has not tag",
+				objs:          []runtime.Object{noTagContainerDepl, cm},
+				clusterConfig: clusterConfig,
+				expectErr:     true,
 			},
 			{
-				name:      "returns error if unable to semver parse dns image tag",
-				objs:      []runtime.Object{depl, cm},
-				dns:       badImgTagDNS,
-				expectErr: true,
+				name:          "returns error if unable to semver parse container image",
+				objs:          []runtime.Object{badSemverContainerDepl, cm},
+				clusterConfig: clusterConfig,
+				expectErr:     true,
+			},
+			{
+				name:          "returns error if unable to semver parse dns image tag",
+				objs:          []runtime.Object{depl, cm},
+				clusterConfig: badImgTagDNS,
+				expectErr:     true,
 			},
 		}
 		for _, tt := range tests {
 			t.Run(tt.name, func(t *testing.T) {
-				g := gomega.NewWithT(t)
+				g := NewWithT(t)
 				fakeClient := fake.NewFakeClientWithScheme(scheme.Scheme, tt.objs...)
 				w := &Workload{
 					Client: fakeClient,
@@ -401,7 +433,7 @@ func TestGetCoreDNSInfo(t *testing.T) {
 					}
 				}
 
-				actualInfo, err := w.getCoreDNSInfo(context.TODO(), tt.dns)
+				actualInfo, err := w.getCoreDNSInfo(context.TODO(), tt.clusterConfig)
 				if tt.expectErr {
 					g.Expect(err).To(HaveOccurred())
 					return
@@ -413,7 +445,7 @@ func TestGetCoreDNSInfo(t *testing.T) {
 					CurrentMajorMinorPatch: "1.6.2",
 					TargetMajorMinorPatch:  "1.7.2",
 					FromImage:              expectedImage,
-					ToImage:                "myrepo/coredns:1.7.2-foobar.1",
+					ToImage:                tt.toImage,
 					FromImageTag:           "1.6.2",
 					ToImageTag:             "1.7.2-foobar.1",
 				}
@@ -427,7 +459,7 @@ func TestGetCoreDNSInfo(t *testing.T) {
 func TestUpdateCoreDNSImageInfoInKubeadmConfigMap(t *testing.T) {
 	cm := &corev1.ConfigMap{
 		ObjectMeta: v1.ObjectMeta{
-			Name:      "kubeadm-config",
+			Name:      kubeadmConfigKey,
 			Namespace: metav1.NamespaceSystem,
 		},
 		Data: map[string]string{
@@ -497,7 +529,7 @@ scheduler: {}`,
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			g := gomega.NewWithT(t)
+			g := NewWithT(t)
 			fakeClient := fake.NewFakeClientWithScheme(scheme.Scheme, tt.objs...)
 			w := &Workload{
 				Client: fakeClient,
@@ -511,7 +543,7 @@ scheduler: {}`,
 			g.Expect(err).ToNot(HaveOccurred())
 
 			var expectedConfigMap corev1.ConfigMap
-			g.Expect(fakeClient.Get(context.TODO(), ctrlclient.ObjectKey{Name: "kubeadm-config", Namespace: metav1.NamespaceSystem}, &expectedConfigMap)).To(Succeed())
+			g.Expect(fakeClient.Get(context.TODO(), ctrlclient.ObjectKey{Name: kubeadmConfigKey, Namespace: metav1.NamespaceSystem}, &expectedConfigMap)).To(Succeed())
 			g.Expect(expectedConfigMap.Data).To(HaveKeyWithValue("ClusterConfiguration", ContainSubstring("1.0.1-somever.1")))
 			g.Expect(expectedConfigMap.Data).To(HaveKeyWithValue("ClusterConfiguration", ContainSubstring("gcr.io/example")))
 		})
@@ -601,7 +633,7 @@ func TestUpdateCoreDNSDeployment(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			g := gomega.NewWithT(t)
+			g := NewWithT(t)
 			fakeClient := fake.NewFakeClientWithScheme(scheme.Scheme, tt.objs...)
 
 			w := &Workload{

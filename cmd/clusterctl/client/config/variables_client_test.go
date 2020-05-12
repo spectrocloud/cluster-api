@@ -25,8 +25,6 @@ import (
 )
 
 func Test_variables_Get(t *testing.T) {
-	g := NewWithT(t)
-
 	reader := test.NewFakeReader().WithVar("foo", "bar")
 
 	type args struct {
@@ -47,16 +45,17 @@ func Test_variables_Get(t *testing.T) {
 			wantErr: false,
 		},
 		{
-			name: "Returns error if the variable does exists",
+			name: "Returns error if the variable does not exist",
 			args: args{
 				key: "baz",
 			},
-			want:    "",
 			wantErr: true,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			g := NewWithT(t)
+
 			p := &variablesClient{
 				reader: reader,
 			}

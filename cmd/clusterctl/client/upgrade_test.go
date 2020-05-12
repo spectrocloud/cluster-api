@@ -30,9 +30,60 @@ import (
 	"sigs.k8s.io/cluster-api/cmd/clusterctl/client/config"
 )
 
-func Test_clusterctlClient_ApplyUpgrade(t *testing.T) {
-	g := NewWithT(t)
+func Test_clusterctlClient_PlanUpgrade(t *testing.T) {
+	type fields struct {
+		client *fakeClient
+	}
+	type args struct {
+		options PlanUpgradeOptions
+	}
+	tests := []struct {
+		name    string
+		fields  fields
+		args    args
+		wantErr bool
+	}{
+		{
+			name: "does not return error if cluster client is found",
+			fields: fields{
+				client: fakeClientForUpgrade(), // core v1.0.0 (v1.0.1 available), infra v2.0.0 (v2.0.1 available)
+			},
+			args: args{
+				options: PlanUpgradeOptions{
+					Kubeconfig: Kubeconfig{Path: "kubeconfig", Context: "mgmt-context"},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "returns an error if cluster client is not found",
+			fields: fields{
+				client: fakeClientForUpgrade(), // core v1.0.0 (v1.0.1 available), infra v2.0.0 (v2.0.1 available)
+			},
+			args: args{
+				options: PlanUpgradeOptions{
+					Kubeconfig: Kubeconfig{Path: "kubeconfig", Context: "some-other-context"},
+				},
+			},
+			wantErr: true,
+		},
+	}
 
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			g := NewWithT(t)
+
+			_, err := tt.fields.client.PlanUpgrade(tt.args.options)
+			if tt.wantErr {
+				g.Expect(err).To(HaveOccurred())
+				return
+			}
+			g.Expect(err).NotTo(HaveOccurred())
+		})
+	}
+}
+
+func Test_clusterctlClient_ApplyUpgrade(t *testing.T) {
 	type fields struct {
 		client *fakeClient
 	}
@@ -49,11 +100,11 @@ func Test_clusterctlClient_ApplyUpgrade(t *testing.T) {
 		{
 			name: "apply a plan",
 			fields: fields{
-				client: fakeClientFoUpgrade(), // core v1.0.0 (v1.0.1 available), infra v2.0.0 (v2.0.1 available)
+				client: fakeClientForUpgrade(), // core v1.0.0 (v1.0.1 available), infra v2.0.0 (v2.0.1 available)
 			},
 			args: args{
 				options: ApplyUpgradeOptions{
-					Kubeconfig:              "kubeconfig",
+					Kubeconfig:              Kubeconfig{Path: "kubeconfig", Context: "mgmt-context"},
 					ManagementGroup:         "cluster-api-system/cluster-api",
 					Contract:                "v1alpha3",
 					CoreProvider:            "",
@@ -78,11 +129,11 @@ func Test_clusterctlClient_ApplyUpgrade(t *testing.T) {
 		{
 			name: "apply a custom plan - core provider only",
 			fields: fields{
-				client: fakeClientFoUpgrade(), // core v1.0.0 (v1.0.1 available), infra v2.0.0 (v2.0.1 available)
+				client: fakeClientForUpgrade(), // core v1.0.0 (v1.0.1 available), infra v2.0.0 (v2.0.1 available)
 			},
 			args: args{
 				options: ApplyUpgradeOptions{
-					Kubeconfig:              "kubeconfig",
+					Kubeconfig:              Kubeconfig{Path: "kubeconfig", Context: "mgmt-context"},
 					ManagementGroup:         "cluster-api-system/cluster-api",
 					Contract:                "",
 					CoreProvider:            "cluster-api-system/cluster-api:v1.0.1",
@@ -107,11 +158,11 @@ func Test_clusterctlClient_ApplyUpgrade(t *testing.T) {
 		{
 			name: "apply a custom plan - infra provider only",
 			fields: fields{
-				client: fakeClientFoUpgrade(), // core v1.0.0 (v1.0.1 available), infra v2.0.0 (v2.0.1 available)
+				client: fakeClientForUpgrade(), // core v1.0.0 (v1.0.1 available), infra v2.0.0 (v2.0.1 available)
 			},
 			args: args{
 				options: ApplyUpgradeOptions{
-					Kubeconfig:              "kubeconfig",
+					Kubeconfig:              Kubeconfig{Path: "kubeconfig", Context: "mgmt-context"},
 					ManagementGroup:         "cluster-api-system/cluster-api",
 					Contract:                "",
 					CoreProvider:            "",
@@ -136,11 +187,11 @@ func Test_clusterctlClient_ApplyUpgrade(t *testing.T) {
 		{
 			name: "apply a custom plan - both providers",
 			fields: fields{
-				client: fakeClientFoUpgrade(), // core v1.0.0 (v1.0.1 available), infra v2.0.0 (v2.0.1 available)
+				client: fakeClientForUpgrade(), // core v1.0.0 (v1.0.1 available), infra v2.0.0 (v2.0.1 available)
 			},
 			args: args{
 				options: ApplyUpgradeOptions{
-					Kubeconfig:              "kubeconfig",
+					Kubeconfig:              Kubeconfig{Path: "kubeconfig", Context: "mgmt-context"},
 					ManagementGroup:         "cluster-api-system/cluster-api",
 					Contract:                "",
 					CoreProvider:            "cluster-api-system/cluster-api:v1.0.1",
@@ -165,6 +216,8 @@ func Test_clusterctlClient_ApplyUpgrade(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			g := NewWithT(t)
+
 			err := tt.fields.client.ApplyUpgrade(tt.args.options)
 			if tt.wantErr {
 				g.Expect(err).To(HaveOccurred())
@@ -172,7 +225,9 @@ func Test_clusterctlClient_ApplyUpgrade(t *testing.T) {
 			}
 			g.Expect(err).NotTo(HaveOccurred())
 
-			proxy := tt.fields.client.clusters["kubeconfig"].Proxy()
+			// converting between client and cluster alias for Kubeconfig
+			input := cluster.Kubeconfig(tt.args.options.Kubeconfig)
+			proxy := tt.fields.client.clusters[input].Proxy()
 			gotProviders := &clusterctlv1.ProviderList{}
 
 			c, err := proxy.NewClient()
@@ -194,7 +249,7 @@ func Test_clusterctlClient_ApplyUpgrade(t *testing.T) {
 	}
 }
 
-func fakeClientFoUpgrade() *fakeClient {
+func fakeClientForUpgrade() *fakeClient {
 	core := config.NewProvider("cluster-api", "https://somewhere.com", clusterctlv1.CoreProviderType)
 	infra := config.NewProvider("infra", "https://somewhere.com", clusterctlv1.InfrastructureProviderType)
 
@@ -223,7 +278,7 @@ func fakeClientFoUpgrade() *fakeClient {
 			},
 		})
 
-	cluster1 := newFakeCluster("kubeconfig", config1).
+	cluster1 := newFakeCluster(cluster.Kubeconfig{Path: "kubeconfig", Context: "mgmt-context"}, config1).
 		WithRepository(repository1).
 		WithRepository(repository2).
 		WithProviderInventory(core.Name(), core.Type(), "v1.0.0", "cluster-api-system", "").
@@ -260,8 +315,6 @@ func fakeProvider(name string, providerType clusterctlv1.ProviderType, version, 
 }
 
 func Test_parseUpgradeItem(t *testing.T) {
-	g := NewWithT(t)
-
 	type args struct {
 		provider string
 	}
@@ -326,6 +379,8 @@ func Test_parseUpgradeItem(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			g := NewWithT(t)
+
 			got, err := parseUpgradeItem(tt.args.provider, clusterctlv1.CoreProviderType)
 			if tt.wantErr {
 				g.Expect(err).To(HaveOccurred())

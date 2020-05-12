@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"math/rand"
 	"regexp"
 	"strconv"
@@ -27,19 +28,27 @@ import (
 	"time"
 
 	"github.com/blang/semver"
-	"github.com/docker/distribution/reference"
 	"github.com/pkg/errors"
 	v1 "k8s.io/api/core/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/version"
+	"k8s.io/klog/klogr"
 	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha3"
+	"sigs.k8s.io/cluster-api/util/annotations"
+	"sigs.k8s.io/cluster-api/util/container"
+	"sigs.k8s.io/cluster-api/util/predicates"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
+	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	"sigs.k8s.io/controller-runtime/pkg/source"
 )
 
 const (
@@ -54,7 +63,6 @@ var (
 	rnd                          = rand.New(rand.NewSource(time.Now().UnixNano()))
 	ErrNoCluster                 = fmt.Errorf("no %q label present", clusterv1.ClusterLabelName)
 	ErrUnstructuredFieldNotFound = fmt.Errorf("field not found")
-	ociTagAllowedChars           = regexp.MustCompile(`[^-a-zA-Z0-9_\.]`)
 	kubeSemver                   = regexp.MustCompile(`^v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)([-0-9a-zA-Z_\.+]*)?$`)
 )
 
@@ -93,32 +101,45 @@ func RandomString(n int) string {
 	return string(result)
 }
 
-// ModifyImageTag takes an imageName (e.g., registry/repo:tag), and returns an image name with updated tag
+// Ordinalize takes an int and returns the ordinalized version of it.
+// Eg. 1 --> 1st, 103 --> 103rd
+func Ordinalize(n int) string {
+	m := map[int]string{
+		0: "th",
+		1: "st",
+		2: "nd",
+		3: "rd",
+		4: "th",
+		5: "th",
+		6: "th",
+		7: "th",
+		8: "th",
+		9: "th",
+	}
+
+	an := int(math.Abs(float64(n)))
+	if an < 10 {
+		return fmt.Sprintf("%d%s", n, m[an])
+	}
+	return fmt.Sprintf("%d%s", n, m[an%10])
+}
+
+// ModifyImageRepository takes an imageName (e.g., repository/image:tag), and returns an image name with updated repository
+// Deprecated: Please use the functions in util/container
+func ModifyImageRepository(imageName, repositoryName string) (string, error) {
+	return container.ModifyImageRepository(imageName, repositoryName)
+}
+
+// ModifyImageTag takes an imageName (e.g., repository/image:tag), and returns an image name with updated tag
+// Deprecated: Please use the functions in util/container
 func ModifyImageTag(imageName, tagName string) (string, error) {
-	normalisedTagName := SemverToOCIImageTag(tagName)
-
-	namedRef, err := reference.ParseNormalizedNamed(imageName)
-	if err != nil {
-		return "", errors.Wrap(err, "failed to parse image name")
-
-	}
-	// return error if images use digest as version instead of tag
-	if _, isCanonical := namedRef.(reference.Canonical); isCanonical {
-		return "", errors.New("image uses digest as version, cannot update tag ")
-	}
-
-	// update the image tag with tagName
-	namedTagged, err := reference.WithTag(namedRef, normalisedTagName)
-	if err != nil {
-		return "", errors.Wrap(err, "failed to update image tag")
-	}
-
-	return reference.FamiliarString(reference.TagNameOnly(namedTagged)), nil
+	return container.ModifyImageTag(imageName, tagName)
 }
 
 // ImageTagIsValid ensures that a given image tag is compliant with the OCI spec
+// Deprecated: Please use the functions in util/container
 func ImageTagIsValid(tagName string) bool {
-	return !ociTagAllowedChars.MatchString(tagName)
+	return container.ImageTagIsValid(tagName)
 }
 
 // GetMachinesForCluster returns a list of machines associated with the cluster.
@@ -137,15 +158,16 @@ func GetMachinesForCluster(ctx context.Context, c client.Client, cluster *cluste
 	return &machines, nil
 }
 
-// SemVerToOCIImageTag is a helper function that replaces all
+// SemverToOCIImageTag is a helper function that replaces all
 // non-allowed symbols in tag strings with underscores.
 // Image tag can only contain lowercase and uppercase letters, digits,
 // underscores, periods and dashes.
 // Current usage is for CI images where all of symbols except '+' are valid,
 // but function is for generic usage where input can't be always pre-validated.
 // Taken from k8s.io/cmd/kubeadm/app/util
+// Deprecated: Please use the functions in util/container
 func SemverToOCIImageTag(version string) string {
-	return ociTagAllowedChars.ReplaceAllString(version, "_")
+	return container.SemverToOCIImageTag(version)
 }
 
 // GetControlPlaneMachines returns a slice containing control plane machines.
@@ -260,10 +282,10 @@ func ClusterToInfrastructureMapFunc(gvk schema.GroupVersionKind) handler.ToReque
 		if c.Spec.InfrastructureRef == nil {
 			return nil
 		}
-
-		// Return early if the GroupVersionKind doesn't match what we expect.
-		infraGVK := c.Spec.InfrastructureRef.GroupVersionKind()
-		if gvk != infraGVK {
+		gk := gvk.GroupKind()
+		// Return early if the GroupKind doesn't match what we expect.
+		infraGK := c.Spec.InfrastructureRef.GroupVersionKind().GroupKind()
+		if gk != infraGK {
 			return nil
 		}
 
@@ -307,9 +329,10 @@ func MachineToInfrastructureMapFunc(gvk schema.GroupVersionKind) handler.ToReque
 			return nil
 		}
 
-		// Return early if the GroupVersionKind doesn't match what we expect.
-		infraGVK := m.Spec.InfrastructureRef.GroupVersionKind()
-		if gvk != infraGVK {
+		gk := gvk.GroupKind()
+		// Return early if the GroupKind doesn't match what we expect.
+		infraGK := m.Spec.InfrastructureRef.GroupVersionKind().GroupKind()
+		if gk != infraGK {
 			return nil
 		}
 
@@ -411,19 +434,15 @@ func HasOwner(refList []metav1.OwnerReference, apiVersion string, kinds []string
 	return false
 }
 
-// IsPaused returns true if the Cluster is paused or the object has the `paused` annotation.
-func IsPaused(cluster *clusterv1.Cluster, v metav1.Object) bool {
-	if cluster.Spec.Paused {
-		return true
-	}
+var (
+	// IsPaused returns true if the Cluster is paused or the object has the `paused` annotation.
+	// Deprecated: use util/annotations/IsPaused instead
+	IsPaused = annotations.IsPaused
 
-	annotations := v.GetAnnotations()
-	if annotations == nil {
-		return false
-	}
-	_, ok := annotations[clusterv1.PausedAnnotation]
-	return ok
-}
+	// HasPausedAnnotation returns true if the object has the `paused` annotation.
+	// Deprecated: use util/annotations/HasPausedAnnotation instead
+	HasPausedAnnotation = annotations.HasPausedAnnotation
+)
 
 // GetCRDWithContract retrieves a list of CustomResourceDefinitions from using controller-runtime Client,
 // filtering with the `contract` label passed in.
@@ -474,4 +493,56 @@ func (o MachinesByCreationTimestamp) Less(i, j int) bool {
 		return o[i].Name < o[j].Name
 	}
 	return o[i].CreationTimestamp.Before(&o[j].CreationTimestamp)
+}
+
+// WatchOnClusterPaused adds a conditional watch to the controlled given as input
+// that sends watch notifications on any create or delete, and only updates
+// that toggle Cluster.Spec.Cluster.
+// Deprecated: Instead add the Watch directly and use predicates.ClusterUnpaused or
+// predicates.ClusterUnpausedAndInfrastructureReady depending on your use case.
+func WatchOnClusterPaused(c controller.Controller, mapFunc handler.Mapper) error {
+	log := klogr.New().WithName("WatchOnClusterPaused")
+	return c.Watch(
+		&source.Kind{Type: &clusterv1.Cluster{}},
+		&handler.EnqueueRequestsFromMapFunc{
+			ToRequests: mapFunc,
+		},
+		predicates.ClusterUnpaused(log),
+	)
+}
+
+// ClusterToObjectsMapper returns a mapper function that gets a cluster and lists all objects for the object passed in
+// and returns a list of requests.
+// NB: The objects are required to have `clusterv1.ClusterLabelName` applied.
+func ClusterToObjectsMapper(c client.Client, ro runtime.Object, scheme *runtime.Scheme) (handler.Mapper, error) {
+	if _, ok := ro.(metav1.ListInterface); !ok {
+		return nil, errors.Errorf("expected a metav1.ListInterface, got %T instead", ro)
+	}
+
+	gvk, err := apiutil.GVKForObject(ro, scheme)
+	if err != nil {
+		return nil, err
+	}
+
+	return handler.ToRequestsFunc(func(o handler.MapObject) []ctrl.Request {
+		cluster, ok := o.Object.(*clusterv1.Cluster)
+		if !ok {
+			return nil
+		}
+
+		list := &unstructured.UnstructuredList{}
+		list.SetGroupVersionKind(gvk)
+		if err := c.List(context.Background(), list, client.MatchingLabels{clusterv1.ClusterLabelName: cluster.Name}); err != nil {
+			return nil
+		}
+
+		results := []ctrl.Request{}
+		for _, obj := range list.Items {
+			results = append(results, ctrl.Request{
+				NamespacedName: client.ObjectKey{Namespace: obj.GetNamespace(), Name: obj.GetName()},
+			})
+		}
+		return results
+
+	}), nil
 }

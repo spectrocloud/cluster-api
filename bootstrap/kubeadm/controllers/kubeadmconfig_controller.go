@@ -42,7 +42,9 @@ import (
 	expv1 "sigs.k8s.io/cluster-api/exp/api/v1alpha3"
 	"sigs.k8s.io/cluster-api/feature"
 	"sigs.k8s.io/cluster-api/util"
+	"sigs.k8s.io/cluster-api/util/annotations"
 	"sigs.k8s.io/cluster-api/util/patch"
+	"sigs.k8s.io/cluster-api/util/predicates"
 	"sigs.k8s.io/cluster-api/util/secret"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -90,24 +92,19 @@ func (r *KubeadmConfigReconciler) SetupWithManager(mgr ctrl.Manager, option cont
 
 	r.scheme = mgr.GetScheme()
 
-	builder := ctrl.NewControllerManagedBy(mgr).
+	b := ctrl.NewControllerManagedBy(mgr).
 		For(&bootstrapv1.KubeadmConfig{}).
 		WithOptions(option).
+		WithEventFilter(predicates.ResourceNotPaused(r.Log)).
 		Watches(
 			&source.Kind{Type: &clusterv1.Machine{}},
 			&handler.EnqueueRequestsFromMapFunc{
 				ToRequests: handler.ToRequestsFunc(r.MachineToBootstrapMapFunc),
 			},
-		).
-		Watches(
-			&source.Kind{Type: &clusterv1.Cluster{}},
-			&handler.EnqueueRequestsFromMapFunc{
-				ToRequests: handler.ToRequestsFunc(r.ClusterToKubeadmConfigs),
-			},
 		)
 
 	if feature.Gates.Enabled(feature.MachinePool) {
-		builder = builder.Watches(
+		b = b.Watches(
 			&source.Kind{Type: &expv1.MachinePool{}},
 			&handler.EnqueueRequestsFromMapFunc{
 				ToRequests: handler.ToRequestsFunc(r.MachinePoolToBootstrapMapFunc),
@@ -115,8 +112,20 @@ func (r *KubeadmConfigReconciler) SetupWithManager(mgr ctrl.Manager, option cont
 		)
 	}
 
-	if err := builder.Complete(r); err != nil {
+	c, err := b.Build(r)
+	if err != nil {
 		return errors.Wrap(err, "failed setting up with a controller manager")
+	}
+
+	err = c.Watch(
+		&source.Kind{Type: &clusterv1.Cluster{}},
+		&handler.EnqueueRequestsFromMapFunc{
+			ToRequests: handler.ToRequestsFunc(r.ClusterToKubeadmConfigs),
+		},
+		predicates.ClusterUnpausedAndInfrastructureReady(r.Log),
+	)
+	if err != nil {
+		return errors.Wrap(err, "failed adding Watch for Clusters to controller manager")
 	}
 
 	return nil
@@ -166,6 +175,11 @@ func (r *KubeadmConfigReconciler) Reconcile(req ctrl.Request) (_ ctrl.Result, re
 		}
 		log.Error(err, "could not get cluster with metadata")
 		return ctrl.Result{}, err
+	}
+
+	if annotations.IsPaused(cluster, config) {
+		log.Info("Reconciliation is paused for this object")
+		return ctrl.Result{}, nil
 	}
 
 	scope := &Scope{
@@ -264,7 +278,6 @@ func (r *KubeadmConfigReconciler) Reconcile(req ctrl.Request) (_ ctrl.Result, re
 func (r *KubeadmConfigReconciler) handleClusterNotInitialized(ctx context.Context, scope *Scope) (_ ctrl.Result, reterr error) {
 	// if it's NOT a control plane machine, requeue
 	if !scope.ConfigOwner.IsControlPlaneMachine() {
-		scope.Info(fmt.Sprintf("ConfigOwner is not a control plane Machine. If it should be a control plane, add the label `%s: \"\"` to the Machine", clusterv1.MachineControlPlaneLabelName))
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 
@@ -422,12 +435,13 @@ func (r *KubeadmConfigReconciler) joinWorker(ctx context.Context, scope *Scope) 
 
 	cloudJoinData, err := cloudinit.NewNode(&cloudinit.NodeInput{
 		BaseUserData: cloudinit.BaseUserData{
-			AdditionalFiles:     scope.Config.Spec.Files,
-			NTP:                 scope.Config.Spec.NTP,
-			PreKubeadmCommands:  scope.Config.Spec.PreKubeadmCommands,
-			PostKubeadmCommands: scope.Config.Spec.PostKubeadmCommands,
-			Users:               scope.Config.Spec.Users,
-			KubeadmVerbosity:    verbosityFlag,
+			AdditionalFiles:      scope.Config.Spec.Files,
+			NTP:                  scope.Config.Spec.NTP,
+			PreKubeadmCommands:   scope.Config.Spec.PreKubeadmCommands,
+			PostKubeadmCommands:  scope.Config.Spec.PostKubeadmCommands,
+			Users:                scope.Config.Spec.Users,
+			KubeadmVerbosity:     verbosityFlag,
+			UseExperimentalRetry: scope.Config.Spec.UseExperimentalRetryJoin,
 		},
 		JoinConfiguration: joinData,
 	})
@@ -492,12 +506,13 @@ func (r *KubeadmConfigReconciler) joinControlplane(ctx context.Context, scope *S
 		JoinConfiguration: joinData,
 		Certificates:      certificates,
 		BaseUserData: cloudinit.BaseUserData{
-			AdditionalFiles:     scope.Config.Spec.Files,
-			NTP:                 scope.Config.Spec.NTP,
-			PreKubeadmCommands:  scope.Config.Spec.PreKubeadmCommands,
-			PostKubeadmCommands: scope.Config.Spec.PostKubeadmCommands,
-			Users:               scope.Config.Spec.Users,
-			KubeadmVerbosity:    verbosityFlag,
+			AdditionalFiles:      scope.Config.Spec.Files,
+			NTP:                  scope.Config.Spec.NTP,
+			PreKubeadmCommands:   scope.Config.Spec.PreKubeadmCommands,
+			PostKubeadmCommands:  scope.Config.Spec.PostKubeadmCommands,
+			Users:                scope.Config.Spec.Users,
+			KubeadmVerbosity:     verbosityFlag,
+			UseExperimentalRetry: scope.Config.Spec.UseExperimentalRetryJoin,
 		},
 	})
 	if err != nil {
@@ -717,8 +732,13 @@ func (r *KubeadmConfigReconciler) storeBootstrapData(ctx context.Context, scope 
 		Type: clusterv1.ClusterSecretType,
 	}
 
+	// as secret creation and scope.Config status patch are not atomic operations
+	// it is possible that secret creation happens but the config.Status patches are not applied
 	if err := r.Client.Create(ctx, secret); err != nil {
-		return errors.Wrapf(err, "failed to create bootstrap data secret for KubeadmConfig %s/%s", scope.Config.Namespace, scope.Config.Name)
+		if !apierrors.IsAlreadyExists(err) {
+			return errors.Wrapf(err, "failed to create bootstrap data secret for KubeadmConfig %s/%s", scope.Config.Namespace, scope.Config.Name)
+		}
+		r.Log.Info("bootstrap data secret for KubeadmConfig already exists", "secret", secret.Name, "KubeadmConfig", scope.Config.Name)
 	}
 
 	scope.Config.Status.DataSecretName = pointer.StringPtr(secret.Name)

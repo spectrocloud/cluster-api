@@ -30,14 +30,17 @@ type FakeEtcdClient struct {
 	MemberUpdateResponse *clientv3.MemberUpdateResponse
 	MoveLeaderResponse   *clientv3.MoveLeaderResponse
 	StatusResponse       *clientv3.StatusResponse
+	ErrorResponse        error
+	MovedLeader          uint64
 }
 
 func (c *FakeEtcdClient) Endpoints() []string {
 	return c.EtcdEndpoints
 }
 
-func (c *FakeEtcdClient) MoveLeader(_ context.Context, _ uint64) (*clientv3.MoveLeaderResponse, error) {
-	return c.MoveLeaderResponse, nil
+func (c *FakeEtcdClient) MoveLeader(_ context.Context, i uint64) (*clientv3.MoveLeaderResponse, error) {
+	c.MovedLeader = i
+	return c.MoveLeaderResponse, c.ErrorResponse
 }
 
 func (c *FakeEtcdClient) Close() error {
@@ -45,17 +48,17 @@ func (c *FakeEtcdClient) Close() error {
 }
 
 func (c *FakeEtcdClient) AlarmList(_ context.Context) (*clientv3.AlarmResponse, error) {
-	return c.AlarmResponse, nil
+	return c.AlarmResponse, c.ErrorResponse
 }
 
 func (c *FakeEtcdClient) MemberList(_ context.Context) (*clientv3.MemberListResponse, error) {
-	return c.MemberListResponse, nil
+	return c.MemberListResponse, c.ErrorResponse
 }
 func (c *FakeEtcdClient) MemberRemove(_ context.Context, _ uint64) (*clientv3.MemberRemoveResponse, error) {
-	return c.MemberRemoveResponse, nil
+	return c.MemberRemoveResponse, c.ErrorResponse
 }
 func (c *FakeEtcdClient) MemberUpdate(_ context.Context, _ uint64, _ []string) (*clientv3.MemberUpdateResponse, error) {
-	return c.MemberUpdateResponse, nil
+	return c.MemberUpdateResponse, c.ErrorResponse
 }
 func (c *FakeEtcdClient) Status(_ context.Context, _ string) (*clientv3.StatusResponse, error) {
 	return c.StatusResponse, nil

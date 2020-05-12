@@ -19,6 +19,7 @@ package controllers
 import (
 	"context"
 	"testing"
+	"time"
 
 	. "github.com/onsi/gomega"
 
@@ -337,7 +338,7 @@ func TestReconcileRequest(t *testing.T) {
 				ObjectMeta: metav1.ObjectMeta{
 					Name:       "created",
 					Namespace:  "default",
-					Finalizers: []string{clusterv1.MachineFinalizer, metav1.FinalizerDeleteDependents},
+					Finalizers: []string{clusterv1.MachineFinalizer},
 				},
 				Spec: clusterv1.MachineSpec{
 					ClusterName: "test-cluster",
@@ -364,7 +365,7 @@ func TestReconcileRequest(t *testing.T) {
 				ObjectMeta: metav1.ObjectMeta{
 					Name:       "updated",
 					Namespace:  "default",
-					Finalizers: []string{clusterv1.MachineFinalizer, metav1.FinalizerDeleteDependents},
+					Finalizers: []string{clusterv1.MachineFinalizer},
 				},
 				Spec: clusterv1.MachineSpec{
 					ClusterName: "test-cluster",
@@ -394,7 +395,7 @@ func TestReconcileRequest(t *testing.T) {
 					Labels: map[string]string{
 						clusterv1.MachineControlPlaneLabelName: "",
 					},
-					Finalizers:        []string{clusterv1.MachineFinalizer, metav1.FinalizerDeleteDependents},
+					Finalizers:        []string{clusterv1.MachineFinalizer},
 					DeletionTimestamp: &time,
 				},
 				Spec: clusterv1.MachineSpec{
@@ -574,7 +575,7 @@ func TestRemoveMachineFinalizerAfterDeleteReconcile(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:              "delete123",
 			Namespace:         "default",
-			Finalizers:        []string{clusterv1.MachineFinalizer, metav1.FinalizerDeleteDependents},
+			Finalizers:        []string{clusterv1.MachineFinalizer},
 			DeletionTimestamp: &dt,
 		},
 		Spec: clusterv1.MachineSpec{
@@ -596,8 +597,9 @@ func TestRemoveMachineFinalizerAfterDeleteReconcile(t *testing.T) {
 	_, err := mr.Reconcile(reconcile.Request{NamespacedName: key})
 	g.Expect(err).ToNot(HaveOccurred())
 
-	g.Expect(mr.Client.Get(ctx, key, m)).To(Succeed())
-	g.Expect(m.ObjectMeta.Finalizers).To(Equal([]string{metav1.FinalizerDeleteDependents}))
+	var actual clusterv1.Machine
+	g.Expect(mr.Client.Get(ctx, key, &actual)).To(Succeed())
+	g.Expect(actual.ObjectMeta.Finalizers).To(BeEmpty())
 }
 
 func TestReconcileMetrics(t *testing.T) {
@@ -787,18 +789,22 @@ func Test_clusterToActiveMachines(t *testing.T) {
 }
 
 func TestIsDeleteNodeAllowed(t *testing.T) {
+	deletionts := metav1.Now()
+
 	testCases := []struct {
 		name          string
+		cluster       *clusterv1.Cluster
 		machine       *clusterv1.Machine
 		expectedError error
 	}{
 		{
-			name: "machine without nodeRef",
+			name:    "machine without nodeRef",
+			cluster: &clusterv1.Cluster{},
 			machine: &clusterv1.Machine{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:       "created",
 					Namespace:  "default",
-					Finalizers: []string{clusterv1.MachineFinalizer, metav1.FinalizerDeleteDependents},
+					Finalizers: []string{clusterv1.MachineFinalizer},
 				},
 				Spec: clusterv1.MachineSpec{
 					ClusterName:       "test-cluster",
@@ -810,12 +816,13 @@ func TestIsDeleteNodeAllowed(t *testing.T) {
 			expectedError: errNilNodeRef,
 		},
 		{
-			name: "no control plane members",
+			name:    "no control plane members",
+			cluster: &clusterv1.Cluster{},
 			machine: &clusterv1.Machine{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:       "created",
 					Namespace:  "default",
-					Finalizers: []string{clusterv1.MachineFinalizer, metav1.FinalizerDeleteDependents},
+					Finalizers: []string{clusterv1.MachineFinalizer},
 				},
 				Spec: clusterv1.MachineSpec{
 					ClusterName:       "test-cluster",
@@ -831,7 +838,8 @@ func TestIsDeleteNodeAllowed(t *testing.T) {
 			expectedError: errNoControlPlaneNodes,
 		},
 		{
-			name: "is last control plane members",
+			name:    "is last control plane member",
+			cluster: &clusterv1.Cluster{},
 			machine: &clusterv1.Machine{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "created",
@@ -840,7 +848,8 @@ func TestIsDeleteNodeAllowed(t *testing.T) {
 						clusterv1.ClusterLabelName:             "test",
 						clusterv1.MachineControlPlaneLabelName: "",
 					},
-					Finalizers: []string{clusterv1.MachineFinalizer, metav1.FinalizerDeleteDependents},
+					Finalizers:        []string{clusterv1.MachineFinalizer},
+					DeletionTimestamp: &metav1.Time{Time: time.Now().UTC()},
 				},
 				Spec: clusterv1.MachineSpec{
 					ClusterName:       "test-cluster",
@@ -853,10 +862,11 @@ func TestIsDeleteNodeAllowed(t *testing.T) {
 					},
 				},
 			},
-			expectedError: errLastControlPlaneNode,
+			expectedError: errNoControlPlaneNodes,
 		},
 		{
-			name: "has nodeRef and control plane is healthy",
+			name:    "has nodeRef and control plane is healthy",
+			cluster: &clusterv1.Cluster{},
 			machine: &clusterv1.Machine{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "created",
@@ -864,7 +874,7 @@ func TestIsDeleteNodeAllowed(t *testing.T) {
 					Labels: map[string]string{
 						clusterv1.ClusterLabelName: "test",
 					},
-					Finalizers: []string{clusterv1.MachineFinalizer, metav1.FinalizerDeleteDependents},
+					Finalizers: []string{clusterv1.MachineFinalizer},
 				},
 				Spec: clusterv1.MachineSpec{
 					ClusterName:       "test-cluster",
@@ -879,6 +889,16 @@ func TestIsDeleteNodeAllowed(t *testing.T) {
 			},
 			expectedError: nil,
 		},
+		{
+			name: "has nodeRef and control plane is healthy",
+			cluster: &clusterv1.Cluster{
+				ObjectMeta: metav1.ObjectMeta{
+					DeletionTimestamp: &deletionts,
+				},
+			},
+			machine:       &clusterv1.Machine{},
+			expectedError: errClusterIsBeingDeleted,
+		},
 	}
 
 	for _, tc := range testCases {
@@ -892,7 +912,7 @@ func TestIsDeleteNodeAllowed(t *testing.T) {
 					Labels: map[string]string{
 						clusterv1.ClusterLabelName: "test",
 					},
-					Finalizers: []string{clusterv1.MachineFinalizer, metav1.FinalizerDeleteDependents},
+					Finalizers: []string{clusterv1.MachineFinalizer},
 				},
 				Spec: clusterv1.MachineSpec{
 					ClusterName:       "test-cluster",
@@ -912,7 +932,7 @@ func TestIsDeleteNodeAllowed(t *testing.T) {
 					Labels: map[string]string{
 						clusterv1.ClusterLabelName: "test",
 					},
-					Finalizers: []string{clusterv1.MachineFinalizer, metav1.FinalizerDeleteDependents},
+					Finalizers: []string{clusterv1.MachineFinalizer},
 				},
 				Spec: clusterv1.MachineSpec{
 					ClusterName:       "test-cluster",
@@ -934,6 +954,7 @@ func TestIsDeleteNodeAllowed(t *testing.T) {
 			mr := &MachineReconciler{
 				Client: fake.NewFakeClientWithScheme(
 					scheme.Scheme,
+					tc.cluster,
 					tc.machine,
 					m1,
 					m2,
@@ -942,7 +963,7 @@ func TestIsDeleteNodeAllowed(t *testing.T) {
 				scheme: scheme.Scheme,
 			}
 
-			err := mr.isDeleteNodeAllowed(context.TODO(), tc.machine)
+			err := mr.isDeleteNodeAllowed(context.TODO(), tc.cluster, tc.machine)
 			if tc.expectedError == nil {
 				g.Expect(err).To(BeNil())
 			} else {
