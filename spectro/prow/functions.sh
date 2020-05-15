@@ -1,3 +1,15 @@
+print_step() {
+	text_val=$1
+	set +x
+	echo " "
+	echo "###################################################
+#  ${text_val}
+###################################################"
+	echo " "
+	set -x
+}
+
+
 set_image_tag() {
 	IMG_TAG="latest"
 
@@ -25,6 +37,11 @@ set_image_tag() {
 create_images() {
 	print_step "Create and Push the images"
 	make docker-build-all
+}
+
+build_vendor_manifest() {
+  print_step "Build vendor manifest for cluster-api"
+  ../run.sh
 }
 
 export REGISTRY=${DOCKER_REGISTRY}/${IMG_LOC}
