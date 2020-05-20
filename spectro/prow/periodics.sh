@@ -6,7 +6,7 @@
 WD=$(dirname $0)
 WD=$(cd $WD; pwd)
 ROOT=$(dirname $WD)
-source prow/functions.sh
+source spectro/prow/functions.sh
 
 # Exit immediately for non zero status
 set -e
