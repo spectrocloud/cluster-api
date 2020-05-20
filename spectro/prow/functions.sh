@@ -36,7 +36,7 @@ set_image_tag() {
 
 create_images() {
 	print_step "Create and Push the images"
-	sleep 300
+	sleep 600
 	make release
 }
 
