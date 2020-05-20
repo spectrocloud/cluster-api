@@ -28,7 +28,7 @@ set_image_tag() {
 	    IMG_LOC='release'
 	    IMG_TAG=$(make get-version)
 	fi
-
+  export IMG_LOC
 	export PROD_BUILD_ID
 	export IMG_TAG
 	export VERSION_SUFFIX
@@ -36,7 +36,7 @@ set_image_tag() {
 
 create_images() {
 	print_step "Create and Push the images"
-	make docker-build-all
+	make release
 }
 
 build_vendor_manifest() {
@@ -44,6 +44,8 @@ build_vendor_manifest() {
   ../run.sh
 }
 
+IMG_LOC = "cluster-api/release"
+export IMG_LOC
 export REGISTRY=${DOCKER_REGISTRY}/${IMG_LOC}
 export STAGING_REGISTRY=${DOCKER_REGISTRY}/${IMG_LOC}
 export PROD_REGISTRY=${DOCKER_REGISTRY}/${IMG_LOC}
