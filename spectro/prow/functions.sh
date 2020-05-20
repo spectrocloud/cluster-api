@@ -44,7 +44,7 @@ build_vendor_manifest() {
   ../run.sh
 }
 
-IMG_LOC = "cluster-api/release"
+IMG_LOC="cluster-api/release"
 export IMG_LOC
 export REGISTRY=${DOCKER_REGISTRY}/${IMG_LOC}
 export STAGING_REGISTRY=${DOCKER_REGISTRY}/${IMG_LOC}
