@@ -36,7 +36,9 @@ set_image_tag() {
 
 create_images() {
 	print_step "Create and Push the images"
-	make release
+	rm -f .netrc	
+	make docker-build
+	make docker-push
 }
 
 build_vendor_manifest() {
