@@ -48,6 +48,7 @@ build_vendor_manifest() {
 
 IMG_LOC="cluster-api/release"
 export IMG_LOC
+export TAG="v0.3.6-spectro"
 export REGISTRY=${DOCKER_REGISTRY_PUBLIC}/${IMG_LOC}
 export STAGING_REGISTRY=${DOCKER_REGISTRY_PUBLIC}/${IMG_LOC}
 export PROD_REGISTRY=${DOCKER_REGISTRY_PUBLIC}/${IMG_LOC}

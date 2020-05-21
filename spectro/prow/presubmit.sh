@@ -16,6 +16,7 @@ set -u
 set -x
 
 
+
 create_images
 
 exit 0
