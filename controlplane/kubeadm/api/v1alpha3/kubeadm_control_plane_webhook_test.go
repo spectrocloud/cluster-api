@@ -155,6 +155,59 @@ func TestKubeadmControlPlaneValidateCreate(t *testing.T) {
 	}
 }
 
+func TestWebHookRelaxation(t *testing.T) {
+	g := NewWithT(t)
+	before := &KubeadmControlPlane{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test",
+			Namespace: "foo",
+		},
+		Spec: KubeadmControlPlaneSpec{
+			InfrastructureTemplate: corev1.ObjectReference{
+				Namespace: "foo",
+				Name:      "infraTemplate",
+			},
+			Replicas: pointer.Int32Ptr(1),
+			KubeadmConfigSpec: bootstrapv1.KubeadmConfigSpec{
+				InitConfiguration: &kubeadmv1beta1.InitConfiguration{
+					LocalAPIEndpoint: kubeadmv1beta1.APIEndpoint{
+						AdvertiseAddress: "127.0.0.1",
+						BindPort:         int32(443),
+					},
+				},
+				ClusterConfiguration: &kubeadmv1beta1.ClusterConfiguration{
+					ClusterName: "test",
+					DNS: kubeadmv1beta1.DNS{
+						ImageMeta: kubeadmv1beta1.ImageMeta{
+							ImageRepository: "k8s.gcr.io/coredns",
+							ImageTag:        "1.6.5",
+						},
+					},
+				},
+				JoinConfiguration: &kubeadmv1beta1.JoinConfiguration{
+					NodeRegistration: kubeadmv1beta1.NodeRegistrationOptions{
+						Name: "test",
+					},
+				},
+			},
+			Version: "v1.16.6",
+		},
+	}
+
+	valid := before.DeepCopy()
+	valid.Spec.KubeadmConfigSpec.PostKubeadmCommands = []string{
+		"a", "b",
+	}
+
+	valid.Spec.KubeadmConfigSpec.PreKubeadmCommands = []string{
+		"a", "b",
+	}
+
+	valid.Spec.KubeadmConfigSpec.ClusterConfiguration.ClusterName = "test2"
+	err := valid.ValidateUpdate(before.DeepCopy())
+	g.Expect(err).ToNot(HaveOccurred())
+}
+
 func TestKubeadmControlPlaneValidateUpdate(t *testing.T) {
 	before := &KubeadmControlPlane{
 		ObjectMeta: metav1.ObjectMeta{
