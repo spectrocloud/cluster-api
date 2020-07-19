@@ -25,7 +25,6 @@ import (
 	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha3"
 	bootstrapv1 "sigs.k8s.io/cluster-api/bootstrap/kubeadm/api/v1alpha3"
 	controlplanev1 "sigs.k8s.io/cluster-api/controlplane/kubeadm/api/v1alpha3"
-	"sigs.k8s.io/cluster-api/controlplane/kubeadm/internal/hash"
 	"sigs.k8s.io/cluster-api/controlplane/kubeadm/internal/machinefilters"
 )
 
@@ -69,11 +68,6 @@ func (c *ControlPlane) InfrastructureTemplate() *corev1.ObjectReference {
 	return &c.KCP.Spec.InfrastructureTemplate
 }
 
-// SpecHash returns the hash of the KubeadmControlPlane spec.
-func (c *ControlPlane) SpecHash() string {
-	return hash.Compute(&c.KCP.Spec)
-}
-
 // AsOwnerReference returns an owner reference to the KubeadmControlPlane.
 func (c *ControlPlane) AsOwnerReference() *metav1.OwnerReference {
 	return &metav1.OwnerReference{
@@ -91,21 +85,6 @@ func (c *ControlPlane) EtcdImageData() (string, string) {
 		return meta.ImageRepository, meta.ImageTag
 	}
 	return "", ""
-}
-
-// MachinesNeedingUpgrade return a list of machines that need to be upgraded.
-func (c *ControlPlane) MachinesNeedingUpgrade() FilterableMachineCollection {
-	now := metav1.Now()
-	if c.KCP.Spec.UpgradeAfter != nil && c.KCP.Spec.UpgradeAfter.Before(&now) {
-		return c.Machines.AnyFilter(
-			machinefilters.Not(machinefilters.MatchesConfigurationHash(c.SpecHash())),
-			machinefilters.OlderThan(c.KCP.Spec.UpgradeAfter),
-		)
-	}
-
-	return c.Machines.Filter(
-		machinefilters.Not(machinefilters.MatchesConfigurationHash(c.SpecHash())),
-	)
 }
 
 // MachineInFailureDomainWithMostMachines returns the first matching failure domain with machines that has the most control-plane machines on it.
@@ -174,7 +153,7 @@ func (c *ControlPlane) GenerateKubeadmConfig(spec *bootstrapv1.KubeadmConfigSpec
 		ObjectMeta: metav1.ObjectMeta{
 			Name:            names.SimpleNameGenerator.GenerateName(c.KCP.Name + "-"),
 			Namespace:       c.KCP.Namespace,
-			Labels:          ControlPlaneLabelsForClusterWithHash(c.Cluster.Name, c.SpecHash()),
+			Labels:          ControlPlaneLabelsForCluster(c.Cluster.Name),
 			OwnerReferences: []metav1.OwnerReference{owner},
 		},
 		Spec: *spec,
@@ -188,7 +167,7 @@ func (c *ControlPlane) NewMachine(infraRef, bootstrapRef *corev1.ObjectReference
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      names.SimpleNameGenerator.GenerateName(c.KCP.Name + "-"),
 			Namespace: c.KCP.Namespace,
-			Labels:    ControlPlaneLabelsForClusterWithHash(c.Cluster.Name, c.SpecHash()),
+			Labels:    ControlPlaneLabelsForCluster(c.Cluster.Name),
 			OwnerReferences: []metav1.OwnerReference{
 				*metav1.NewControllerRef(c.KCP, controlplanev1.GroupVersion.WithKind("KubeadmControlPlane")),
 			},

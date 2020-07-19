@@ -89,6 +89,11 @@ func NewMachine(cluster, machine, image string, logger logr.Logger) (*Machine, e
 	}, nil
 }
 
+// Exists returns true if the container for this machine exists.
+func (m *Machine) Exists() bool {
+	return m.container != nil
+}
+
 // ContainerName return the name of the container for this machine
 func (m *Machine) ContainerName() string {
 	return machineContainerName(m.cluster, m.machine)
@@ -97,6 +102,15 @@ func (m *Machine) ContainerName() string {
 // ProviderID return the provider identifier for this machine
 func (m *Machine) ProviderID() string {
 	return fmt.Sprintf("docker:////%s", m.ContainerName())
+}
+
+func (m *Machine) Address(ctx context.Context) (string, error) {
+	ipv4, _, err := m.container.IP(ctx)
+	if err != nil {
+		return "", err
+	}
+
+	return ipv4, nil
 }
 
 // Create creates a docker container hosting a Kubernetes node.

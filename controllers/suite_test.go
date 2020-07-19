@@ -18,32 +18,30 @@ package controllers
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
-
-	"k8s.io/klog"
-	"k8s.io/klog/klogr"
+	"github.com/onsi/gomega/types"
+	"github.com/pkg/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha3"
+	"sigs.k8s.io/cluster-api/controllers/remote"
+	"sigs.k8s.io/cluster-api/test/helpers"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/envtest/printer"
-
-	"sigs.k8s.io/cluster-api/cmd/clusterctl/log"
-	"sigs.k8s.io/cluster-api/test/helpers"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 	// +kubebuilder:scaffold:imports
 )
 
 // These tests use Ginkgo (BDD-style Go testing framework). Refer to
 // http://onsi.github.io/ginkgo/ to learn more about Ginkgo.
 
-func init() {
-	klog.InitFlags(nil)
-	log.SetLogger(klogr.New())
-}
-
 const (
-	timeout = time.Second * 10
+	timeout = time.Second * 30
 )
 
 var (
@@ -53,6 +51,8 @@ var (
 )
 
 func TestAPIs(t *testing.T) {
+	SetDefaultEventuallyPollingInterval(100 * time.Millisecond)
+	SetDefaultEventuallyTimeout(30 * time.Second)
 	RegisterFailHandler(Fail)
 
 	RunSpecsWithDefaultAndCustomReporters(t,
@@ -62,9 +62,21 @@ func TestAPIs(t *testing.T) {
 
 var _ = BeforeSuite(func(done Done) {
 	By("bootstrapping test environment")
-	var err error
-	testEnv, err = helpers.NewTestEnvironment()
-	Expect(err).NotTo(HaveOccurred())
+	testEnv = helpers.NewTestEnvironment()
+
+	// Set up a ClusterCacheTracker and ClusterCacheReconciler to provide to controllers
+	// requiring a connection to a remote cluster
+	tracker, err := remote.NewClusterCacheTracker(
+		log.Log,
+		testEnv.Manager,
+	)
+	Expect(err).ToNot(HaveOccurred())
+
+	Expect((&remote.ClusterCacheReconciler{
+		Client:  testEnv,
+		Log:     log.Log,
+		Tracker: tracker,
+	}).SetupWithManager(testEnv.Manager, controller.Options{MaxConcurrentReconciles: 1})).To(Succeed())
 
 	clusterReconciler = &ClusterReconciler{
 		Client:   testEnv,
@@ -75,11 +87,13 @@ var _ = BeforeSuite(func(done Done) {
 	Expect((&MachineReconciler{
 		Client:   testEnv,
 		Log:      log.Log,
+		Tracker:  tracker,
 		recorder: testEnv.GetEventRecorderFor("machine-controller"),
 	}).SetupWithManager(testEnv.Manager, controller.Options{MaxConcurrentReconciles: 1})).To(Succeed())
 	Expect((&MachineSetReconciler{
 		Client:   testEnv,
 		Log:      log.Log,
+		Tracker:  tracker,
 		recorder: testEnv.GetEventRecorderFor("machineset-controller"),
 	}).SetupWithManager(testEnv.Manager, controller.Options{MaxConcurrentReconciles: 1})).To(Succeed())
 	Expect((&MachineDeploymentReconciler{
@@ -90,11 +104,13 @@ var _ = BeforeSuite(func(done Done) {
 	Expect((&MachineHealthCheckReconciler{
 		Client:   testEnv,
 		Log:      log.Log,
+		Tracker:  tracker,
 		recorder: testEnv.GetEventRecorderFor("machinehealthcheck-controller"),
 	}).SetupWithManager(testEnv.Manager, controller.Options{MaxConcurrentReconciles: 1})).To(Succeed())
 
 	By("starting the manager")
 	go func() {
+		defer GinkgoRecover()
 		Expect(testEnv.StartManager()).To(Succeed())
 	}()
 
@@ -107,3 +123,42 @@ var _ = AfterSuite(func() {
 		Expect(testEnv.Stop()).To(Succeed())
 	}
 })
+
+func ContainRefOfGroupKind(group, kind string) types.GomegaMatcher {
+	return &refGroupKindMatcher{
+		kind:  kind,
+		group: group,
+	}
+}
+
+type refGroupKindMatcher struct {
+	kind  string
+	group string
+}
+
+func (matcher *refGroupKindMatcher) Match(actual interface{}) (success bool, err error) {
+	ownerRefs, ok := actual.([]metav1.OwnerReference)
+	if !ok {
+		return false, errors.Errorf("expected []metav1.OwnerReference; got %T", actual)
+	}
+
+	for _, ref := range ownerRefs {
+		gv, err := schema.ParseGroupVersion(ref.APIVersion)
+		if err != nil {
+			return false, nil
+		}
+		if ref.Kind == matcher.kind && gv.Group == clusterv1.GroupVersion.Group {
+			return true, nil
+		}
+	}
+
+	return false, nil
+}
+
+func (matcher *refGroupKindMatcher) FailureMessage(actual interface{}) (message string) {
+	return fmt.Sprintf("Expected %+v to contain refs of Group %s and Kind %s", actual, matcher.group, matcher.kind)
+}
+
+func (matcher *refGroupKindMatcher) NegatedFailureMessage(actual interface{}) (message string) {
+	return fmt.Sprintf("Expected %+v not to contain refs of Group %s and Kind %s", actual, matcher.group, matcher.kind)
+}

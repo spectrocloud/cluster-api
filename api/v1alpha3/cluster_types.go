@@ -18,6 +18,7 @@ package v1alpha3
 
 import (
 	"fmt"
+	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -90,6 +91,13 @@ type NetworkRanges struct {
 	CIDRBlocks []string `json:"cidrBlocks"`
 }
 
+func (n *NetworkRanges) String() string {
+	if n == nil {
+		return ""
+	}
+	return strings.Join(n.CIDRBlocks, ",")
+}
+
 // ANCHOR_END: NetworkRanges
 
 // ANCHOR: ClusterStatus
@@ -126,6 +134,14 @@ type ClusterStatus struct {
 	// ControlPlaneReady defines if the control plane is ready.
 	// +optional
 	ControlPlaneReady bool `json:"controlPlaneReady,omitempty"`
+
+	// Conditions defines current service state of the cluster.
+	// +optional
+	Conditions Conditions `json:"conditions,omitempty"`
+
+	// ObservedGeneration is the latest generation observed by the controller.
+	// +optional
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 }
 
 // ANCHOR_END: ClusterStatus
@@ -187,6 +203,14 @@ type Cluster struct {
 
 	Spec   ClusterSpec   `json:"spec,omitempty"`
 	Status ClusterStatus `json:"status,omitempty"`
+}
+
+func (c *Cluster) GetConditions() Conditions {
+	return c.Status.Conditions
+}
+
+func (c *Cluster) SetConditions(conditions Conditions) {
+	c.Status.Conditions = conditions
 }
 
 // +kubebuilder:object:root=true

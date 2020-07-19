@@ -18,6 +18,7 @@ package internal
 
 import (
 	"context"
+	"crypto"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/tls"
@@ -43,9 +44,9 @@ import (
 )
 
 const (
-	kubeProxyKey        = "kube-proxy"
-	kubeadmConfigKey    = "kubeadm-config"
-	labelNodeRoleMaster = "node-role.kubernetes.io/master"
+	kubeProxyKey              = "kube-proxy"
+	kubeadmConfigKey          = "kubeadm-config"
+	labelNodeRoleControlPlane = "node-role.kubernetes.io/master"
 )
 
 var (
@@ -88,7 +89,7 @@ type Workload struct {
 func (w *Workload) getControlPlaneNodes(ctx context.Context) (*corev1.NodeList, error) {
 	nodes := &corev1.NodeList{}
 	labels := map[string]string{
-		labelNodeRoleMaster: "",
+		labelNodeRoleControlPlane: "",
 	}
 
 	if err := w.Client.List(ctx, nodes, ctrlclient.MatchingLabels(labels)); err != nil {
@@ -311,7 +312,7 @@ func generateClientCert(caCertEncoded, caKeyEncoded []byte) (tls.Certificate, er
 	return tls.X509KeyPair(certs.EncodeCertPEM(x509Cert), certs.EncodePrivateKeyPEM(privKey))
 }
 
-func newClientCert(caCert *x509.Certificate, key *rsa.PrivateKey, caKey *rsa.PrivateKey) (*x509.Certificate, error) {
+func newClientCert(caCert *x509.Certificate, key *rsa.PrivateKey, caKey crypto.Signer) (*x509.Certificate, error) {
 	cfg := certs.Config{
 		CommonName: "cluster-api.x-k8s.io",
 	}
@@ -370,6 +371,11 @@ func checkNodeNoExecuteCondition(node corev1.Node) error {
 
 // UpdateKubeProxyImageInfo updates kube-proxy image in the kube-proxy DaemonSet.
 func (w *Workload) UpdateKubeProxyImageInfo(ctx context.Context, kcp *controlplanev1.KubeadmControlPlane) error {
+	// Return early if we've been asked to skip kube-proxy upgrades entirely.
+	if _, ok := kcp.Annotations[controlplanev1.SkipKubeProxyAnnotation]; ok {
+		return nil
+	}
+
 	ds := &appsv1.DaemonSet{}
 
 	if err := w.Client.Get(ctx, ctrlclient.ObjectKey{Name: kubeProxyKey, Namespace: metav1.NamespaceSystem}, ds); err != nil {

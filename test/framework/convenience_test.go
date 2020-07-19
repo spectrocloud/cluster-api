@@ -20,14 +20,26 @@ import (
 	"testing"
 
 	. "github.com/onsi/gomega"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"sigs.k8s.io/cluster-api/test/framework"
 )
 
-func TestTypeToKind(t *testing.T) {
+func TestObjectToKind(t *testing.T) {
 	g := NewWithT(t)
 
-	type hello struct{}
+	g.Expect(framework.ObjectToKind(&hello{})).To(Equal("hello"))
+}
 
-	g.Expect(framework.TypeToKind(&hello{})).To(Equal("hello"))
+var _ runtime.Object = &hello{}
+
+type hello struct{}
+
+func (*hello) GetObjectKind() schema.ObjectKind {
+	return schema.EmptyObjectKind
+}
+
+func (h *hello) DeepCopyObject() runtime.Object {
+	return h
 }

@@ -51,6 +51,8 @@ func (src *Cluster) ConvertTo(dstRaw conversion.Hub) error {
 	dst.Status.ControlPlaneReady = restored.Status.ControlPlaneReady
 	dst.Status.FailureDomains = restored.Status.FailureDomains
 	dst.Spec.Paused = restored.Spec.Paused
+	dst.Status.Conditions = restored.Status.Conditions
+	dst.Status.ObservedGeneration = restored.Status.ObservedGeneration
 
 	return nil
 }
@@ -115,6 +117,8 @@ func (src *Machine) ConvertTo(dstRaw conversion.Hub) error {
 		return err
 	}
 	restoreMachineSpec(&restored.Spec, &dst.Spec)
+	dst.Status.ObservedGeneration = restored.Status.ObservedGeneration
+	dst.Status.Conditions = restored.Status.Conditions
 
 	return nil
 }

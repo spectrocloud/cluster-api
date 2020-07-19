@@ -27,15 +27,27 @@ import (
 )
 
 const (
-	ClusterAPIProviderName          = "cluster-api"
-	KubeadmBootstrapProviderName    = "kubeadm"
+	// Core providers
+	ClusterAPIProviderName = "cluster-api"
+
+	// Infra providers
+	AWSProviderName       = "aws"
+	AzureProviderName     = "azure"
+	Metal3ProviderName    = "metal3"
+	OpenStackProviderName = "openstack"
+	PacketProviderName    = "packet"
+	VSphereProviderName   = "vsphere"
+
+	// Bootstrap providers
+	KubeadmBootstrapProviderName = "kubeadm"
+	TalosBootstrapProviderName   = "talos"
+
+	// ControlPlane providers
 	KubeadmControlPlaneProviderName = "kubeadm"
-	AWSProviderName                 = "aws"
-	AzureProviderName               = "azure"
-	Metal3ProviderName              = "metal3"
-	OpenStackProviderName           = "openstack"
-	VSphereProviderName             = "vsphere"
-	ProvidersConfigKey              = "providers"
+	TalosControlPlaneProviderName   = "talos"
+
+	// Other
+	ProvidersConfigKey = "providers"
 )
 
 // ProvidersClient has methods to work with provider configurations.
@@ -90,6 +102,11 @@ func (p *providersClient) defaults() []Provider {
 			providerType: clusterctlv1.InfrastructureProviderType,
 		},
 		&provider{
+			name:         PacketProviderName,
+			url:          "https://github.com/kubernetes-sigs/cluster-api-provider-packet/releases/latest/infrastructure-components.yaml",
+			providerType: clusterctlv1.InfrastructureProviderType,
+		},
+		&provider{
 			name:         Metal3ProviderName,
 			url:          "https://github.com/metal3-io/cluster-api-provider-metal3/releases/latest/infrastructure-components.yaml",
 			providerType: clusterctlv1.InfrastructureProviderType,
@@ -111,11 +128,21 @@ func (p *providersClient) defaults() []Provider {
 			url:          "https://github.com/kubernetes-sigs/cluster-api/releases/latest/bootstrap-components.yaml",
 			providerType: clusterctlv1.BootstrapProviderType,
 		},
+		&provider{
+			name:         TalosBootstrapProviderName,
+			url:          "https://github.com/talos-systems/cluster-api-bootstrap-provider-talos/releases/latest/bootstrap-components.yaml",
+			providerType: clusterctlv1.BootstrapProviderType,
+		},
 
 		// ControlPlane providers
 		&provider{
 			name:         KubeadmControlPlaneProviderName,
 			url:          "https://github.com/kubernetes-sigs/cluster-api/releases/latest/control-plane-components.yaml",
+			providerType: clusterctlv1.ControlPlaneProviderType,
+		},
+		&provider{
+			name:         TalosControlPlaneProviderName,
+			url:          "https://github.com/talos-systems/cluster-api-control-plane-provider-talos/releases/latest/control-plane-components.yaml",
 			providerType: clusterctlv1.ControlPlaneProviderType,
 		},
 	}

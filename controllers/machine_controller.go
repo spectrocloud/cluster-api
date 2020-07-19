@@ -43,6 +43,7 @@ import (
 	kubedrain "sigs.k8s.io/cluster-api/third_party/kubernetes-drain"
 	"sigs.k8s.io/cluster-api/util"
 	"sigs.k8s.io/cluster-api/util/annotations"
+	"sigs.k8s.io/cluster-api/util/conditions"
 	"sigs.k8s.io/cluster-api/util/patch"
 	"sigs.k8s.io/cluster-api/util/predicates"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -70,8 +71,9 @@ var (
 
 // MachineReconciler reconciles a Machine object
 type MachineReconciler struct {
-	Client client.Client
-	Log    logr.Logger
+	Client  client.Client
+	Log     logr.Logger
+	Tracker *remote.ClusterCacheTracker
 
 	config          *rest.Config
 	scheme          *runtime.Scheme
@@ -166,11 +168,29 @@ func (r *MachineReconciler) Reconcile(req ctrl.Request) (_ ctrl.Result, reterr e
 	}
 
 	defer func() {
+		// Always update the readyCondition with the summary of the machine conditions.
+		conditions.SetSummary(m,
+			conditions.WithConditions(
+				clusterv1.BootstrapReadyCondition,
+				clusterv1.InfrastructureReadyCondition,
+				// TODO: add MHC conditions here
+			),
+			conditions.WithStepCounterIfOnly(
+				clusterv1.BootstrapReadyCondition,
+				clusterv1.InfrastructureReadyCondition,
+			),
+		)
+
 		r.reconcilePhase(ctx, m)
 		r.reconcileMetrics(ctx, m)
 
 		// Always attempt to patch the object and status after each reconciliation.
-		if err := patchHelper.Patch(ctx, m); err != nil {
+		// Patch ObservedGeneration only if the reconciliation completed successfully
+		patchOpts := []patch.Option{}
+		if reterr == nil {
+			patchOpts = append(patchOpts, patch.WithStatusObservedGeneration{})
+		}
+		if err := patchHelper.Patch(ctx, m, patchOpts...); err != nil {
 			reterr = kerrors.NewAggregate([]error{reterr, err})
 		}
 	}()
@@ -180,6 +200,12 @@ func (r *MachineReconciler) Reconcile(req ctrl.Request) (_ ctrl.Result, reterr e
 		m.Labels = make(map[string]string)
 	}
 	m.Labels[clusterv1.ClusterLabelName] = m.Spec.ClusterName
+
+	// Add finalizer first if not exist to avoid the race condition between init and delete
+	if !controllerutil.ContainsFinalizer(m, clusterv1.MachineFinalizer) {
+		controllerutil.AddFinalizer(m, clusterv1.MachineFinalizer)
+		return ctrl.Result{}, nil
+	}
 
 	// Handle deletion reconciliation loop.
 	if !m.ObjectMeta.DeletionTimestamp.IsZero() {
@@ -203,9 +229,6 @@ func (r *MachineReconciler) reconcile(ctx context.Context, cluster *clusterv1.Cl
 			UID:        cluster.UID,
 		})
 	}
-
-	// If the Machine doesn't have a finalizer, add one.
-	controllerutil.AddFinalizer(m, clusterv1.MachineFinalizer)
 
 	// Call the inner reconciliation methods.
 	reconciliationErrors := []error{
@@ -260,7 +283,7 @@ func (r *MachineReconciler) reconcileDelete(ctx context.Context, cluster *cluste
 	if err != nil {
 		switch err {
 		case errNoControlPlaneNodes, errLastControlPlaneNode, errNilNodeRef, errClusterIsBeingDeleted:
-			logger.Info("Deleting Kubernetes Node associated with Machine is not allowed", "node", m.Status.NodeRef, "cause", err)
+			logger.Info("Deleting Kubernetes Node associated with Machine is not allowed", "node", m.Status.NodeRef, "cause", err.Error())
 		default:
 			return ctrl.Result{}, errors.Wrapf(err, "failed to check if Kubernetes Node deletion is allowed")
 		}
@@ -409,8 +432,7 @@ func (r *MachineReconciler) drainNode(ctx context.Context, cluster *clusterv1.Cl
 func (r *MachineReconciler) deleteNode(ctx context.Context, cluster *clusterv1.Cluster, name string) error {
 	logger := r.Log.WithValues("machine", name, "cluster", cluster.Name, "namespace", cluster.Namespace)
 
-	// Create a remote client to delete the node
-	c, err := remote.NewClusterClient(ctx, r.Client, util.ObjectKey(cluster), r.scheme)
+	remoteClient, err := r.Tracker.GetClient(ctx, util.ObjectKey(cluster))
 	if err != nil {
 		logger.Error(err, "Error creating a remote client for cluster while deleting Machine, won't retry")
 		return nil
@@ -422,7 +444,7 @@ func (r *MachineReconciler) deleteNode(ctx context.Context, cluster *clusterv1.C
 		},
 	}
 
-	if err := c.Delete(ctx, node); err != nil {
+	if err := remoteClient.Delete(ctx, node); err != nil {
 		return errors.Wrapf(err, "error deleting node %s", name)
 	}
 	return nil

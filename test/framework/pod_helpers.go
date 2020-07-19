@@ -18,7 +18,6 @@ package framework
 
 import (
 	"context"
-	"fmt"
 	"strings"
 
 	. "github.com/onsi/ginkgo"
@@ -52,8 +51,6 @@ func WaitForPodListCondition(ctx context.Context, input WaitForPodListConditionI
 		// all pods in the list should satisfy the condition
 		err := input.Condition(podList)
 		if err != nil {
-			// DEBUG:
-			fmt.Println(err.Error())
 			return false, err
 		}
 		return true, nil

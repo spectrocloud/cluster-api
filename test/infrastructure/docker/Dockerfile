@@ -1,3 +1,5 @@
+# syntax=docker/dockerfile:experimental
+
 # Copyright 2019 The Kubernetes Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -12,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-FROM golang:1.13.8 as builder
+FROM golang:1.13.12 as builder
 
 # Run this with docker build --build_arg goproxy=$(go env GOPROXY) to override the goproxy
 ARG goproxy=https://proxy.golang.org
@@ -40,8 +42,9 @@ COPY . .
 # Essentially, change directories into CAPD
 WORKDIR /workspace/test/infrastructure/docker
 
-# Build the CAPD manager
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -a -o /workspace/manager main.go
+# Build the CAPD manager using the compiler cache folder
+RUN --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -a -o /workspace/manager main.go
 
 # Use alpine:latest as minimal base image to package the manager binary and its dependencies
 FROM alpine:latest

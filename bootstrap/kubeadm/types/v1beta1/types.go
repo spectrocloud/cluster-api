@@ -33,7 +33,9 @@ type InitConfiguration struct {
 	// +optional
 	BootstrapTokens []BootstrapToken `json:"bootstrapTokens,omitempty"`
 
-	// NodeRegistration holds fields that relate to registering the new control-plane node to the cluster
+	// NodeRegistration holds fields that relate to registering the new control-plane node to the cluster.
+	// When used in the context of control plane nodes, NodeRegistration should remain consistent
+	// across both InitConfiguration and JoinConfiguration
 	// +optional
 	NodeRegistration NodeRegistrationOptions `json:"nodeRegistration,omitempty"`
 
@@ -64,7 +66,7 @@ type ClusterConfiguration struct {
 	Networking Networking `json:"networking,omitempty"`
 
 	// KubernetesVersion is the target version of the control plane.
-	// NB: This value defaults to the Machine object spec.kuberentesVersion
+	// NB: This value defaults to the Machine object spec.version
 	// +optional
 	KubernetesVersion string `json:"kubernetesVersion,omitempty"`
 
@@ -232,13 +234,13 @@ type NodeRegistrationOptions struct {
 // Networking contains elements describing cluster's networking configuration
 type Networking struct {
 	// ServiceSubnet is the subnet used by k8s services.
-	// Defaults to the first element of the Cluster object's spec.clusterNetwork.pods.cidrBlocks field, or
+	// Defaults to a comma-delimited string of the Cluster object's spec.clusterNetwork.pods.cidrBlocks, or
 	// to "10.96.0.0/12" if that's unset.
 	// +optional
 	ServiceSubnet string `json:"serviceSubnet,omitempty"`
 	// PodSubnet is the subnet used by pods.
 	// If unset, the API server will not allocate CIDR ranges for every node.
-	// Defaults to the first element of the Cluster object's spec.clusterNetwork.services.cidrBlocks if that is set
+	// Defaults to a comma-delimited string of the Cluster object's spec.clusterNetwork.services.cidrBlocks if that is set
 	// +optional
 	PodSubnet string `json:"podSubnet,omitempty"`
 	// DNSDomain is the dns domain used by k8s services. Defaults to "cluster.local".
@@ -325,7 +327,9 @@ type ExternalEtcd struct {
 type JoinConfiguration struct {
 	metav1.TypeMeta `json:",inline"`
 
-	// NodeRegistration holds fields that relate to registering the new control-plane node to the cluster
+	// NodeRegistration holds fields that relate to registering the new control-plane node to the cluster.
+	// When used in the context of control plane nodes, NodeRegistration should remain consistent
+	// across both InitConfiguration and JoinConfiguration
 	// +optional
 	NodeRegistration NodeRegistrationOptions `json:"nodeRegistration,omitempty"`
 

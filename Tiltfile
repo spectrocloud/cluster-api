@@ -2,6 +2,8 @@
 
 # set defaults
 
+envsubst_cmd = "./hack/tools/bin/envsubst"
+
 settings = {
     "deploy_cert_manager": True,
     "preload_images_for_kind": True,
@@ -39,6 +41,8 @@ providers = {
             "errors",
             "third_party",
             "util",
+            "exp",
+            "feature",
         ],
     },
     "kubeadm-bootstrap": {
@@ -63,7 +67,7 @@ providers = {
     },
     "docker": {
         "context": "test/infrastructure/docker",
-        "image": "gcr.io/k8s-staging-capi-docker/capd-manager",
+        "image": "gcr.io/k8s-staging-cluster-api/capd-manager",
         "live_reload_deps": [
             "main.go",
             "go.mod",
@@ -85,7 +89,9 @@ COPY --from=tilt-helper /go/kubernetes/client/bin/kubectl /usr/bin/kubectl
     },
 }
 
-# Reads a provider's tilt-provider.json file and merges it into the providers map. An example file looks like this:
+# Reads a provider's tilt-provider.json file and merges it into the providers map.
+# A list of dictionaries is also supported by enclosing it in brackets []
+# An example file looks like this:
 # {
 #     "name": "aws",
 #     "config": {
@@ -101,14 +107,20 @@ def load_provider_tiltfiles():
     for repo in provider_repos:
         file = repo + "/tilt-provider.json"
         provider_details = read_json(file, default = {})
-        provider_name = provider_details["name"]
-        provider_config = provider_details["config"]
-        provider_config["context"] = repo
-        providers[provider_name] = provider_config
+        if type(provider_details) != type([]):
+            provider_details = [provider_details]
+        for item in provider_details:
+            provider_name = item["name"]
+            provider_config = item["config"]
+            if "context" in provider_config:
+                provider_config["context"] = repo + "/" + provider_config["context"]
+            else:
+                provider_config["context"] = repo
+            providers[provider_name] = provider_config
 
 tilt_helper_dockerfile_header = """
 # Tilt image
-FROM golang:1.13.8 as tilt-helper
+FROM golang:1.13.12 as tilt-helper
 # Support live reloading with Tilt
 RUN wget --output-document /restart.sh --quiet https://raw.githubusercontent.com/windmilleng/rerun-process-wrapper/master/restart.sh  && \
     wget --output-document /start.sh --quiet https://raw.githubusercontent.com/windmilleng/rerun-process-wrapper/master/start.sh && \
@@ -179,12 +191,16 @@ def enable_provider(name):
     )
 
     # Apply the kustomized yaml for this provider
-    yaml = str(kustomize(context + "/config"))
+    yaml = str(kustomize_with_envsubst(context + "/config"))
     substitutions = settings.get("kustomize_substitutions", {})
     for substitution in substitutions:
         value = substitutions[substitution]
         yaml = yaml.replace("${" + substitution + "}", value)
-    k8s_yaml(blob(yaml))
+
+    if yaml.count("${") == 0:
+        k8s_yaml(blob(yaml))
+    else:
+        fail("unsubstituted fields in the input config, make sure your kustomize_substitutions parameters are complete")
 
 # Prepull all the cert-manager images to your local environment and then load them directly into kind. This speeds up
 # setup if you're repeatedly destroying and recreating your kind cluster, as it doesn't have to pull the images over
@@ -213,10 +229,14 @@ def include_user_tilt_files():
 
 # Enable core cluster-api plus everything listed in 'enable_providers' in tilt-settings.json
 def enable_providers():
+    local("make envsubst")
     user_enable_providers = settings.get("enable_providers", [])
     union_enable_providers = {k: "" for k in user_enable_providers + always_enable_providers}.keys()
     for name in union_enable_providers:
         enable_provider(name)
+
+def kustomize_with_envsubst(path):
+    return str(local("kustomize build {} | {}".format(path, envsubst_cmd), quiet = True))
 
 ##############################
 # Actual work happens here

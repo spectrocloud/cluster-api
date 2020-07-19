@@ -21,21 +21,22 @@ import (
 	"testing"
 
 	. "github.com/onsi/gomega"
+	"github.com/pkg/errors"
 
 	clusterctlv1 "sigs.k8s.io/cluster-api/cmd/clusterctl/api/v1alpha3"
 	"sigs.k8s.io/cluster-api/cmd/clusterctl/client/cluster"
 	"sigs.k8s.io/cluster-api/cmd/clusterctl/client/config"
 	"sigs.k8s.io/cluster-api/cmd/clusterctl/internal/test"
-	"sigs.k8s.io/cluster-api/cmd/clusterctl/internal/util"
+	utilyaml "sigs.k8s.io/cluster-api/util/yaml"
 )
 
-// TODO: Refactor to actually test InitImages
 func Test_clusterctlClient_InitImages(t *testing.T) {
 	type field struct {
 		client *fakeClient
 	}
 
 	type args struct {
+		kubeconfigContext      string
 		coreProvider           string
 		bootstrapProvider      []string
 		controlPlaneProvider   []string
@@ -43,45 +44,161 @@ func Test_clusterctlClient_InitImages(t *testing.T) {
 	}
 
 	tests := []struct {
-		name           string
-		field          field
-		args           args
-		expectedImages []string
-		wantErr        bool
+		name                 string
+		field                field
+		args                 args
+		additionalProviders  []Provider
+		expectedImages       []string
+		wantErr              bool
+		expectedErrorMessage string
+		certManagerImages    []string
+		certManagerImagesErr error
 	}{
 		{
 			name: "returns error if cannot find cluster client",
 			field: field{
 				client: fakeEmptyCluster(),
 			},
-			args:           args{},
+			args: args{
+				kubeconfigContext: "does-not-exist",
+			},
 			expectedImages: []string{},
 			wantErr:        true,
+		},
+		{
+			name: "returns list of images even if component variable values are not found",
+			args: args{
+				coreProvider:           "",  // with an empty cluster, a core provider should be added automatically
+				bootstrapProvider:      nil, // with an empty cluster, a bootstrap provider should be added automatically
+				controlPlaneProvider:   nil, // with an empty cluster, a control plane provider should be added automatically
+				infrastructureProvider: []string{"infra"},
+				kubeconfigContext:      "mgmt-context",
+			},
+			expectedImages: []string{
+				"gcr.io/kubebuilder/kube-rbac-proxy:v0.4.1",
+				"us.gcr.io/k8s-artifacts-prod/cluster-api-aws/cluster-api-aws-controller:v0.5.3",
+			},
+			wantErr: false,
+		},
+		{
+			name: "returns error when core provider name is invalid",
+			args: args{
+				coreProvider:      "some-core-provider",
+				kubeconfigContext: "mgmt-context",
+			},
+			additionalProviders: []Provider{
+				config.NewProvider("some-core-provider", "some-core-url", clusterctlv1.CoreProviderType),
+			},
+			wantErr:              true,
+			expectedErrorMessage: "name cluster-api must be used with the CoreProvider type",
+		},
+		{
+			name: "return no error when core provider as the correct name",
+			args: args{
+				coreProvider:           config.ClusterAPIProviderName,
+				bootstrapProvider:      nil,
+				controlPlaneProvider:   nil,
+				infrastructureProvider: nil,
+				kubeconfigContext:      "mgmt-context",
+			},
+			expectedImages: []string{},
+			wantErr:        false,
+		},
+		{
+			name: "returns error when a bootstrap provider is not present",
+			args: args{
+				bootstrapProvider: []string{"not-provided"},
+				kubeconfigContext: "mgmt-context",
+			},
+			wantErr:              true,
+			expectedErrorMessage: "failed to get configuration for the BootstrapProvider with name not-provided",
+		},
+		{
+			name: "returns error when a control plane provider is not present",
+			args: args{
+				controlPlaneProvider: []string{"not-provided"},
+				kubeconfigContext:    "mgmt-context",
+			},
+			wantErr:              true,
+			expectedErrorMessage: "failed to get configuration for the ControlPlaneProvider with name not-provided",
+		},
+		{
+			name: "returns error when a infrastructure provider is not present",
+			args: args{
+				infrastructureProvider: []string{"not-provided"},
+				kubeconfigContext:      "mgmt-context",
+			},
+			wantErr:              true,
+			expectedErrorMessage: "failed to get configuration for the InfrastructureProvider with name not-provided",
+		},
+		{
+			name: "returns certificate manager images when required",
+			args: args{
+				kubeconfigContext: "mgmt-context",
+			},
+			wantErr: false,
+			certManagerImages: []string{
+				"some.registry.com/cert-image-1:latest",
+				"some.registry.com/cert-image-2:some-tag",
+			},
+			expectedImages: []string{
+				"some.registry.com/cert-image-1:latest",
+				"some.registry.com/cert-image-2:some-tag",
+			},
+		},
+		{
+			name: "returns error when cert-manager client cannot retrieve the image list",
+			args: args{
+				kubeconfigContext: "mgmt-context",
+			},
+			wantErr:              true,
+			certManagerImagesErr: errors.New("failed to get cert images"),
 		},
 	}
 
 	for _, tt := range tests {
+		_, fc := setupCluster(tt.additionalProviders, newFakeCertManagerClient(tt.certManagerImages, tt.certManagerImagesErr))
+		if tt.field.client == nil {
+			tt.field.client = fc
+		}
+
 		t.Run(tt.name, func(t *testing.T) {
 			g := NewWithT(t)
 
 			got, err := tt.field.client.InitImages(InitOptions{
-				Kubeconfig:              Kubeconfig{Path: "kubeconfig", Context: "does-not-exist"},
+				Kubeconfig:              Kubeconfig{Path: "kubeconfig", Context: tt.args.kubeconfigContext},
 				CoreProvider:            tt.args.coreProvider,
 				BootstrapProviders:      tt.args.bootstrapProvider,
 				ControlPlaneProviders:   tt.args.controlPlaneProvider,
 				InfrastructureProviders: tt.args.infrastructureProvider,
 			})
+
 			if tt.wantErr {
 				g.Expect(err).To(HaveOccurred())
+				if tt.expectedErrorMessage == "" {
+					return
+				}
+				g.Expect(err.Error()).To(ContainSubstring(tt.expectedErrorMessage))
 				return
 			}
 			g.Expect(err).NotTo(HaveOccurred())
 			g.Expect(got).To(HaveLen(len(tt.expectedImages)))
+			g.Expect(got).To(ConsistOf(tt.expectedImages))
 		})
 	}
 }
 
 func Test_clusterctlClient_Init(t *testing.T) {
+	// create a config variables client which does not have the value for
+	// SOME_VARIABLE as expected in the infra components YAML
+	fconfig := newFakeConfig().
+		WithVar("ANOTHER_VARIABLE", "value").
+		WithProvider(capiProviderConfig).
+		WithProvider(infraProviderConfig)
+	frepositories := fakeRepositories(fconfig, nil)
+	fcluster := fakeCluster(fconfig, frepositories, newFakeCertManagerClient(nil, nil))
+	fclient := fakeClusterCtlClient(fconfig, frepositories, []*fakeClusterClient{fcluster})
+
 	type field struct {
 		client *fakeClient
 		hasCRD bool
@@ -109,6 +226,19 @@ func Test_clusterctlClient_Init(t *testing.T) {
 		want    []want
 		wantErr bool
 	}{
+		{
+			name: "returns error if variables are not available",
+			field: field{
+				client: fclient,
+			},
+			args: args{
+				coreProvider:           "",  // with an empty cluster, a core provider should be added automatically
+				bootstrapProvider:      nil, // with an empty cluster, a bootstrap provider should be added automatically
+				controlPlaneProvider:   nil, // with an empty cluster, a control plane provider should be added automatically
+				infrastructureProvider: []string{"infra"},
+			},
+			wantErr: true,
+		},
 		{
 			name: "Init (with an empty cluster) with default provider versions",
 			field: field{
@@ -418,16 +548,68 @@ var (
 	infraProviderConfig        = config.NewProvider("infra", "url", clusterctlv1.InfrastructureProviderType)
 )
 
-// clusterctl client for an empty management cluster (with repository setup for capi, bootstrap and infra provider)
-func fakeEmptyCluster() *fakeClient {
-	config1 := newFakeConfig().
-		WithVar("var", "value").
+// setup a cluster client and the fake configuration for testing
+func setupCluster(providers []Provider, certManagerClient cluster.CertManagerClient) (*fakeConfigClient, *fakeClient) {
+	// create a config variables client which does not have the value for
+	// SOME_VARIABLE as expected in the infra components YAML
+	cfg := newFakeConfig().
+		WithVar("ANOTHER_VARIABLE", "value").
 		WithProvider(capiProviderConfig).
-		WithProvider(bootstrapProviderConfig).
-		WithProvider(controlPlaneProviderConfig).
 		WithProvider(infraProviderConfig)
 
-	repository1 := newFakeRepository(capiProviderConfig, config1).
+	for _, provider := range providers {
+		cfg.WithProvider(provider)
+	}
+
+	frepositories := fakeRepositories(cfg, providers)
+	cluster := fakeCluster(cfg, frepositories, certManagerClient)
+	fc := fakeClusterCtlClient(cfg, frepositories, []*fakeClusterClient{cluster})
+	return cfg, fc
+}
+
+// clusterctl client for an empty management cluster (with repository setup for capi, bootstrap and infra provider)
+func fakeEmptyCluster() *fakeClient {
+	// create a config variables client which contains the value for the
+	// variable required
+	config1 := fakeConfig(
+		[]config.Provider{capiProviderConfig, bootstrapProviderConfig, controlPlaneProviderConfig, infraProviderConfig},
+		map[string]string{"SOME_VARIABLE": "value"},
+	)
+
+	// fake repository for capi, bootstrap and infra provider (matching provider's config)
+	repositories := fakeRepositories(config1, nil)
+	// fake empty cluster from fake repository for capi, bootstrap and infra
+	// provider (matching provider's config)
+	cluster1 := fakeCluster(config1, repositories, newFakeCertManagerClient(nil, nil))
+
+	client := fakeClusterCtlClient(config1, repositories, []*fakeClusterClient{cluster1})
+	return client
+}
+
+func fakeConfig(providers []config.Provider, variables map[string]string) *fakeConfigClient {
+	config := newFakeConfig()
+	for _, p := range providers {
+		config = config.WithProvider(p)
+	}
+	for k, v := range variables {
+		config = config.WithVar(k, v)
+	}
+	return config
+}
+
+func fakeCluster(config *fakeConfigClient, repos []*fakeRepositoryClient, certManagerClient cluster.CertManagerClient) *fakeClusterClient {
+	cluster := newFakeCluster(cluster.Kubeconfig{Path: "kubeconfig", Context: "mgmt-context"}, config)
+	for _, r := range repos {
+		cluster = cluster.WithRepository(r)
+	}
+	cluster.WithCertManagerClient(certManagerClient)
+	return cluster
+}
+
+// fakeRepositories returns a base set of repositories for the different types
+// of providers.
+func fakeRepositories(config *fakeConfigClient, providers []Provider) []*fakeRepositoryClient {
+	repository1 := newFakeRepository(capiProviderConfig, config).
 		WithPaths("root", "components.yaml").
 		WithDefaultVersion("v1.0.0").
 		WithFile("v1.0.0", "components.yaml", componentsYAML("ns1")).
@@ -442,7 +624,7 @@ func fakeEmptyCluster() *fakeClient {
 				{Major: 1, Minor: 1, Contract: "v1alpha3"},
 			},
 		})
-	repository2 := newFakeRepository(bootstrapProviderConfig, config1).
+	repository2 := newFakeRepository(bootstrapProviderConfig, config).
 		WithPaths("root", "components.yaml").
 		WithDefaultVersion("v2.0.0").
 		WithFile("v2.0.0", "components.yaml", componentsYAML("ns2")).
@@ -457,7 +639,7 @@ func fakeEmptyCluster() *fakeClient {
 				{Major: 2, Minor: 1, Contract: "v1alpha3"},
 			},
 		})
-	repository3 := newFakeRepository(controlPlaneProviderConfig, config1).
+	repository3 := newFakeRepository(controlPlaneProviderConfig, config).
 		WithPaths("root", "components.yaml").
 		WithDefaultVersion("v2.0.0").
 		WithFile("v2.0.0", "components.yaml", componentsYAML("ns3")).
@@ -472,16 +654,16 @@ func fakeEmptyCluster() *fakeClient {
 				{Major: 2, Minor: 1, Contract: "v1alpha3"},
 			},
 		})
-	repository4 := newFakeRepository(infraProviderConfig, config1).
+	repository4 := newFakeRepository(infraProviderConfig, config).
 		WithPaths("root", "components.yaml").
 		WithDefaultVersion("v3.0.0").
-		WithFile("v3.0.0", "components.yaml", componentsYAML("ns4")).
+		WithFile("v3.0.0", "components.yaml", infraComponentsYAML("ns4")).
 		WithMetadata("v3.0.0", &clusterctlv1.Metadata{
 			ReleaseSeries: []clusterctlv1.ReleaseSeries{
 				{Major: 3, Minor: 0, Contract: "v1alpha3"},
 			},
 		}).
-		WithFile("v3.1.0", "components.yaml", componentsYAML("ns4")).
+		WithFile("v3.1.0", "components.yaml", infraComponentsYAML("ns4")).
 		WithMetadata("v3.1.0", &clusterctlv1.Metadata{
 			ReleaseSeries: []clusterctlv1.ReleaseSeries{
 				{Major: 3, Minor: 1, Contract: "v1alpha3"},
@@ -489,22 +671,32 @@ func fakeEmptyCluster() *fakeClient {
 		}).
 		WithFile("v3.0.0", "cluster-template.yaml", templateYAML("ns4", "test"))
 
-	cluster1 := newFakeCluster(cluster.Kubeconfig{Path: "kubeconfig", Context: "mgmt-context"}, config1).
-		// fake repository for capi, bootstrap and infra provider (matching provider's config)
-		WithRepository(repository1).
-		WithRepository(repository2).
-		WithRepository(repository3).
-		WithRepository(repository4)
+	var providerRepositories = []*fakeRepositoryClient{repository1, repository2, repository3, repository4}
 
-	client := newFakeClient(config1).
-		// fake repository for capi, bootstrap and infra provider (matching provider's config)
-		WithRepository(repository1).
-		WithRepository(repository2).
-		WithRepository(repository3).
-		WithRepository(repository4).
-		// fake empty cluster
-		WithCluster(cluster1)
+	for _, provider := range providers {
+		providerRepositories = append(providerRepositories,
+			newFakeRepository(provider, config).
+				WithPaths("root", "components.yaml").
+				WithDefaultVersion("v2.0.0").
+				WithFile("v2.0.0", "components.yaml", componentsYAML("ns2")).
+				WithMetadata("v2.0.0", &clusterctlv1.Metadata{
+					ReleaseSeries: []clusterctlv1.ReleaseSeries{
+						{Major: 2, Minor: 0, Contract: "v1alpha3"},
+					},
+				}))
+	}
 
+	return providerRepositories
+}
+
+func fakeClusterCtlClient(config *fakeConfigClient, repos []*fakeRepositoryClient, clusters []*fakeClusterClient) *fakeClient {
+	client := newFakeClient(config)
+	for _, r := range repos {
+		client = client.WithRepository(r)
+	}
+	for _, c := range clusters {
+		client = client.WithCluster(c)
+	}
 	return client
 }
 
@@ -537,7 +729,7 @@ func componentsYAML(ns string) []byte {
 		"metadata:\n" +
 		"  name: manager")
 
-	return util.JoinYaml(namespaceYaml, podYaml)
+	return utilyaml.JoinYaml(namespaceYaml, podYaml)
 }
 
 func templateYAML(ns string, clusterName string) []byte {
@@ -548,4 +740,37 @@ func templateYAML(ns string, clusterName string) []byte {
 		fmt.Sprintf("  namespace: %s", ns))
 
 	return podYaml
+}
+
+// infraComponentsYAML defines a namespace and deployment with container
+// images and a variable
+func infraComponentsYAML(namespace string) []byte {
+	var infraComponentsYAML string = `---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: %[1]s
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: capa-controller-manager
+  namespace: %[1]s
+spec:
+  template:
+    spec:
+      containers:
+      - image: gcr.io/kubebuilder/kube-rbac-proxy:v0.4.1
+        name: kube-rbac-proxy
+      - image: us.gcr.io/k8s-artifacts-prod/cluster-api-aws/cluster-api-aws-controller:v0.5.3
+        name: manager
+        volumeMounts:
+        - mountPath: /home/.aws
+          name: credentials
+      volumes:
+      - name: credentials
+        secret:
+          secretName: ${SOME_VARIABLE}
+`
+	return []byte(fmt.Sprintf(infraComponentsYAML, namespace))
 }

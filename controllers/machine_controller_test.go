@@ -31,9 +31,10 @@ import (
 	"k8s.io/utils/pointer"
 	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha3"
 	"sigs.k8s.io/cluster-api/controllers/external"
+	"sigs.k8s.io/cluster-api/test/helpers"
 	"sigs.k8s.io/cluster-api/util"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/metrics"
@@ -105,7 +106,7 @@ func TestMachineFinalizer(t *testing.T) {
 			g := NewWithT(t)
 
 			mr := &MachineReconciler{
-				Client: fake.NewFakeClientWithScheme(
+				Client: helpers.NewFakeClientWithScheme(
 					scheme.Scheme,
 					clusterCorrectMeta,
 					machineValidCluster,
@@ -266,7 +267,7 @@ func TestMachineOwnerReference(t *testing.T) {
 			g := NewWithT(t)
 
 			mr := &MachineReconciler{
-				Client: fake.NewFakeClientWithScheme(
+				Client: helpers.NewFakeClientWithScheme(
 					scheme.Scheme,
 					testCluster,
 					machineInvalidCluster,
@@ -278,10 +279,18 @@ func TestMachineOwnerReference(t *testing.T) {
 				scheme: scheme.Scheme,
 			}
 
-			_, _ = mr.Reconcile(tc.request)
-
 			key := client.ObjectKey{Namespace: tc.m.Namespace, Name: tc.m.Name}
 			var actual clusterv1.Machine
+
+			// this first requeue is to add finalizer
+			result, err := mr.Reconcile(tc.request)
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(result).To(Equal(ctrl.Result{}))
+			g.Expect(mr.Client.Get(ctx, key, &actual)).To(Succeed())
+			g.Expect(actual.Finalizers).To(ContainElement(clusterv1.MachineFinalizer))
+
+			_, _ = mr.Reconcile(tc.request)
+
 			if len(tc.expectedOR) > 0 {
 				g.Expect(mr.Client.Get(ctx, key, &actual)).To(Succeed())
 				g.Expect(actual.OwnerReferences).To(Equal(tc.expectedOR))
@@ -353,6 +362,7 @@ func TestReconcileRequest(t *testing.T) {
 					NodeRef: &corev1.ObjectReference{
 						Name: "test",
 					},
+					ObservedGeneration: 1,
 				},
 			},
 			expected: expected{
@@ -380,6 +390,7 @@ func TestReconcileRequest(t *testing.T) {
 					NodeRef: &corev1.ObjectReference{
 						Name: "test",
 					},
+					ObservedGeneration: 1,
 				},
 			},
 			expected: expected{
@@ -419,11 +430,11 @@ func TestReconcileRequest(t *testing.T) {
 		t.Run("machine should be "+tc.machine.Name, func(t *testing.T) {
 			g := NewWithT(t)
 
-			clientFake := fake.NewFakeClientWithScheme(
+			clientFake := helpers.NewFakeClientWithScheme(
 				scheme.Scheme,
 				&testCluster,
 				&tc.machine,
-				external.TestGenericInfrastructureCRD,
+				external.TestGenericInfrastructureCRD.DeepCopy(),
 				&infraConfig,
 			)
 
@@ -546,7 +557,7 @@ func TestReconcileDeleteExternal(t *testing.T) {
 			}
 
 			r := &MachineReconciler{
-				Client: fake.NewFakeClientWithScheme(scheme.Scheme, objs...),
+				Client: helpers.NewFakeClientWithScheme(scheme.Scheme, objs...),
 				Log:    log.Log,
 				scheme: scheme.Scheme,
 			}
@@ -590,7 +601,7 @@ func TestRemoveMachineFinalizerAfterDeleteReconcile(t *testing.T) {
 	}
 	key := client.ObjectKey{Namespace: m.Namespace, Name: m.Name}
 	mr := &MachineReconciler{
-		Client: fake.NewFakeClientWithScheme(scheme.Scheme, testCluster, m),
+		Client: helpers.NewFakeClientWithScheme(scheme.Scheme, testCluster, m),
 		Log:    log.Log,
 		scheme: scheme.Scheme,
 	}
@@ -667,7 +678,7 @@ func TestReconcileMetrics(t *testing.T) {
 			objs = append(objs, machine)
 
 			r := &MachineReconciler{
-				Client: fake.NewFakeClientWithScheme(scheme.Scheme, objs...),
+				Client: helpers.NewFakeClientWithScheme(scheme.Scheme, objs...),
 				Log:    log.Log,
 				scheme: scheme.Scheme,
 			}
@@ -778,7 +789,7 @@ func Test_clusterToActiveMachines(t *testing.T) {
 		objs = append(objs, m2)
 
 		r := &MachineReconciler{
-			Client: fake.NewFakeClientWithScheme(scheme.Scheme, objs...),
+			Client: helpers.NewFakeClientWithScheme(scheme.Scheme, objs...),
 			Log:    log.Log,
 			scheme: scheme.Scheme,
 		}
@@ -952,7 +963,7 @@ func TestIsDeleteNodeAllowed(t *testing.T) {
 			}
 
 			mr := &MachineReconciler{
-				Client: fake.NewFakeClientWithScheme(
+				Client: helpers.NewFakeClientWithScheme(
 					scheme.Scheme,
 					tc.cluster,
 					tc.machine,

@@ -22,12 +22,14 @@ import (
 
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"sigs.k8s.io/cluster-api/test/framework/options"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha3"
+	"sigs.k8s.io/cluster-api/test/framework/internal/log"
+	"sigs.k8s.io/cluster-api/test/framework/options"
+	"sigs.k8s.io/cluster-api/util/patch"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 // CreateClusterInput is the input for CreateCluster.
@@ -48,7 +50,7 @@ func CreateCluster(ctx context.Context, input CreateClusterInput, intervals ...i
 	By("creating a Cluster resource linked to the InfrastructureCluster resource")
 	Eventually(func() error {
 		if err := input.Creator.Create(ctx, input.Cluster); err != nil {
-			fmt.Printf("%+v\n", err)
+			log.Logf("Failed to create a cluster: %+v", err)
 			return err
 		}
 		return nil
@@ -61,7 +63,7 @@ type GetAllClustersByNamespaceInput struct {
 	Namespace string
 }
 
-// GetClustersByNamespace returns the list of Cluster object in a namespace
+// GetAllClustersByNamespace returns the list of Cluster object in a namespace
 func GetAllClustersByNamespace(ctx context.Context, input GetAllClustersByNamespaceInput) []*clusterv1.Cluster {
 	clusterList := &clusterv1.ClusterList{}
 	Expect(input.Lister.List(ctx, clusterList, client.InNamespace(input.Namespace))).To(Succeed(), "Failed to list clusters in namespace %s", input.Namespace)
@@ -89,6 +91,27 @@ func GetClusterByName(ctx context.Context, input GetClusterByNameInput) *cluster
 	}
 	Expect(input.Getter.Get(ctx, key, cluster)).To(Succeed(), "Failed to get Cluster object %s/%s", input.Namespace, input.Name)
 	return cluster
+}
+
+// PatchClusterLabelInput is the input for PatchClusterLabel.
+type PatchClusterLabelInput struct {
+	ClusterProxy ClusterProxy
+	Cluster      *clusterv1.Cluster
+	Labels       map[string]string
+}
+
+// PatchClusterLabel patches labels to a cluster.
+func PatchClusterLabel(ctx context.Context, input PatchClusterLabelInput) {
+	Expect(ctx).NotTo(BeNil(), "ctx is required for PatchClusterLabel")
+	Expect(input.ClusterProxy).ToNot(BeNil(), "Invalid argument. input.ClusterProxy can't be nil when calling PatchClusterLabel")
+	Expect(input.Cluster).ToNot(BeNil(), "Invalid argument. input.Cluster can't be nil when calling PatchClusterLabel")
+	Expect(input.Labels).ToNot(BeEmpty(), "Invalid argument. input.Labels can't be empty when calling PatchClusterLabel")
+
+	log.Logf("Patching the label to the cluster")
+	patchHelper, err := patch.NewHelper(input.Cluster, input.ClusterProxy.GetClient())
+	Expect(err).ToNot(HaveOccurred())
+	input.Cluster.SetLabels(input.Labels)
+	Expect(patchHelper.Patch(ctx, input.Cluster)).To(Succeed())
 }
 
 // WaitForClusterToProvisionInput is the input for WaitForClusterToProvision.
@@ -196,14 +219,14 @@ func DeleteClusterAndWait(ctx context.Context, input DeleteClusterAndWaitInput, 
 		Cluster: input.Cluster,
 	})
 
-	fmt.Fprintf(GinkgoWriter, "Waiting for the Cluster object to be deleted\n")
+	log.Logf("Waiting for the Cluster object to be deleted")
 	WaitForClusterDeleted(ctx, WaitForClusterDeletedInput{
 		Getter:  input.Client,
 		Cluster: input.Cluster,
 	}, intervals...)
 
 	//TODO: consider if to move in another func (what if there are more than one cluster?)
-	fmt.Fprintf(GinkgoWriter, "Check for all the Cluster API resources being deleted\n")
+	log.Logf("Check for all the Cluster API resources being deleted")
 	resources := GetCAPIResources(ctx, GetCAPIResourcesInput{
 		Lister:    input.Client,
 		Namespace: input.Cluster.Namespace,
@@ -236,7 +259,7 @@ func DeleteAllClustersAndWait(ctx context.Context, input DeleteAllClustersAndWai
 	}
 
 	for _, c := range clusters {
-		fmt.Fprintf(GinkgoWriter, "Waiting for the Cluster %s/%s to be deleted\n", c.Namespace, c.Name)
+		log.Logf("Waiting for the Cluster %s/%s to be deleted", c.Namespace, c.Name)
 		WaitForClusterDeleted(ctx, WaitForClusterDeletedInput{
 			Getter:  input.Client,
 			Cluster: c,

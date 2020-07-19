@@ -18,6 +18,7 @@ package v1alpha3
 
 import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha3"
 	kubeadmv1beta1 "sigs.k8s.io/cluster-api/bootstrap/kubeadm/types/v1beta1"
 )
 
@@ -48,6 +49,14 @@ type KubeadmConfigSpec struct {
 	// Files specifies extra files to be passed to user_data upon creation.
 	// +optional
 	Files []File `json:"files,omitempty"`
+
+	// DiskSetup specifies options for the creation of partition tables and file systems on devices.
+	// +optional
+	DiskSetup *DiskSetup `json:"diskSetup,omitempty"`
+
+	// Mounts specifies a list of mount points to be setup.
+	// +optional
+	Mounts []MountPoints `json:"mounts,omitempty"`
 
 	// PreKubeadmCommands specifies extra commands to run before kubeadm runs
 	// +optional
@@ -112,6 +121,14 @@ type KubeadmConfigStatus struct {
 	// FailureMessage will be set on non-retryable errors
 	// +optional
 	FailureMessage string `json:"failureMessage,omitempty"`
+
+	// ObservedGeneration is the latest generation observed by the controller.
+	// +optional
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+
+	// Conditions defines current service state of the KubeadmConfig.
+	// +optional
+	Conditions clusterv1.Conditions `json:"conditions,omitempty"`
 }
 
 // +kubebuilder:object:root=true
@@ -126,6 +143,14 @@ type KubeadmConfig struct {
 
 	Spec   KubeadmConfigSpec   `json:"spec,omitempty"`
 	Status KubeadmConfigStatus `json:"status,omitempty"`
+}
+
+func (c *KubeadmConfig) GetConditions() clusterv1.Conditions {
+	return c.Status.Conditions
+}
+
+func (c *KubeadmConfig) SetConditions(conditions clusterv1.Conditions) {
+	c.Status.Conditions = conditions
 }
 
 // +kubebuilder:object:root=true
@@ -172,7 +197,32 @@ type File struct {
 	Encoding Encoding `json:"encoding,omitempty"`
 
 	// Content is the actual content of the file.
-	Content string `json:"content"`
+	// +optional
+	Content string `json:"content,omitempty"`
+
+	// ContentFrom is a referenced source of content to populate the file.
+	// +optional
+	ContentFrom *FileSource `json:"contentFrom,omitempty"`
+}
+
+// FileSource is a union of all possible external source types for file data.
+// Only one field may be populated in any given instance. Developers adding new
+// sources of data for target systems should add them here.
+type FileSource struct {
+	// Secret represents a secret that should populate this file.
+	Secret SecretFileSource `json:"secret"`
+}
+
+// Adapts a Secret into a FileSource.
+//
+// The contents of the target Secret's Data field will be presented
+// as files using the keys in the Data field as the file names.
+type SecretFileSource struct {
+	// Name of the secret in the KubeadmBootstrapConfig's namespace to use.
+	Name string `json:"name"`
+
+	// Key is the key in the secret's data map for this value.
+	Key string `json:"key"`
 }
 
 // User defines the input for a generated user in cloud-init.
@@ -231,3 +281,57 @@ type NTP struct {
 	// +optional
 	Enabled *bool `json:"enabled,omitempty"`
 }
+
+// DiskSetup defines input for generated disk_setup and fs_setup in cloud-init.
+type DiskSetup struct {
+	// Partitions specifies the list of the partitions to setup.
+	Partitions []Partition `json:"partitions,omitempty"`
+	// Filesystems specifies the list of file systems to setup.
+	Filesystems []Filesystem `json:"filesystems,omitempty"`
+}
+
+// Partition defines how to create and layout a partition.
+type Partition struct {
+	// Device is the name of the device.
+	Device string `json:"device"`
+	// Layout specifies the device layout.
+	// If it is true, a single partition will be created for the entire device.
+	// When layout is false, it means don't partition or ignore existing partitioning.
+	Layout bool `json:"layout"`
+	// Overwrite describes whether to skip checks and create the partition if a partition or filesystem is found on the device.
+	// Use with caution. Default is 'false'.
+	// +optional
+	Overwrite *bool `json:"overwrite,omitempty"`
+	// TableType specifies the tupe of partition table. The following are supported:
+	// 'mbr': default and setups a MS-DOS partition table
+	// 'gpt': setups a GPT partition table
+	// +optional
+	TableType *string `json:"tableType,omitempty"`
+}
+
+// Filesystem defines the file systems to be created.
+type Filesystem struct {
+	// Device specifies the device name
+	Device string `json:"device"`
+	// Filesystem specifies the file system type.
+	Filesystem string `json:"filesystem"`
+	// Label specifies the file system label to be used. If set to None, no label is used.
+	Label string `json:"label"`
+	// Partition specifies the partition to use. The valid options are: "auto|any", "auto", "any", "none", and <NUM>, where NUM is the actual partition number.
+	// +optional
+	Partition *string `json:"partition,omitempty"`
+	// Overwrite defines whether or not to overwrite any existing filesystem.
+	// If true, any pre-existing file system will be destroyed. Use with Caution.
+	// +optional
+	Overwrite *bool `json:"overwrite,omitempty"`
+	// ReplaceFS is a special directive, used for Microsoft Azure that instructs cloud-init to replace a file system of <FS_TYPE>.
+	// NOTE: unless you define a label, this requires the use of the 'any' partition directive.
+	// +optional
+	ReplaceFS *string `json:"replaceFS,omitempty"`
+	// ExtraOpts defined extra options to add to the command for creating the file system.
+	// +optional
+	ExtraOpts []string `json:"extraOpts,omitempty"`
+}
+
+// MountPoints defines input for generated mounts in cloud-init.
+type MountPoints []string

@@ -29,7 +29,6 @@ import (
 	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha3"
 	"sigs.k8s.io/cluster-api/util"
 	"sigs.k8s.io/cluster-api/util/kubeconfig"
-	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
@@ -68,7 +67,7 @@ var _ = Describe("ClusterCache Reconciler suite", func() {
 			}, timeout).Should(Succeed())
 
 			By("Creating a test cluster kubeconfig")
-			Expect(kubeconfig.CreateEnvTestSecret(k8sClient, cfg, testCluster)).To(Succeed())
+			Expect(kubeconfig.CreateEnvTestSecret(k8sClient, testEnv.Config, testCluster)).To(Succeed())
 			// Check the secret can be fetch from the API server
 			secretKey := client.ObjectKey{Namespace: testNamespace.GetName(), Name: fmt.Sprintf("%s-kubeconfig", testCluster.GetName())}
 			Eventually(func() error {
@@ -85,7 +84,6 @@ var _ = Describe("ClusterCache Reconciler suite", func() {
 				Cluster:      testClusterKey,
 				Watcher:      watcher,
 				Kind:         kind,
-				CacheOptions: cache.Options{},
 				EventHandler: eventHandler,
 				Predicates: []predicate.Predicate{
 					&predicate.ResourceVersionChangedPredicate{},
@@ -106,7 +104,7 @@ var _ = Describe("ClusterCache Reconciler suite", func() {
 		BeforeEach(func() {
 			By("Setting up a new manager")
 			var err error
-			mgr, err = manager.New(cfg, manager.Options{
+			mgr, err = manager.New(testEnv.Config, manager.Options{
 				Scheme:             scheme.Scheme,
 				MetricsBindAddress: "0",
 			})
@@ -129,13 +127,12 @@ var _ = Describe("ClusterCache Reconciler suite", func() {
 			Expect(k8sClient.Create(ctx, testNamespace)).To(Succeed())
 
 			By("Starting the ClusterCacheReconciler")
-			r, err := NewClusterCacheReconciler(
-				&log.NullLogger{},
-				mgr,
-				controller.Options{},
-				cct,
-			)
-			Expect(err).ToNot(HaveOccurred())
+			r := &ClusterCacheReconciler{
+				Log:     &log.NullLogger{},
+				Client:  mgr.GetClient(),
+				Tracker: cct,
+			}
+			Expect(r.SetupWithManager(mgr, controller.Options{})).To(Succeed())
 
 			By("Creating clusters to test with")
 			clusterRequest1, clusterCache1 = createAndWatchCluster("cluster-1")

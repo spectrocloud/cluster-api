@@ -36,7 +36,7 @@ func (r *KubeadmControlPlaneReconciler) initializeControlPlane(ctx context.Conte
 
 	// Perform an uncached read of all the owned machines. This check is in place to make sure
 	// that the controller cache is not misbehaving and we end up initializing the cluster more than once.
-	ownedMachines, err := r.managementClusterUncached.GetMachinesForCluster(ctx, util.ObjectKey(cluster), machinefilters.OwnedControlPlaneMachines(kcp.Name))
+	ownedMachines, err := r.managementClusterUncached.GetMachinesForCluster(ctx, util.ObjectKey(cluster), machinefilters.OwnedMachines(kcp))
 	if err != nil {
 		logger.Error(err, "failed to perform an uncached read of control plane machines for cluster")
 		return ctrl.Result{}, err
@@ -86,6 +86,7 @@ func (r *KubeadmControlPlaneReconciler) scaleDownControlPlane(
 	cluster *clusterv1.Cluster,
 	kcp *controlplanev1.KubeadmControlPlane,
 	controlPlane *internal.ControlPlane,
+	outdatedMachines internal.FilterableMachineCollection,
 ) (ctrl.Result, error) {
 	logger := controlPlane.Logger()
 
@@ -99,7 +100,7 @@ func (r *KubeadmControlPlaneReconciler) scaleDownControlPlane(
 		return ctrl.Result{}, errors.Wrapf(err, "failed to create client to workload cluster")
 	}
 
-	machineToDelete, err := selectMachineForScaleDown(controlPlane)
+	machineToDelete, err := selectMachineForScaleDown(controlPlane, outdatedMachines)
 	if err != nil {
 		return ctrl.Result{}, errors.Wrap(err, "failed to select machine for scale down")
 	}
@@ -120,7 +121,7 @@ func (r *KubeadmControlPlaneReconciler) scaleDownControlPlane(
 		return ctrl.Result{}, err
 	}
 
-	if err := r.managementCluster.TargetClusterControlPlaneIsHealthy(ctx, util.ObjectKey(cluster), kcp.Name); err != nil {
+	if err := r.managementCluster.TargetClusterControlPlaneIsHealthy(ctx, util.ObjectKey(cluster)); err != nil {
 		logger.V(2).Info("Waiting for control plane to pass control plane health check before removing a control plane machine", "cause", err)
 		r.recorder.Eventf(kcp, corev1.EventTypeWarning, "ControlPlaneUnhealthy",
 			"Waiting for control plane to pass control plane health check before removing a control plane machine: %v", err)
@@ -144,10 +145,10 @@ func (r *KubeadmControlPlaneReconciler) scaleDownControlPlane(
 	return ctrl.Result{Requeue: true}, nil
 }
 
-func selectMachineForScaleDown(controlPlane *internal.ControlPlane) (*clusterv1.Machine, error) {
+func selectMachineForScaleDown(controlPlane *internal.ControlPlane, outdatedMachines internal.FilterableMachineCollection) (*clusterv1.Machine, error) {
 	machines := controlPlane.Machines
-	if needingUpgrade := controlPlane.MachinesNeedingUpgrade(); needingUpgrade.Len() > 0 {
-		machines = needingUpgrade
+	if outdatedMachines.Len() > 0 {
+		machines = outdatedMachines
 	}
 	return controlPlane.MachineInFailureDomainWithMostMachines(machines)
 }

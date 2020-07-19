@@ -20,92 +20,102 @@ import (
 	"path"
 	"path/filepath"
 	goruntime "runtime"
-	"time"
 
+	"github.com/onsi/ginkgo"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	kerrors "k8s.io/apimachinery/pkg/util/errors"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
+	"k8s.io/klog"
+	"k8s.io/klog/klogr"
 	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha3"
 	bootstrapv1 "sigs.k8s.io/cluster-api/bootstrap/kubeadm/api/v1alpha3"
 	"sigs.k8s.io/cluster-api/controllers/external"
+	controlplanev1 "sigs.k8s.io/cluster-api/controlplane/kubeadm/api/v1alpha3"
+	addonv1 "sigs.k8s.io/cluster-api/exp/addons/api/v1alpha3"
+	expv1 "sigs.k8s.io/cluster-api/exp/api/v1alpha3"
+	"sigs.k8s.io/cluster-api/util"
 	"sigs.k8s.io/cluster-api/util/kubeconfig"
-	"sigs.k8s.io/controller-runtime/pkg/cache"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 )
 
-type TestEnvironment struct {
-	*envtest.Environment
-	manager.Manager
-	client.Client
-
-	Config  *rest.Config
-	scheme  *runtime.Scheme
-	doneMgr chan struct{}
+func init() {
+	klog.InitFlags(nil)
+	ctrl.SetLogger(klogr.New())
+	klog.SetOutput(ginkgo.GinkgoWriter)
 }
 
-func newTestEnvironment() *TestEnvironment {
-	scheme := scheme.Scheme
-	utilruntime.Must(apiextensionsv1.AddToScheme(scheme))
-	utilruntime.Must(clusterv1.AddToScheme(scheme))
-	utilruntime.Must(bootstrapv1.AddToScheme(scheme))
+var (
+	env *envtest.Environment
+)
 
+func init() {
+	// Calculate the scheme.
+	utilruntime.Must(apiextensionsv1.AddToScheme(scheme.Scheme))
+	utilruntime.Must(clusterv1.AddToScheme(scheme.Scheme))
+	utilruntime.Must(bootstrapv1.AddToScheme(scheme.Scheme))
+	utilruntime.Must(expv1.AddToScheme(scheme.Scheme))
+	utilruntime.Must(controlplanev1.AddToScheme(scheme.Scheme))
+	utilruntime.Must(addonv1.AddToScheme(scheme.Scheme))
+
+	// Get the root of the current file to use in CRD paths.
 	_, filename, _, _ := goruntime.Caller(0) //nolint
 	root := path.Join(path.Dir(filename), "..", "..")
 
-	return &TestEnvironment{
-		Environment: &envtest.Environment{
-			ErrorIfCRDPathMissing: true,
-			CRDDirectoryPaths: []string{
-				filepath.Join(root, "config", "crd", "bases"),
-				filepath.Join(root, "controlplane", "kubeadm", "config", "crd", "bases"),
-				filepath.Join(root, "bootstrap", "kubeadm", "config", "crd", "bases"),
-			},
-			CRDs: []runtime.Object{
-				external.TestGenericBootstrapCRD,
-				external.TestGenericBootstrapTemplateCRD,
-				external.TestGenericInfrastructureCRD,
-				external.TestGenericInfrastructureTemplateCRD,
-			},
+	// Create the test environment.
+	env = &envtest.Environment{
+		ErrorIfCRDPathMissing: true,
+		CRDDirectoryPaths: []string{
+			filepath.Join(root, "config", "crd", "bases"),
+			filepath.Join(root, "controlplane", "kubeadm", "config", "crd", "bases"),
+			filepath.Join(root, "bootstrap", "kubeadm", "config", "crd", "bases"),
 		},
-		scheme:  scheme,
-		doneMgr: make(chan struct{}),
+		CRDs: []runtime.Object{
+			external.TestGenericBootstrapCRD.DeepCopy(),
+			external.TestGenericBootstrapTemplateCRD.DeepCopy(),
+			external.TestGenericInfrastructureCRD.DeepCopy(),
+			external.TestGenericInfrastructureTemplateCRD.DeepCopy(),
+		},
 	}
 }
 
-func NewTestEnvironment() (*TestEnvironment, error) {
-	env := newTestEnvironment()
+// TestEnvironment encapsulates a Kubernetes local test environment.
+type TestEnvironment struct {
+	manager.Manager
+	client.Client
+	Config *rest.Config
 
-	cfg, err := env.Environment.Start()
-	if err != nil {
-		return env, err
+	doneMgr chan struct{}
+}
+
+// NewTestEnvironment creates a new environment spinning up a local api-server.
+//
+// This function should be called only once for each package you're running tests within,
+// usually the environment is initialized in a suite_test.go file within a `BeforeSuite` ginkgo block.
+func NewTestEnvironment() *TestEnvironment {
+	if _, err := env.Start(); err != nil {
+		panic(err)
 	}
 
-	mgr, err := manager.New(cfg, manager.Options{
-		Scheme:             env.scheme,
+	mgr, err := manager.New(env.Config, manager.Options{
+		Scheme:             scheme.Scheme,
 		MetricsBindAddress: "0",
-		NewCache: func(config *rest.Config, opts cache.Options) (cache.Cache, error) {
-			syncPeriod := 1 * time.Second
-			opts.Resync = &syncPeriod
-			return cache.New(config, opts)
-		},
+		NewClient:          util.ManagerDelegatingClientFunc,
 	})
 	if err != nil {
-		if stopErr := env.Stop(); err != nil {
-			return nil, kerrors.NewAggregate([]error{err, stopErr})
-		}
-		return env, err
+		klog.Fatalf("Failed to start testenv manager: %v", err)
 	}
 
-	env.Config = cfg
-	env.Manager = mgr
-	env.Client = mgr.GetClient()
-
-	return env, nil
+	return &TestEnvironment{
+		Manager: mgr,
+		Client:  mgr.GetClient(),
+		Config:  mgr.GetConfig(),
+		doneMgr: make(chan struct{}),
+	}
 }
 
 func (t *TestEnvironment) StartManager() error {
@@ -113,8 +123,8 @@ func (t *TestEnvironment) StartManager() error {
 }
 
 func (t *TestEnvironment) Stop() error {
-	close(t.doneMgr)
-	return t.Environment.Stop()
+	t.doneMgr <- struct{}{}
+	return env.Stop()
 }
 
 func (t *TestEnvironment) CreateKubeconfigSecret(cluster *clusterv1.Cluster) error {

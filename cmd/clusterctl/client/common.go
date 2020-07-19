@@ -45,8 +45,9 @@ func (c *clusterctlClient) getComponentsByName(provider string, providerType clu
 	// Get a client for the provider repository and read the provider components;
 	// during the process, provider components will be processed performing variable substitution, customization of target
 	// and watching namespace etc.
-
-	repositoryClientFactory, err := c.repositoryClientFactory(providerConfig)
+	// Currently we are not supporting custom yaml processors for the provider
+	// components. So we revert to using the default SimpleYamlProcessor.
+	repositoryClientFactory, err := c.repositoryClientFactory(RepositoryClientFactoryInput{provider: providerConfig})
 	if err != nil {
 		return nil, err
 	}
@@ -87,6 +88,14 @@ func parseProviderName(provider string) (name string, version string, err error)
 
 func validateDNS1123Label(label string) error {
 	errs := validation.IsDNS1123Label(label)
+	if len(errs) != 0 {
+		return errors.New(strings.Join(errs, "; "))
+	}
+	return nil
+}
+
+func validateDNS1123Domanin(subdomain string) error {
+	errs := validation.IsDNS1123Subdomain(subdomain)
 	if len(errs) != 0 {
 		return errors.New(strings.Join(errs, "; "))
 	}

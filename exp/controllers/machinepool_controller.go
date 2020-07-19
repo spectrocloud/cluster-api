@@ -137,7 +137,12 @@ func (r *MachinePoolReconciler) Reconcile(req ctrl.Request) (_ ctrl.Result, rete
 		// TODO(jpang): add support for metrics.
 
 		// Always attempt to patch the object and status after each reconciliation.
-		if err := patchHelper.Patch(ctx, mp); err != nil {
+		// Patch ObservedGeneration only if the reconciliation completed successfully
+		patchOpts := []patch.Option{}
+		if reterr == nil {
+			patchOpts = append(patchOpts, patch.WithStatusObservedGeneration{})
+		}
+		if err := patchHelper.Patch(ctx, mp, patchOpts...); err != nil {
 			reterr = kerrors.NewAggregate([]error{reterr, err})
 		}
 	}()
@@ -147,6 +152,12 @@ func (r *MachinePoolReconciler) Reconcile(req ctrl.Request) (_ ctrl.Result, rete
 		mp.Labels = make(map[string]string)
 	}
 	mp.Labels[clusterv1.ClusterLabelName] = mp.Spec.ClusterName
+
+	// Add finalizer first if not exist to avoid the race condition between init and delete
+	if !controllerutil.ContainsFinalizer(mp, expv1.MachinePoolFinalizer) {
+		controllerutil.AddFinalizer(mp, expv1.MachinePoolFinalizer)
+		return ctrl.Result{}, nil
+	}
 
 	// Handle deletion reconciliation loop.
 	if !mp.ObjectMeta.DeletionTimestamp.IsZero() {
@@ -168,9 +179,6 @@ func (r *MachinePoolReconciler) reconcile(ctx context.Context, cluster *clusterv
 		Name:       cluster.Name,
 		UID:        cluster.UID,
 	})
-
-	// If the MachinePool doesn't have a finalizer, add one.
-	controllerutil.AddFinalizer(mp, expv1.MachinePoolFinalizer)
 
 	// Call the inner reconciliation methods.
 	reconciliationErrors := []error{

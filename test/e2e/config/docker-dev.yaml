@@ -48,6 +48,8 @@ providers:
       new: "imagePullPolicy: IfNotPresent"
     - old: "--enable-leader-election"
       new: "--enable-leader-election=false"
+    - old: --metrics-addr=127.0.0.1:8080
+      new: --metrics-addr=:8080
 
 - name: kubeadm
   type: BootstrapProvider
@@ -60,6 +62,8 @@ providers:
       new: "imagePullPolicy: IfNotPresent"
     - old: "--enable-leader-election"
       new: "--enable-leader-election=false"
+    - old: --metrics-addr=127.0.0.1:8080
+      new: --metrics-addr=:8080
 
 - name: kubeadm
   type: ControlPlaneProvider
@@ -72,6 +76,8 @@ providers:
       new: "imagePullPolicy: IfNotPresent"
     - old: "--enable-leader-election"
       new: "--enable-leader-election=false"
+    - old: --metrics-addr=127.0.0.1:8080
+      new: --metrics-addr=:8080
 
 - name: docker
   type: InfrastructureProvider
@@ -84,11 +90,15 @@ providers:
       new: "imagePullPolicy: IfNotPresent"
     - old: "--enable-leader-election"
       new: "--enable-leader-election=false"
+    - old: --metrics-addr=127.0.0.1:8080
+      new: --metrics-addr=:8080
   files:
   # Add a metadata for docker provider
   - sourcePath: "../data/infrastructure-docker/metadata.yaml"
-  # Add a cluster template
+  # Add cluster templates
   - sourcePath: "../data/infrastructure-docker/cluster-template.yaml"
+  - sourcePath: "../data/infrastructure-docker/cluster-template-kcp-adoption.yaml"
+  - sourcePath: "../data/infrastructure-docker/cluster-template-clusterresourceset.yaml"
 
 variables:
   KUBERNETES_VERSION: "v1.18.2"
@@ -102,12 +112,13 @@ variables:
   DOCKER_POD_CIDRS: "192.168.0.0/16"
   #CNI: "./data/cni/calico/calico.yaml"
   CNI: "./data/cni/kindnet/kindnet.yaml"
+  EXP_CLUSTER_RESOURCE_SET: "true"
 
 intervals:
   default/wait-controllers: ["3m", "10s"]
   default/wait-cluster: ["3m", "10s"]
-  default/wait-control-plane: ["3m", "10s"]
-  default/wait-worker-nodes: ["3m", "10s"]
+  default/wait-control-plane: ["10m", "10s"]
+  default/wait-worker-nodes: ["5m", "10s"]
   default/wait-delete-cluster: ["3m", "10s"]
-  default/wait-machine-upgrade: ["15m", "10s"]
-  default/wait-machine-remediation: ["3m", "10s"]
+  default/wait-machine-upgrade: ["20m", "10s"]
+  default/wait-machine-remediation: ["5m", "10s"]

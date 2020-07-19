@@ -37,8 +37,36 @@ func (src *KubeadmConfig) ConvertTo(dstRaw conversion.Hub) error {
 	}
 
 	dst.Status.DataSecretName = restored.Status.DataSecretName
+	dst.Status.ObservedGeneration = restored.Status.ObservedGeneration
 	dst.Spec.Verbosity = restored.Spec.Verbosity
 	dst.Spec.UseExperimentalRetryJoin = restored.Spec.UseExperimentalRetryJoin
+	dst.Spec.DiskSetup = restored.Spec.DiskSetup
+	dst.Spec.Mounts = restored.Spec.Mounts
+	dst.Spec.Files = restored.Spec.Files
+	dst.Status.Conditions = restored.Status.Conditions
+
+	// Track files successfully up-converted. We need this to dedupe
+	// restored files from user-updated files on up-conversion. We store
+	// them as pointers for later modification without paying for second
+	// lookup.
+	dstPaths := make(map[string]*kubeadmbootstrapv1alpha3.File, len(dst.Spec.Files))
+	for i := range dst.Spec.Files {
+		path := dst.Spec.Files[i].Path
+		dstPaths[path] = &dst.Spec.Files[i]
+	}
+
+	// If we find a restored file matching the file path of a v1alpha2
+	// file with no content, we should restore contentFrom to that file.
+	for i := range restored.Spec.Files {
+		restoredFile := restored.Spec.Files[i]
+		dstFile, exists := dstPaths[restoredFile.Path]
+		if exists && dstFile.Content == "" {
+			if dstFile.ContentFrom == nil {
+				dstFile.ContentFrom = new(kubeadmbootstrapv1alpha3.FileSource)
+			}
+			*dstFile.ContentFrom = *restoredFile.ContentFrom
+		}
+	}
 
 	return nil
 }
@@ -128,4 +156,9 @@ func Convert_v1alpha2_KubeadmConfigSpec_To_v1alpha3_KubeadmConfigSpec(in *Kubead
 // Convert_v1alpha3_KubeadmConfigSpec_To_v1alpha2_KubeadmConfigSpec converts from the Hub version (v1alpha3) of the KubeadmConfigSpec to this version.
 func Convert_v1alpha3_KubeadmConfigSpec_To_v1alpha2_KubeadmConfigSpec(in *kubeadmbootstrapv1alpha3.KubeadmConfigSpec, out *KubeadmConfigSpec, s apiconversion.Scope) error {
 	return autoConvert_v1alpha3_KubeadmConfigSpec_To_v1alpha2_KubeadmConfigSpec(in, out, s)
+}
+
+// Convert_v1alpha3_File_To_v1alpha2_File converts from the Hub version (v1alpha3) of the File to this version.
+func Convert_v1alpha3_File_To_v1alpha2_File(in *kubeadmbootstrapv1alpha3.File, out *File, s apiconversion.Scope) error {
+	return autoConvert_v1alpha3_File_To_v1alpha2_File(in, out, s)
 }

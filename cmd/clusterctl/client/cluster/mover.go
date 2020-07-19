@@ -275,7 +275,7 @@ func getMoveSequence(graph *objectGraph) *moveSequence {
 		// NB. it is necessary to filter out nodes not belonging to a cluster because e.g. discovery reads all the secrets,
 		// but only few of them are related to Clusters/Machines etc.
 		moveGroup := moveGroup{}
-		for _, n := range graph.getNodesWithClusterTenants() {
+		for _, n := range graph.getNodesWithTenants() {
 			// If the node was already included in the moveSequence, skip it.
 			if moveSequence.hasNode(n) {
 				continue
@@ -360,7 +360,7 @@ func patchCluster(proxy Proxy, cluster *node, patch client.Patch) error {
 func (o *objectMover) ensureNamespaces(graph *objectGraph, toProxy Proxy) error {
 	ensureNamespaceBackoff := newWriteBackoff()
 	namespaces := sets.NewString()
-	for _, node := range graph.getNodesWithClusterTenants() {
+	for _, node := range graph.getNodesWithTenants() {
 		namespace := node.identity.Namespace
 
 		// If the namespace was already processed, skip it.
@@ -394,7 +394,8 @@ func (o *objectMover) ensureNamespace(toProxy Proxy, namespace string) error {
 		Name: namespace,
 	}
 
-	if err := cs.Get(ctx, key, ns); err == nil {
+	err = cs.Get(ctx, key, ns)
+	if err == nil {
 		return nil
 	}
 	if apierrors.IsForbidden(err) {

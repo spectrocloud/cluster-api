@@ -50,14 +50,18 @@ func Test_clusterctlClient_GetProvidersConfig(t *testing.T) {
 			field: field{
 				client: newFakeClient(newFakeConfig()),
 			},
+			// note: these will be sorted by name by the Providers() call, so be sure they are in alphabetical order here too
 			wantProviders: []string{
 				config.ClusterAPIProviderName,
 				config.KubeadmBootstrapProviderName,
+				config.TalosBootstrapProviderName,
 				config.KubeadmControlPlaneProviderName,
+				config.TalosControlPlaneProviderName,
 				config.AWSProviderName,
 				config.AzureProviderName,
 				config.Metal3ProviderName,
 				config.OpenStackProviderName,
+				config.PacketProviderName,
 				config.VSphereProviderName,
 			},
 			wantErr: false,
@@ -67,15 +71,19 @@ func Test_clusterctlClient_GetProvidersConfig(t *testing.T) {
 			field: field{
 				client: newFakeClient(newFakeConfig().WithProvider(customProviderConfig)),
 			},
+			// note: these will be sorted by name by the Providers() call, so be sure they are in alphabetical order here too
 			wantProviders: []string{
 				config.ClusterAPIProviderName,
 				customProviderConfig.Name(),
 				config.KubeadmBootstrapProviderName,
+				config.TalosBootstrapProviderName,
 				config.KubeadmControlPlaneProviderName,
+				config.TalosControlPlaneProviderName,
 				config.AWSProviderName,
 				config.AzureProviderName,
 				config.Metal3ProviderName,
 				config.OpenStackProviderName,
+				config.PacketProviderName,
 				config.VSphereProviderName,
 			},
 			wantErr: false,
@@ -290,6 +298,16 @@ func Test_clusterctlClient_templateOptionsToVariables(t *testing.T) {
 			wantErr: true,
 		},
 		{
+			name: "tolerates subdomains as cluster Name",
+			args: args{
+				options: GetClusterTemplateOptions{
+					ClusterName:     "foo.bar",
+					TargetNamespace: "baz",
+				},
+			},
+			wantErr: false,
+		},
+		{
 			name: "fails for invalid namespace Name",
 			args: args{
 				options: GetClusterTemplateOptions{
@@ -410,7 +428,7 @@ func Test_clusterctlClient_GetClusterTemplate(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 
 	path := filepath.Join(tmpDir, "cluster-template.yaml")
-	g.Expect(ioutil.WriteFile(path, rawTemplate, 0644)).To(Succeed())
+	g.Expect(ioutil.WriteFile(path, rawTemplate, 0600)).To(Succeed())
 
 	// Template on a repository & in a ConfigMap
 	configMap := &corev1.ConfigMap{

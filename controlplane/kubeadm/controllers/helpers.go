@@ -18,6 +18,7 @@ package controllers
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 
 	"github.com/pkg/errors"
@@ -32,9 +33,10 @@ import (
 	"sigs.k8s.io/cluster-api/controllers/external"
 	controlplanev1 "sigs.k8s.io/cluster-api/controlplane/kubeadm/api/v1alpha3"
 	"sigs.k8s.io/cluster-api/controlplane/kubeadm/internal"
-	"sigs.k8s.io/cluster-api/controlplane/kubeadm/internal/hash"
+	"sigs.k8s.io/cluster-api/controlplane/kubeadm/internal/machinefilters"
 	capierrors "sigs.k8s.io/cluster-api/errors"
 	"sigs.k8s.io/cluster-api/util"
+	"sigs.k8s.io/cluster-api/util/certs"
 	"sigs.k8s.io/cluster-api/util/kubeconfig"
 	"sigs.k8s.io/cluster-api/util/patch"
 	"sigs.k8s.io/cluster-api/util/secret"
@@ -46,7 +48,8 @@ func (r *KubeadmControlPlaneReconciler) reconcileKubeconfig(ctx context.Context,
 		return nil
 	}
 
-	_, err := secret.GetFromNamespacedName(ctx, r.Client, clusterName, secret.Kubeconfig)
+	controllerOwnerRef := *metav1.NewControllerRef(kcp, controlplanev1.GroupVersion.WithKind("KubeadmControlPlane"))
+	configSecret, err := secret.GetFromNamespacedName(ctx, r.Client, clusterName, secret.Kubeconfig)
 	switch {
 	case apierrors.IsNotFound(err):
 		createErr := kubeconfig.CreateSecretWithOwner(
@@ -54,18 +57,33 @@ func (r *KubeadmControlPlaneReconciler) reconcileKubeconfig(ctx context.Context,
 			r.Client,
 			clusterName,
 			endpoint.String(),
-			*metav1.NewControllerRef(kcp, controlplanev1.GroupVersion.WithKind("KubeadmControlPlane")),
+			controllerOwnerRef,
 		)
-		if createErr != nil {
-			if createErr == kubeconfig.ErrDependentCertificateNotFound {
-				return errors.Wrapf(&capierrors.RequeueAfterError{RequeueAfter: dependentCertRequeueAfter},
-					"could not find secret %q for Cluster %q in namespace %q, requeuing",
-					secret.ClusterCA, clusterName.Name, clusterName.Namespace)
-			}
-			return createErr
+		if errors.Is(createErr, kubeconfig.ErrDependentCertificateNotFound) {
+			return errors.Wrapf(&capierrors.RequeueAfterError{RequeueAfter: dependentCertRequeueAfter},
+				"could not find secret %q, requeuing", secret.ClusterCA)
 		}
+		// always return if we have just created in order to skip rotation checks
+		return createErr
 	case err != nil:
-		return errors.Wrapf(err, "failed to retrieve kubeconfig Secret for Cluster %q in namespace %q", clusterName.Name, clusterName.Namespace)
+		return errors.Wrap(err, "failed to retrieve kubeconfig Secret")
+	}
+
+	// only do rotation on owned secrets
+	if !util.IsControlledBy(configSecret, kcp) {
+		return nil
+	}
+
+	needsRotation, err := kubeconfig.NeedsClientCertRotation(configSecret, certs.ClientCertificateRenewalDuration)
+	if err != nil {
+		return err
+	}
+
+	if needsRotation {
+		r.Log.Info("rotating kubeconfig secret")
+		if err := kubeconfig.RegenerateSecret(ctx, r.Client, configSecret); err != nil {
+			return errors.Wrap(err, "failed to regenerate kubeconfig")
+		}
 	}
 
 	return nil
@@ -117,7 +135,7 @@ func (r *KubeadmControlPlaneReconciler) cloneConfigsAndGenerateMachine(ctx conte
 		Namespace:   kcp.Namespace,
 		OwnerRef:    infraCloneOwner,
 		ClusterName: cluster.Name,
-		Labels:      internal.ControlPlaneLabelsForClusterWithHash(cluster.Name, hash.Compute(&kcp.Spec)),
+		Labels:      internal.ControlPlaneLabelsForCluster(cluster.Name),
 	})
 	if err != nil {
 		// Safe to return early here since no resources have been created yet.
@@ -182,7 +200,7 @@ func (r *KubeadmControlPlaneReconciler) generateKubeadmConfig(ctx context.Contex
 		ObjectMeta: metav1.ObjectMeta{
 			Name:            names.SimpleNameGenerator.GenerateName(kcp.Name + "-"),
 			Namespace:       kcp.Namespace,
-			Labels:          internal.ControlPlaneLabelsForClusterWithHash(cluster.Name, hash.Compute(&kcp.Spec)),
+			Labels:          internal.ControlPlaneLabelsForCluster(cluster.Name),
 			OwnerReferences: []metav1.OwnerReference{owner},
 		},
 		Spec: *spec,
@@ -208,7 +226,7 @@ func (r *KubeadmControlPlaneReconciler) generateMachine(ctx context.Context, kcp
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      names.SimpleNameGenerator.GenerateName(kcp.Name + "-"),
 			Namespace: kcp.Namespace,
-			Labels:    internal.ControlPlaneLabelsForClusterWithHash(cluster.Name, hash.Compute(&kcp.Spec)),
+			Labels:    internal.ControlPlaneLabelsForCluster(cluster.Name),
 			OwnerReferences: []metav1.OwnerReference{
 				*metav1.NewControllerRef(kcp, controlplanev1.GroupVersion.WithKind("KubeadmControlPlane")),
 			},
@@ -224,8 +242,30 @@ func (r *KubeadmControlPlaneReconciler) generateMachine(ctx context.Context, kcp
 		},
 	}
 
+	// Machine's bootstrap config may be missing ClusterConfiguration if it is not the first machine in the control plane.
+	// We store ClusterConfiguration as annotation here to detect any changes in KCP ClusterConfiguration and rollout the machine if any.
+	clusterConfig, err := json.Marshal(kcp.Spec.KubeadmConfigSpec.ClusterConfiguration)
+	if err != nil {
+		return errors.Wrap(err, "failed to marshal cluster configuration")
+	}
+	machine.SetAnnotations(map[string]string{controlplanev1.KubeadmClusterConfigurationAnnotation: string(clusterConfig)})
+
 	if err := r.Client.Create(ctx, machine); err != nil {
-		return errors.Wrap(err, "Failed to create machine")
+		return errors.Wrap(err, "failed to create machine")
 	}
 	return nil
+}
+
+// machinesNeedingRollout return a list of machines that need to be rolled out.
+func (r *KubeadmControlPlaneReconciler) machinesNeedingRollout(ctx context.Context, c *internal.ControlPlane) internal.FilterableMachineCollection {
+	// Ignore machines to be deleted.
+	machines := c.Machines.Filter(machinefilters.Not(machinefilters.HasDeletionTimestamp))
+
+	// Return machines if they are scheduled for rollout or if with an outdated configuration.
+	return machines.AnyFilter(
+		// Machines that are scheduled for rollout (KCP.Spec.UpgradeAfter set, the UpgradeAfter deadline is expired, and the machine was created before the deadline).
+		machinefilters.ShouldRolloutAfter(c.KCP.Spec.UpgradeAfter),
+		// Machines that do not match with KCP config.
+		machinefilters.Not(machinefilters.MatchesKCPConfiguration(ctx, r.Client, c.KCP)),
+	)
 }

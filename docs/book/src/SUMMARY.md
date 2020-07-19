@@ -11,6 +11,7 @@
     - [Upgrade](./tasks/upgrade.md)
     - [Configure a MachineHealthCheck](./tasks/healthcheck.md)
     - [Kubeadm based control plane management](./tasks/kubeadm-control-plane.md)
+    - [Changing a Machine Template](./tasks/change-machine-template.md)
 - [clusterctl CLI](./clusterctl/overview.md)
     - [clusterctl Commands](clusterctl/commands/commands.md)
         - [init](clusterctl/commands/init.md)
@@ -53,4 +54,5 @@
     - [Ports](./reference/ports.md)
     - [Code of Conduct](./code-of-conduct.md)
     - [Contributing](./CONTRIBUTING.md)
+    - [Version Support](./reference/versions.md)
     - [Roadmap](./roadmap.md)

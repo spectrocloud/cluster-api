@@ -34,8 +34,11 @@ import (
 	"sigs.k8s.io/cluster-api/controllers/external"
 	"sigs.k8s.io/cluster-api/controllers/metrics"
 	capierrors "sigs.k8s.io/cluster-api/errors"
+	expv1alpha3 "sigs.k8s.io/cluster-api/exp/api/v1alpha3"
+	"sigs.k8s.io/cluster-api/feature"
 	"sigs.k8s.io/cluster-api/util"
 	"sigs.k8s.io/cluster-api/util/annotations"
+	"sigs.k8s.io/cluster-api/util/conditions"
 	"sigs.k8s.io/cluster-api/util/patch"
 	"sigs.k8s.io/cluster-api/util/predicates"
 	"sigs.k8s.io/cluster-api/util/secret"
@@ -124,15 +127,34 @@ func (r *ClusterReconciler) Reconcile(req ctrl.Request) (_ ctrl.Result, reterr e
 	}
 
 	defer func() {
+		// Always update the readyCondition with the summary of the cluster conditions.
+		conditions.SetSummary(cluster,
+			conditions.WithConditions(
+				clusterv1.ControlPlaneReadyCondition,
+				clusterv1.InfrastructureReadyCondition,
+			),
+		)
+
 		// Always reconcile the Status.Phase field.
 		r.reconcilePhase(ctx, cluster)
 		r.reconcileMetrics(ctx, cluster)
 
 		// Always attempt to Patch the Cluster object and status after each reconciliation.
-		if err := patchHelper.Patch(ctx, cluster); err != nil {
+		// Patch ObservedGeneration only if the reconciliation completed successfully
+		patchOpts := []patch.Option{}
+		if reterr == nil {
+			patchOpts = append(patchOpts, patch.WithStatusObservedGeneration{})
+		}
+		if err := patchHelper.Patch(ctx, cluster, patchOpts...); err != nil {
 			reterr = kerrors.NewAggregate([]error{reterr, err})
 		}
 	}()
+
+	// Add finalizer first if not exist to avoid the race condition between init and delete
+	if !controllerutil.ContainsFinalizer(cluster, clusterv1.ClusterFinalizer) {
+		controllerutil.AddFinalizer(cluster, clusterv1.ClusterFinalizer)
+		return ctrl.Result{}, nil
+	}
 
 	// Handle deletion reconciliation loop.
 	if !cluster.ObjectMeta.DeletionTimestamp.IsZero() {
@@ -146,9 +168,6 @@ func (r *ClusterReconciler) Reconcile(req ctrl.Request) (_ ctrl.Result, reterr e
 // reconcile handles cluster reconciliation.
 func (r *ClusterReconciler) reconcile(ctx context.Context, cluster *clusterv1.Cluster) (ctrl.Result, error) {
 	logger := r.Log.WithValues("cluster", cluster.Name, "namespace", cluster.Namespace)
-
-	// If object doesn't have a finalizer, add one.
-	controllerutil.AddFinalizer(cluster, clusterv1.ClusterFinalizer)
 
 	// Call the inner reconciliation methods.
 	reconciliationErrors := []error{
@@ -317,6 +336,7 @@ type clusterDescendants struct {
 	machineSets          clusterv1.MachineSetList
 	controlPlaneMachines clusterv1.MachineList
 	workerMachines       clusterv1.MachineList
+	machinePools         expv1alpha3.MachinePoolList
 }
 
 // length returns the number of descendants
@@ -357,10 +377,19 @@ func (c *clusterDescendants) descendantNames() string {
 	if len(workerMachineNames) > 0 {
 		descendants = append(descendants, "Worker machines: "+strings.Join(workerMachineNames, ","))
 	}
+	if feature.Gates.Enabled(feature.MachinePool) {
+		machinePoolNames := make([]string, len(c.machinePools.Items))
+		for i, machinePool := range c.machinePools.Items {
+			machinePoolNames[i] = machinePool.Name
+		}
+		if len(machinePoolNames) > 0 {
+			descendants = append(descendants, "Machine pools: "+strings.Join(machinePoolNames, ","))
+		}
+	}
 	return strings.Join(descendants, ";")
 }
 
-// listDescendants returns a list of all MachineDeployments, MachineSets, and Machines for the cluster.
+// listDescendants returns a list of all MachineDeployments, MachineSets, MachinePools and Machines for the cluster.
 func (r *ClusterReconciler) listDescendants(ctx context.Context, cluster *clusterv1.Cluster) (clusterDescendants, error) {
 	var descendants clusterDescendants
 
@@ -377,6 +406,11 @@ func (r *ClusterReconciler) listDescendants(ctx context.Context, cluster *cluste
 		return descendants, errors.Wrapf(err, "failed to list MachineSets for cluster %s/%s", cluster.Namespace, cluster.Name)
 	}
 
+	if feature.Gates.Enabled(feature.MachinePool) {
+		if err := r.Client.List(ctx, &descendants.machinePools, listOptions...); err != nil {
+			return descendants, errors.Wrapf(err, "failed to list MachinePools for the cluster %s/%s", cluster.Namespace, cluster.Name)
+		}
+	}
 	var machines clusterv1.MachineList
 	if err := r.Client.List(ctx, &machines, listOptions...); err != nil {
 		return descendants, errors.Wrapf(err, "failed to list Machines for cluster %s/%s", cluster.Namespace, cluster.Name)
@@ -404,7 +438,7 @@ func (c clusterDescendants) filterOwnedDescendants(cluster *clusterv1.Cluster) (
 			return nil
 		}
 
-		if util.PointsTo(acc.GetOwnerReferences(), &cluster.ObjectMeta) {
+		if util.IsOwnedByObject(acc, cluster) {
 			ownedDescendants = append(ownedDescendants, o)
 		}
 
@@ -417,6 +451,10 @@ func (c clusterDescendants) filterOwnedDescendants(cluster *clusterv1.Cluster) (
 		&c.workerMachines,
 		&c.controlPlaneMachines,
 	}
+	if feature.Gates.Enabled(feature.MachinePool) {
+		lists = append([]runtime.Object{&c.machinePools}, lists...)
+	}
+
 	for _, list := range lists {
 		if err := meta.EachListItem(list, eachFunc); err != nil {
 			return nil, errors.Wrapf(err, "error finding owned descendants of cluster %s/%s", cluster.Namespace, cluster.Name)

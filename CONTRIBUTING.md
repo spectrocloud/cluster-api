@@ -2,14 +2,20 @@
 <!-- START doctoc generated TOC please keep comment here to allow auto update -->
 <!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
 
-
-- [Contributor License Agreements](#contributor-license-agreements)
-- [Finding Things That Need Help](#finding-things-that-need-help)
-- [Contributing a Patch](#contributing-a-patch)
-- [Backporting a Patch](#backporting-a-patch)
-  - [Merge Approval](#merge-approval)
-  - [Google Doc Viewing Permissions](#google-doc-viewing-permissions)
-  - [Issue and Pull Request Management](#issue-and-pull-request-management)
+* [Contributing Guidelines](#contributing-guidelines)
+  * [Contributor License Agreements](#contributor-license-agreements)
+  * [Finding Things That Need Help](#finding-things-that-need-help)
+  * [Contributing a Patch](#contributing-a-patch)
+  * [Reviewing a Patch](#reviewing-a-patch)
+    * [Approvals](#approvals)
+  * [Reviews](#reviews)
+  * [Backporting a Patch](#backporting-a-patch)
+  * [Features and bugs](#features-and-bugs)
+  * [Proposal process (CAEP)](#proposal-process-caep)
+  * [Experiments](#experiments)
+  * [Breaking Changes](#breaking-changes)
+  * [Google Doc Viewing Permissions](#google-doc-viewing-permissions)
+  * [Issue and Pull Request Management](#issue-and-pull-request-management)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
 
@@ -30,24 +36,56 @@ and instructions for signing it [can be found here](https://github.com/kubernete
 If you're new to the project and want to help, but don't know where to start, we have a semi-curated list of issues that
 should not need deep knowledge of the system. [Have a look and see if anything sounds
 interesting](https://github.com/kubernetes-sigs/cluster-api/issues?q=is%3Aopen+is%3Aissue+label%3A%22good+first+issue%22).
+Before starting to work on the issue, make sure that it doesn't have a [lifecycle/active](https://github.com/kubernetes-sigs/cluster-api/labels/lifecycle%2Factive) label. If the issue has been assigned, reach out to the assignee. 
 Alternatively, read some of the docs on other controllers and try to write your own, file and fix any/all issues that
 come up, including gaps in documentation!
+
 
 ## Contributing a Patch
 
 1. If you haven't already done so, sign a Contributor License Agreement (see details above).
+1. If working on an issue, signal other contributors that you are actively working on it using `/lifecycle active`.  
 1. Fork the desired repo, develop and test your code changes.
 1. Submit a pull request.
     1. All code PR must be labeled with one of
         - ⚠️ (:warning:, major or breaking changes)
-        - ✨ (:sparkles:, minor or feature additions)
+        - ✨ (:sparkles:, feature additions)
         - 🐛 (:bug:, patch and bugfixes)
         - 📖 (:book:, documentation or proposals)
-        - 🏃 (:running:, other)
+        - 🌱 (:seedling:, minor or other)
 
 All changes must be code reviewed. Coding conventions and standards are explained in the official [developer
 docs](https://github.com/kubernetes/community/tree/master/contributors/devel). Expect reviewers to request that you
 avoid common [go style mistakes](https://github.com/golang/go/wiki/CodeReviewComments) in your PRs.
+
+## Reviewing a Patch
+
+See [Code Review in Cluster API](REVIEWING.md). 
+
+### Approvals
+
+Please see the [Kubernetes community document on pull
+requests](https://git.k8s.io/community/contributors/guide/pull-requests.md) for more information about the merge
+process.
+
+- A PR is approved by one of the project maintainers and owners after reviews.
+- Approvals should be the very last action a maintainer takes on a pull request.
+
+## Reviews
+
+> Parts of the following content have been adapted from https://google.github.io/eng-practices/review.
+
+Any Kubernetes organization member can leave reviews and `/lgtm` a pull request.
+
+Code reviews should generally look at:
+
+- **Design**: Is the code well-designed and consistent with the rest of the system?
+- **Functionality**: Does the code behave as the author (or linked issue) intended? Is the way the code behaves good for its users?
+- **Complexity**: Could the code be made simpler?  Would another developer be able to easily understand and use this code when they come across it in the future?
+- **Tests**: Does the code have correct and well-designed tests?
+- **Naming**: Did the developer choose clear names for variable, types, methods, functions, etc.?
+- **Comments**: Are the comments clear and useful? Do they explain the why rather than what?
+- **Documentation**: Did the developer also update relevant documentation?
 
 ## Backporting a Patch
 
@@ -85,13 +123,13 @@ Proof of concepts, code experiments, or other initiatives can live under the `ex
   and require support from bootstrap, control plane, or infrastructure providers.
 - Experiments follow a strict lifecycle: Alpha -> Beta prior to Graduation.
   - Alpha-stage experiments:
-    - SHOULD not be enabled by default and any feature gates MUST be marked as 'Alpha' 
+    - SHOULD not be enabled by default and any feature gates MUST be marked as 'Alpha'
     - MUST be associated with a CAEP that is merged and in at least a provisional state
     - MAY be considered inactive and marked as deprecated if the following does not happen within the course of 1 minor release cycle:
       - Transition to Beta-stage
       - Active development towards progressing to Beta-stage
       - Either direct or downstream user evaluation
-    - Any deprecated Alpha-stage experiment MAY be removed in the next minor release. 
+    - Any deprecated Alpha-stage experiment MAY be removed in the next minor release.
   - Beta-stage experiments:
     - SHOULD be enabled by default, and any feature gates MUST be marked as 'Beta'
     - MUST be associated with a CAEP that is at least in the experimental state
@@ -101,7 +139,7 @@ Proof of concepts, code experiments, or other initiatives can live under the `ex
       - Graduate
       - Active development towards Graduation
       - Either direct or downstream user consumption
-    - Any deprecated Beta-stage experiment MAY be removed after being deprecated for an entire minor release. 
+    - Any deprecated Beta-stage experiment MAY be removed after being deprecated for an entire minor release.
 - Experiment Graduation MUST coincide with a breaking Cluster API release
 - Experiment Graduation checklist:
   - [ ] MAY provide a way to be disabled, any feature gates MUST be marked as 'GA'
@@ -135,12 +173,6 @@ Examples of breaking changes include:
 There may, at times, need to be exceptions where breaking changes are allowed in release branches. These are at the
 discretion of the project's maintainers, and must be carefully considered before merging. An example of an allowed
 breaking change might be a fix for a behavioral bug that was released in an initial minor version (such as `v0.3.0`).
-
-## Merge Approval
-
-Please see the [Kubernetes community document on pull
-requests](https://git.k8s.io/community/contributors/guide/pull-requests.md) for more information about the merge
-process.
 
 ## Google Doc Viewing Permissions
 

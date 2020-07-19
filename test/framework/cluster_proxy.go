@@ -25,7 +25,6 @@ import (
 	goruntime "runtime"
 	"strings"
 
-	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 
 	corev1 "k8s.io/api/core/v1"
@@ -36,6 +35,7 @@ import (
 	"k8s.io/client-go/tools/clientcmd/api"
 	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha3"
 	"sigs.k8s.io/cluster-api/test/framework/exec"
+	"sigs.k8s.io/cluster-api/test/framework/internal/log"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -155,6 +155,14 @@ func (p *clusterProxy) Apply(ctx context.Context, resources []byte) error {
 	return exec.KubectlApply(ctx, p.kubeconfigPath, resources)
 }
 
+// Apply wraps `kubectl apply ...` and prints the output so we can see what gets applied to the cluster.
+func (p *clusterProxy) ApplyWithArgs(ctx context.Context, resources []byte, args ...string) error {
+	Expect(ctx).NotTo(BeNil(), "ctx is required for Apply")
+	Expect(resources).NotTo(BeNil(), "resources is required for Apply")
+
+	return exec.KubectlApplyWithArgs(ctx, p.kubeconfigPath, resources, args...)
+}
+
 func (p *clusterProxy) getConfig() *rest.Config {
 	config, err := clientcmd.LoadFromFile(p.kubeconfigPath)
 	Expect(err).ToNot(HaveOccurred(), "Failed to load Kubeconfig file from %q", p.kubeconfigPath)
@@ -175,7 +183,7 @@ func (p *clusterProxy) GetWorkloadCluster(ctx context.Context, namespace, name s
 	// gets the kubeconfig from the cluster
 	config := p.getKubeconfig(ctx, namespace, name)
 
-	// if we are on mac and the cluster is a DockerCluster, it is required to fix the master address
+	// if we are on mac and the cluster is a DockerCluster, it is required to fix the control plane address
 	// by using localhost:load-balancer-host-port instead of the address used in the docker network.
 	if goruntime.GOOS == "darwin" && p.isDockerCluster(ctx, namespace, name) {
 		p.fixConfig(ctx, name, config)
@@ -218,12 +226,12 @@ func (p *clusterProxy) fixConfig(ctx context.Context, name string, config *api.C
 	port, err := findLoadBalancerPort(ctx, name)
 	Expect(err).ToNot(HaveOccurred(), "Failed to get load balancer port")
 
-	masterURL := &url.URL{
+	controlPlaneURL := &url.URL{
 		Scheme: "https",
 		Host:   "127.0.0.1:" + port,
 	}
 	currentCluster := config.Contexts[config.CurrentContext].Cluster
-	config.Clusters[currentCluster].Server = masterURL.String()
+	config.Clusters[currentCluster].Server = controlPlaneURL.String()
 }
 
 func findLoadBalancerPort(ctx context.Context, name string) (string, error) {
@@ -246,7 +254,7 @@ func (p *clusterProxy) Dispose(ctx context.Context) {
 
 	if p.shouldCleanupKubeconfig {
 		if err := os.Remove(p.kubeconfigPath); err != nil {
-			fmt.Fprintf(GinkgoWriter, "Deleting the kubeconfig file %q file. You may need to remove this by hand.\n", p.kubeconfigPath)
+			log.Logf("Deleting the kubeconfig file %q file. You may need to remove this by hand.", p.kubeconfigPath)
 		}
 	}
 }

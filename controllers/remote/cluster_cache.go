@@ -19,13 +19,16 @@ package remote
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"sync"
 	"time"
 
 	"github.com/go-logr/logr"
 	"github.com/pkg/errors"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	kerrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/runtime/serializer"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes/scheme"
@@ -34,6 +37,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
@@ -42,9 +46,11 @@ import (
 )
 
 const (
+	defaultClientTimeout = 10 * time.Second
+
 	healthCheckPollInterval       = 10 * time.Second
 	healthCheckRequestTimeout     = 5 * time.Second
-	healthCheckUnhealthyThreshold = 3
+	healthCheckUnhealthyThreshold = 10
 )
 
 // clusterCache embeds cache.Cache and combines it with a stop channel.
@@ -73,6 +79,10 @@ func (cc *clusterCache) Stop() {
 type ClusterCacheTracker struct {
 	log    logr.Logger
 	client client.Client
+	scheme *runtime.Scheme
+
+	delegatingClientsLock sync.RWMutex
+	delegatingClients     map[client.ObjectKey]*client.DelegatingClient
 
 	clusterCachesLock sync.RWMutex
 	clusterCaches     map[client.ObjectKey]*clusterCache
@@ -84,10 +94,12 @@ type ClusterCacheTracker struct {
 // NewClusterCacheTracker creates a new ClusterCacheTracker.
 func NewClusterCacheTracker(log logr.Logger, manager ctrl.Manager) (*ClusterCacheTracker, error) {
 	m := &ClusterCacheTracker{
-		log:           log,
-		client:        manager.GetClient(),
-		clusterCaches: make(map[client.ObjectKey]*clusterCache),
-		watches:       make(map[client.ObjectKey]map[watchInfo]struct{}),
+		log:               log,
+		client:            manager.GetClient(),
+		scheme:            manager.GetScheme(),
+		delegatingClients: make(map[client.ObjectKey]*client.DelegatingClient),
+		clusterCaches:     make(map[client.ObjectKey]*clusterCache),
+		watches:           make(map[client.ObjectKey]map[watchInfo]struct{}),
 	}
 
 	return m, nil
@@ -101,9 +113,23 @@ type Watcher interface {
 
 // watchInfo is used as a map key to uniquely identify a watch. Because predicates is a slice, it cannot be included.
 type watchInfo struct {
-	watcher      Watcher
-	kind         runtime.Object
-	eventHandler handler.EventHandler
+	watcher Watcher
+	gvk     schema.GroupVersionKind
+
+	// Comparing the eventHandler as an interface doesn't work because reflect.DeepEqual
+	// will assert functions are false if they are non-nil.
+	// Use a signature string representation instead as this can be compared.
+	// The signature function is expected to produce a unique output for each unique handler
+	// function that is passed to it.
+	// In combination with the watcher, this should be enough to identify unique watches.
+	eventHandlerSignature string
+}
+
+// eventHandlerSignature generates a unique identifier for the given eventHandler by
+// printing it to a string using "%#v".
+// Eg "&handler.EnqueueRequestsFromMapFunc{ToRequests:(handler.ToRequestsFunc)(0x271afb0)}"
+func eventHandlerSignature(h handler.EventHandler) string {
+	return fmt.Sprintf("%#v", h)
 }
 
 // watchExists returns true if watch has already been established. This does NOT hold any lock.
@@ -113,8 +139,12 @@ func (m *ClusterCacheTracker) watchExists(cluster client.ObjectKey, watch watchI
 		return false
 	}
 
-	_, watchFound := watchesForCluster[watch]
-	return watchFound
+	for w := range watchesForCluster {
+		if reflect.DeepEqual(w, watch) {
+			return true
+		}
+	}
+	return false
 }
 
 // deleteWatchesForCluster removes the watches for cluster from the tracker.
@@ -136,9 +166,6 @@ type WatchInput struct {
 	// Kind is the type of resource to watch.
 	Kind runtime.Object
 
-	// CacheOptions are used to specify options for the remote cache, such as the Scheme to use.
-	CacheOptions cache.Options
-
 	// EventHandler contains the event handlers to invoke for resource events.
 	EventHandler handler.EventHandler
 
@@ -149,10 +176,15 @@ type WatchInput struct {
 // Watch watches a remote cluster for resource events. If the watch already exists based on cluster, watcher,
 // kind, and eventHandler, then this is a no-op.
 func (m *ClusterCacheTracker) Watch(ctx context.Context, input WatchInput) error {
+	gvk, err := apiutil.GVKForObject(input.Kind, m.scheme)
+	if err != nil {
+		return err
+	}
+
 	wi := watchInfo{
-		watcher:      input.Watcher,
-		kind:         input.Kind,
-		eventHandler: input.EventHandler,
+		watcher:               input.Watcher,
+		gvk:                   gvk,
+		eventHandlerSignature: eventHandlerSignature(input.EventHandler),
 	}
 
 	// First, check if the watch already exists
@@ -183,7 +215,7 @@ func (m *ClusterCacheTracker) Watch(ctx context.Context, input WatchInput) error
 		m.watches[input.Cluster] = watchesForCluster
 	}
 
-	cache, err := m.getOrCreateClusterCache(ctx, input.Cluster, input.CacheOptions)
+	cache, err := m.getOrCreateClusterCache(ctx, input.Cluster)
 	if err != nil {
 		return err
 	}
@@ -197,14 +229,77 @@ func (m *ClusterCacheTracker) Watch(ctx context.Context, input WatchInput) error
 	return nil
 }
 
+// GetClient returns a client for the given cluster.
+func (m *ClusterCacheTracker) GetClient(ctx context.Context, cluster client.ObjectKey) (client.Client, error) {
+	return m.getOrCreateDelegatingClient(ctx, cluster)
+}
+
+// getOrCreateClusterClient returns a delegating client for the specified cluster, creating a new one if needed.
+func (m *ClusterCacheTracker) getOrCreateDelegatingClient(ctx context.Context, cluster client.ObjectKey) (client.Client, error) {
+	c := m.getDelegatingClient(cluster)
+	if c != nil {
+		return c, nil
+	}
+
+	return m.newDelegatingClient(ctx, cluster)
+}
+
+// getClusterCache returns the clusterCache for cluster, or nil if it does not exist.
+func (m *ClusterCacheTracker) getDelegatingClient(cluster client.ObjectKey) *client.DelegatingClient {
+	m.delegatingClientsLock.RLock()
+	defer m.delegatingClientsLock.RUnlock()
+
+	return m.delegatingClients[cluster]
+}
+
+// newDelegatingClient creates a new delegating client.
+func (m *ClusterCacheTracker) newDelegatingClient(ctx context.Context, cluster client.ObjectKey) (*client.DelegatingClient, error) {
+	m.delegatingClientsLock.Lock()
+	defer m.delegatingClientsLock.Unlock()
+
+	// If another goroutine created the client while this one was waiting to acquire the write lock, return that
+	// instead of overwriting it.
+	if delegatingClient, exists := m.delegatingClients[cluster]; exists {
+		return delegatingClient, nil
+	}
+
+	cache, err := m.getOrCreateClusterCache(ctx, cluster)
+	if err != nil {
+		return nil, err
+	}
+	config, err := RESTConfig(ctx, m.client, cluster)
+	if err != nil {
+		return nil, errors.Wrap(err, "error fetching REST client config for remote cluster")
+	}
+	config.Timeout = defaultClientTimeout
+	c, err := client.New(config, client.Options{Scheme: m.scheme})
+	if err != nil {
+		return nil, err
+	}
+	delegatingClient := &client.DelegatingClient{
+		Reader:       cache,
+		Writer:       c,
+		StatusClient: c,
+	}
+	m.delegatingClients[cluster] = delegatingClient
+	return delegatingClient, nil
+}
+
+func (m *ClusterCacheTracker) deleteDelegatingClient(cluster client.ObjectKey) {
+	m.delegatingClientsLock.Lock()
+	defer m.delegatingClientsLock.Unlock()
+
+	delete(m.delegatingClients, cluster)
+}
+
 // getOrCreateClusterCache returns the clusterCache for cluster, creating a new ClusterCache if needed.
-func (m *ClusterCacheTracker) getOrCreateClusterCache(ctx context.Context, cluster client.ObjectKey, cacheOptions cache.Options) (*clusterCache, error) {
+func (m *ClusterCacheTracker) getOrCreateClusterCache(ctx context.Context, cluster client.ObjectKey) (*clusterCache, error) {
 	cache := m.getClusterCache(cluster)
 	if cache != nil {
 		return cache, nil
 	}
 
-	return m.newClusterCache(ctx, cluster, cacheOptions)
+	return m.newClusterCache(ctx, cluster)
 }
 
 // getClusterCache returns the clusterCache for cluster, or nil if it does not exist.
@@ -216,7 +311,7 @@ func (m *ClusterCacheTracker) getClusterCache(cluster client.ObjectKey) *cluster
 }
 
 // newClusterCache creates and starts a new clusterCache for cluster.
-func (m *ClusterCacheTracker) newClusterCache(ctx context.Context, cluster client.ObjectKey, cacheOptions cache.Options) (*clusterCache, error) {
+func (m *ClusterCacheTracker) newClusterCache(ctx context.Context, cluster client.ObjectKey) (*clusterCache, error) {
 	m.clusterCachesLock.Lock()
 	defer m.clusterCachesLock.Unlock()
 
@@ -231,6 +326,15 @@ func (m *ClusterCacheTracker) newClusterCache(ctx context.Context, cluster clien
 		return nil, errors.Wrap(err, "error fetching REST client config for remote cluster")
 	}
 
+	mapper, err := apiutil.NewDynamicRESTMapper(config)
+	if err != nil {
+		return nil, errors.Wrap(err, "error creating dynamic rest mapper for remote cluster")
+	}
+
+	cacheOptions := cache.Options{
+		Scheme: m.scheme,
+		Mapper: mapper,
+	}
 	remoteCache, err := cache.New(config, cacheOptions)
 	if err != nil {
 		return nil, errors.Wrap(err, "error creating cache for remote cluster")
@@ -299,6 +403,20 @@ func (m *ClusterCacheTracker) healthCheckCluster(in *healthCheckInput) {
 	unhealthyCount := 0
 
 	runHealthCheckWithThreshold := func() (bool, error) {
+		cluster := &clusterv1.Cluster{}
+		if err := m.client.Get(context.TODO(), in.cluster, cluster); err != nil {
+			if apierrors.IsNotFound(err) {
+				// If the cluster can't be found, we should delete the cache.
+				return false, err
+			}
+			// Otherwise, requeue.
+			return false, nil
+		}
+		if !cluster.Status.InfrastructureReady || !cluster.Status.ControlPlaneInitialized {
+			// If the infrastructure or control plane aren't marked as ready, we should requeue and wait.
+			return false, nil
+		}
+
 		remoteCache := m.getClusterCache(in.cluster)
 		if remoteCache == nil {
 			// Cache for this cluster has already been cleaned up.
@@ -338,6 +456,7 @@ func (m *ClusterCacheTracker) healthCheckCluster(in *healthCheckInput) {
 		// Stop the cache and clean up
 		c.Stop()
 		m.deleteClusterCache(in.cluster)
+		m.deleteDelegatingClient(in.cluster)
 		m.deleteWatchesForCluster(in.cluster)
 	}
 }
@@ -366,34 +485,21 @@ func healthCheckPath(sourceCfg *rest.Config, requestTimeout time.Duration, path 
 // ClusterCacheReconciler is responsible for stopping remote cluster caches when
 // the cluster for the remote cache is being deleted.
 type ClusterCacheReconciler struct {
-	log     logr.Logger
-	client  client.Client
-	tracker *ClusterCacheTracker
+	Log     logr.Logger
+	Client  client.Client
+	Tracker *ClusterCacheTracker
 }
 
-func NewClusterCacheReconciler(
-	log logr.Logger,
-	mgr ctrl.Manager,
-	controllerOptions controller.Options,
-	cct *ClusterCacheTracker,
-) (*ClusterCacheReconciler, error) {
-	r := &ClusterCacheReconciler{
-		log:     log,
-		client:  mgr.GetClient(),
-		tracker: cct,
-	}
-
-	// Watch Clusters so we can stop and remove caches when Clusters are deleted.
+func (r *ClusterCacheReconciler) SetupWithManager(mgr ctrl.Manager, options controller.Options) error {
 	_, err := ctrl.NewControllerManagedBy(mgr).
 		For(&clusterv1.Cluster{}).
-		WithOptions(controllerOptions).
+		WithOptions(options).
 		Build(r)
 
 	if err != nil {
-		return nil, errors.Wrap(err, "failed to create cluster cache manager controller")
+		return errors.Wrap(err, "failed setting up with a controller manager")
 	}
-
-	return r, nil
+	return nil
 }
 
 // Reconcile reconciles Clusters and removes ClusterCaches for any Cluster that cannot be retrieved from the
@@ -401,12 +507,12 @@ func NewClusterCacheReconciler(
 func (r *ClusterCacheReconciler) Reconcile(req reconcile.Request) (reconcile.Result, error) {
 	ctx := context.Background()
 
-	log := r.log.WithValues("namespace", req.Namespace, "name", req.Name)
+	log := r.Log.WithValues("namespace", req.Namespace, "name", req.Name)
 	log.V(4).Info("Reconciling")
 
 	var cluster clusterv1.Cluster
 
-	err := r.client.Get(ctx, req.NamespacedName, &cluster)
+	err := r.Client.Get(ctx, req.NamespacedName, &cluster)
 	if err == nil {
 		log.V(4).Info("Cluster still exists")
 		return reconcile.Result{}, nil
@@ -417,7 +523,7 @@ func (r *ClusterCacheReconciler) Reconcile(req reconcile.Request) (reconcile.Res
 
 	log.V(4).Info("Cluster no longer exists")
 
-	c := r.tracker.getClusterCache(req.NamespacedName)
+	c := r.Tracker.getClusterCache(req.NamespacedName)
 	if c == nil {
 		log.V(4).Info("No current cluster cache exists - nothing to do")
 		return reconcile.Result{}, nil
@@ -426,10 +532,11 @@ func (r *ClusterCacheReconciler) Reconcile(req reconcile.Request) (reconcile.Res
 	log.V(4).Info("Stopping cluster cache")
 	c.Stop()
 
-	r.tracker.deleteClusterCache(req.NamespacedName)
+	r.Tracker.deleteClusterCache(req.NamespacedName)
+	r.Tracker.deleteDelegatingClient(req.NamespacedName)
 
 	log.V(4).Info("Deleting watches for cluster cache")
-	r.tracker.deleteWatchesForCluster(req.NamespacedName)
+	r.Tracker.deleteWatchesForCluster(req.NamespacedName)
 
 	return reconcile.Result{}, nil
 }

@@ -66,7 +66,7 @@ var _ = Describe("MachineDeployment Reconciler", func() {
 			"foo":                      "bar",
 			clusterv1.ClusterLabelName: testCluster.Name,
 		}
-		version := "1.10.3"
+		version := "v1.10.3"
 		deployment := &clusterv1.MachineDeployment{
 			ObjectMeta: metav1.ObjectMeta{
 				GenerateName: "md-",
@@ -122,8 +122,7 @@ var _ = Describe("MachineDeployment Reconciler", func() {
 			"apiVersion": "infrastructure.cluster.x-k8s.io/v1alpha3",
 			"metadata":   map[string]interface{}{},
 			"spec": map[string]interface{}{
-				"size":       "3xlarge",
-				"providerID": "test:////id",
+				"size": "3xlarge",
 			},
 		}
 		infraTmpl := &unstructured.Unstructured{
@@ -207,7 +206,7 @@ var _ = Describe("MachineDeployment Reconciler", func() {
 
 		firstMachineSet := machineSets.Items[0]
 		Expect(*firstMachineSet.Spec.Replicas).To(BeEquivalentTo(2))
-		Expect(*firstMachineSet.Spec.Template.Spec.Version).To(BeEquivalentTo("1.10.3"))
+		Expect(*firstMachineSet.Spec.Template.Spec.Version).To(BeEquivalentTo("v1.10.3"))
 
 		//
 		// Delete firstMachineSet and expect Reconcile to be called to replace it.
@@ -296,8 +295,8 @@ var _ = Describe("MachineDeployment Reconciler", func() {
 				if !metav1.IsControlledBy(&m, thirdMachineSet) {
 					continue
 				}
-				fakeInfrastructureRefReady(m.Spec.InfrastructureRef, infraResource)
-				fakeMachineNodeRef(&m)
+				providerID := fakeInfrastructureRefReady(m.Spec.InfrastructureRef, infraResource)
+				fakeMachineNodeRef(&m, providerID)
 			}
 
 			if err := testEnv.List(ctx, machineSets, msListOpts...); err != nil {
@@ -351,8 +350,8 @@ var _ = Describe("MachineDeployment Reconciler", func() {
 				if !metav1.IsControlledBy(&m, &newms) {
 					continue
 				}
-				fakeInfrastructureRefReady(m.Spec.InfrastructureRef, infraResource)
-				fakeMachineNodeRef(&m)
+				providerID := fakeInfrastructureRefReady(m.Spec.InfrastructureRef, infraResource)
+				fakeMachineNodeRef(&m, providerID)
 			}
 
 			listOpts := client.MatchingLabels(newLabels)

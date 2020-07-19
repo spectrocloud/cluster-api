@@ -19,14 +19,27 @@ package v1alpha3
 import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha3"
 
 	cabpkv1 "sigs.k8s.io/cluster-api/bootstrap/kubeadm/api/v1alpha3"
 	"sigs.k8s.io/cluster-api/errors"
 )
 
 const (
-	KubeadmControlPlaneFinalizer    = "kubeadm.controlplane.cluster.x-k8s.io"
+	KubeadmControlPlaneFinalizer = "kubeadm.controlplane.cluster.x-k8s.io"
+
+	// DEPRECATED: This label has been deprecated and it's not in use anymore.
 	KubeadmControlPlaneHashLabelKey = "kubeadm.controlplane.cluster.x-k8s.io/hash"
+
+	// SkipCoreDNSAnnotation annotation explicitly skips reconciling CoreDNS if set
+	SkipCoreDNSAnnotation = "controlplane.cluster.x-k8s.io/skip-coredns"
+
+	// SkipKubeProxyAnnotation annotation explicitly skips reconciling kube-proxy if set
+	SkipKubeProxyAnnotation = "controlplane.cluster.x-k8s.io/skip-kube-proxy"
+
+	// KubeadmClusterConfigurationAnnotation is a machine annotation that stores the json-marshalled string of KCP ClusterConfiguration.
+	// This annotation is used to detect any changes in ClusterConfiguration and trigger machine rollout in KCP.
+	KubeadmClusterConfigurationAnnotation = "controlplane.cluster.x-k8s.io/kubeadm-cluster-configuration"
 )
 
 // KubeadmControlPlaneSpec defines the desired state of KubeadmControlPlane.
@@ -38,8 +51,6 @@ type KubeadmControlPlaneSpec struct {
 	Replicas *int32 `json:"replicas,omitempty"`
 
 	// Version defines the desired Kubernetes version.
-	// +kubebuilder:validation:MinLength:=2
-	// +kubebuilder:validation:Pattern:=^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)([-0-9a-zA-Z_\.+]*)?$
 	Version string `json:"version"`
 
 	// InfrastructureTemplate is a required reference to a custom resource
@@ -109,6 +120,14 @@ type KubeadmControlPlaneStatus struct {
 	// state, and will be set to a descriptive error message.
 	// +optional
 	FailureMessage *string `json:"failureMessage,omitempty"`
+
+	// ObservedGeneration is the latest generation observed by the controller.
+	// +optional
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+
+	// Conditions defines current service state of the KubeadmControlPlane.
+	// +optional
+	Conditions clusterv1.Conditions `json:"conditions,omitempty"`
 }
 
 // +kubebuilder:object:root=true
@@ -130,6 +149,14 @@ type KubeadmControlPlane struct {
 
 	Spec   KubeadmControlPlaneSpec   `json:"spec,omitempty"`
 	Status KubeadmControlPlaneStatus `json:"status,omitempty"`
+}
+
+func (in *KubeadmControlPlane) GetConditions() clusterv1.Conditions {
+	return in.Status.Conditions
+}
+
+func (in *KubeadmControlPlane) SetConditions(conditions clusterv1.Conditions) {
+	in.Status.Conditions = conditions
 }
 
 // +kubebuilder:object:root=true

@@ -1,3 +1,5 @@
+# syntax=docker/dockerfile:experimental
+
 # Copyright 2018 The Kubernetes Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -13,7 +15,7 @@
 # limitations under the License.
 
 # Build the manager binary
-FROM golang:1.13.8 as builder
+FROM golang:1.13.12 as builder
 WORKDIR /workspace
 
 # Run this with docker build --build_arg goproxy=$(go env GOPROXY) to override the goproxy
@@ -32,15 +34,17 @@ RUN go mod download
 # Copy the sources
 COPY ./ ./
 
-# Cache the go build
-RUN go build .
+# Cache the go build into the the Go’s compiler cache folder so we take benefits of compiler caching across docker build calls
+RUN --mount=type=cache,target=/root/.cache/go-build \
+    go build .
 
 # Build
 ARG package=.
 ARG ARCH
 
-# Do not force rebuild of up-to-date packages (do not use -a)
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=${ARCH} \
+# Do not force rebuild of up-to-date packages (do not use -a) and use the compiler cache folder
+RUN --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 GOOS=linux GOARCH=${ARCH} \
     go build -ldflags '-extldflags "-static"' \
     -o manager ${package}
 
