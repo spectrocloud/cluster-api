@@ -172,6 +172,11 @@ func (r *MachineDeploymentReconciler) getNewMachineSet(d *clusterv1.MachineDeplo
 		return nil, err
 	}
 
+	// for recreate, when create new ms, set replica 0
+	if d.Spec.Strategy.Type == clusterv1.RollingRecreateMachineDeploymentStrategyType {
+		newReplicasCount = 0
+	}
+
 	*(newMS.Spec.Replicas) = newReplicasCount
 
 	// Set new machine set's annotation

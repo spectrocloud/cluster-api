@@ -318,6 +318,11 @@ func ReplicasAnnotationsNeedUpdate(ms *clusterv1.MachineSet, desiredReplicas, ma
 
 // MaxUnavailable returns the maximum unavailable machines a rolling deployment can take.
 func MaxUnavailable(deployment clusterv1.MachineDeployment) int32 {
+	// RollingRecreate, we always scale down only 1 machine for now
+	if IsRollingRecreate(&deployment) {
+		return int32(1)
+	}
+
 	if !IsRollingUpdate(&deployment) || *(deployment.Spec.Replicas) == 0 {
 		return int32(0)
 	}
@@ -497,6 +502,10 @@ func GetAvailableReplicaCountForMachineSets(machineSets []*clusterv1.MachineSet)
 // IsRollingUpdate returns true if the strategy type is a rolling update.
 func IsRollingUpdate(deployment *clusterv1.MachineDeployment) bool {
 	return deployment.Spec.Strategy.Type == clusterv1.RollingUpdateMachineDeploymentStrategyType
+}
+
+func IsRollingRecreate(deployment *clusterv1.MachineDeployment) bool {
+	return deployment.Spec.Strategy.Type == clusterv1.RollingRecreateMachineDeploymentStrategyType
 }
 
 // DeploymentComplete considers a deployment to be complete once all of its desired replicas

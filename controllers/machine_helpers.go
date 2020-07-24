@@ -66,3 +66,21 @@ func hasMatchingLabels(matchSelector metav1.LabelSelector, matchLabels map[strin
 	}
 	return true
 }
+
+func getAllMachinesCountForMS(ctx context.Context, c client.Client, ms *clusterv1.MachineSet) (int, error) {
+	if ms == nil {
+		return 0, nil
+	}
+
+	allMachines := &clusterv1.MachineList{}
+	selectorMap, err := metav1.LabelSelectorAsMap(&ms.Spec.Selector)
+
+	if err != nil {
+		return 0, errors.Wrapf(err, "failed to convert MachineSet %q label selector to a map", ms.Name)
+	}
+	if err := c.List(ctx, allMachines, client.InNamespace(ms.Namespace), client.MatchingLabels(selectorMap)); err != nil {
+		return 0, errors.Wrap(err, "failed to list machines")
+	}
+
+	return len(allMachines.Items), nil
+}

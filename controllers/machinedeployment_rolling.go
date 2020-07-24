@@ -17,6 +17,7 @@ limitations under the License.
 package controllers
 
 import (
+	"context"
 	"sort"
 
 	"github.com/pkg/errors"
@@ -68,6 +69,51 @@ func (r *MachineDeploymentReconciler) rolloutRolling(d *clusterv1.MachineDeploym
 	return nil
 }
 
+// rolloutRecreate implements the logic for rolling a new machine set
+// by scale down first, then scale up
+// rolloutUpdate will do scale up first, then scale down
+func (r *MachineDeploymentReconciler) rolloutRecreate(d *clusterv1.MachineDeployment, msList []*clusterv1.MachineSet) error {
+	newMS, oldMSs, err := r.getAllMachineSetsAndSyncRevision(d, msList, true)
+	if err != nil {
+		return err
+	}
+
+	// newMS can be nil in case there is already a MachineSet associated with this deployment,
+	// but there are only either changes in annotations or MinReadySeconds. Or in other words,
+	// this can be nil if there are changes, but no replacement of existing machines is needed.
+	if newMS == nil {
+		return nil
+	}
+
+	allMSs := append(oldMSs, newMS)
+
+	// Scale down, if we can.
+	if err := r.reconcileOldMachineSets(allMSs, oldMSs, newMS, d); err != nil {
+		return err
+	}
+
+	if err := r.syncDeploymentStatus(allMSs, newMS, d); err != nil {
+		return err
+	}
+
+	// Scale up, if we can.
+	if err := r.reconcileNewMachineSet(allMSs, newMS, d); err != nil {
+		return err
+	}
+
+	if err := r.syncDeploymentStatus(allMSs, newMS, d); err != nil {
+		return err
+	}
+
+	if mdutil.DeploymentComplete(d, &d.Status) {
+		if err := r.cleanupDeployment(oldMSs, d); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 func (r *MachineDeploymentReconciler) reconcileNewMachineSet(allMSs []*clusterv1.MachineSet, newMS *clusterv1.MachineSet, deployment *clusterv1.MachineDeployment) error {
 	if deployment.Spec.Replicas == nil {
 		return errors.Errorf("spec replicas for deployment set %v is nil, this is unexpected", deployment.Name)
@@ -88,12 +134,53 @@ func (r *MachineDeploymentReconciler) reconcileNewMachineSet(allMSs []*clusterv1
 		return err
 	}
 
-	newReplicasCount, err := mdutil.NewMSNewReplicas(deployment, allMSs, newMS)
-	if err != nil {
-		return err
+	var newReplicasCount int32
+	var err error
+	if deployment.Spec.Strategy.Type == clusterv1.RollingRecreateMachineDeploymentStrategyType {
+		newReplicasCount, err = r.newMSNewReplicasForRecreate(deployment, allMSs, newMS)
+		r.Log.V(0).Info("##############", "newReplicasCount recreate", newReplicasCount)
+	} else {
+		newReplicasCount, err = mdutil.NewMSNewReplicas(deployment, allMSs, newMS)
+		if err != nil {
+			return err
+		}
+		r.Log.V(0).Info("##############", "newReplicasCount", newReplicasCount)
 	}
 	err = r.scaleMachineSet(newMS, newReplicasCount, deployment)
 	return err
+}
+
+func (r *MachineDeploymentReconciler) newMSNewReplicasForRecreate(deployment *clusterv1.MachineDeployment, allMSs []*clusterv1.MachineSet, newMS *clusterv1.MachineSet) (int32, error) {
+	// maxSurge is always 0
+	maxSurge := 0
+	// Find the total number of machines with ones in deleting state
+	allCount := 0
+	for _, ms := range allMSs {
+		count, err := getAllMachinesCountForMS(context.Background(), r.Client, ms)
+		if err != nil {
+			return 0, err
+		}
+		allCount += count
+	}
+	currentMachineCount := int32(allCount)
+	currentMachineCountFromSpec := mdutil.GetReplicaCountForMachineSets(allMSs)
+	// for the case that, MS scaledup, but no machine created yet
+	if currentMachineCount < currentMachineCountFromSpec {
+		currentMachineCount = currentMachineCountFromSpec
+	}
+	maxTotalMachines := *(deployment.Spec.Replicas) + int32(maxSurge)
+	if currentMachineCount >= maxTotalMachines {
+		// Cannot scale up.
+		r.Log.V(0).Info("##############", "currentMachineCount", currentMachineCount, "maxTotalMachines", maxTotalMachines)
+		return *(newMS.Spec.Replicas), nil
+	}
+	// Scale up.
+	scaleUpCount := maxTotalMachines - currentMachineCount
+	// Do not exceed the number of desired replicas.
+	scaleUpCount = integer.Int32Min(scaleUpCount, *(deployment.Spec.Replicas)-*(newMS.Spec.Replicas))
+	r.Log.V(0).Info("##############", "currentMachineCount", currentMachineCount, "scaleUpCount", scaleUpCount)
+	return *(newMS.Spec.Replicas) + scaleUpCount, nil
+
 }
 
 func (r *MachineDeploymentReconciler) reconcileOldMachineSets(allMSs []*clusterv1.MachineSet, oldMSs []*clusterv1.MachineSet, newMS *clusterv1.MachineSet, deployment *clusterv1.MachineDeployment) error {
