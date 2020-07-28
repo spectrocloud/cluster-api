@@ -1,0 +1,22 @@
+namePrefix: capi-kubeadm-bootstrap-
+
+commonLabels:
+  cluster.x-k8s.io/provider: "bootstrap-kubeadm"
+
+bases:
+- ../../../bootstrap/kubeadm/config/crd
+- ../../../bootstrap/kubeadm/config/webhook
+
+patchesJson6902:
+- target:
+    group: apiextensions.k8s.io
+    version: v1
+    kind: CustomResourceDefinition
+    name: kubeadmconfigs.bootstrap.cluster.x-k8s.io
+  path: patch_crd_webhook_namespace.yaml
+- target:
+    group: apiextensions.k8s.io
+    version: v1
+    kind: CustomResourceDefinition
+    name: kubeadmconfigtemplates.bootstrap.cluster.x-k8s.io
+  path: patch_crd_webhook_namespace.yaml
