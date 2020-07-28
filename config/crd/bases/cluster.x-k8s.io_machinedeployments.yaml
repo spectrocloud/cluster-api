@@ -667,6 +667,12 @@ spec:
                     description: Rolling update config params. Present only if MachineDeploymentStrategyType
                       = RollingUpdate.
                     properties:
+                      includeDeletingReplicas:
+                        description: when calculate machineDeployment replicas, should
+                          include replias in deleting state or not. use case is to
+                          support scale-in of a machine deployment, where need to
+                          wait for old machine completely deleted then start new machines
+                        type: boolean
                       maxSurge:
                         anyOf:
                         - type: integer

@@ -59,6 +59,12 @@ type MachineSetSpec struct {
 	// Object references to custom resources resources are treated as templates.
 	// +optional
 	Template MachineTemplateSpec `json:"template,omitempty"`
+
+	// when calculate machineDeployment replicas, should include replias
+	// in deleting state or not.
+	// use case is to support scale-in of a machine deployment, where need
+	// to wait for old machine completely deleted then start new machines
+	IncludeDeletingReplicas bool `json:"includeDeletingReplicas,omitempty"`
 }
 
 // ANCHOR_END: MachineSetSpec

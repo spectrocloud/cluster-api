@@ -472,6 +472,21 @@ func GetActualReplicaCountForMachineSets(machineSets []*clusterv1.MachineSet) in
 	return totalActualReplicas
 }
 
+// GetTotal sum up max(ms.Spec.Replicas, ms.Status.Replicas)
+func GetTotalReplicaCountForMachineSets(machineSets []*clusterv1.MachineSet) int32 {
+	totalReplicas := int32(0)
+	for _, ms := range machineSets {
+		if ms != nil {
+			if *(ms.Spec.Replicas) > ms.Status.Replicas {
+				totalReplicas += *(ms.Spec.Replicas)
+			} else {
+				totalReplicas += ms.Status.Replicas
+			}
+		}
+	}
+	return totalReplicas
+}
+
 // GetReadyReplicaCountForMachineSets returns the number of ready machines corresponding to the given machine sets.
 func GetReadyReplicaCountForMachineSets(machineSets []*clusterv1.MachineSet) int32 {
 	totalReadyReplicas := int32(0)
@@ -522,6 +537,13 @@ func NewMSNewReplicas(deployment *clusterv1.MachineDeployment, allMSs []*cluster
 		}
 		// Find the total number of machines
 		currentMachineCount := GetReplicaCountForMachineSets(allMSs)
+		if deployment.Spec.Strategy.RollingUpdate.IncludeDeletingReplicas {
+			totalMachineCount := GetTotalReplicaCountForMachineSets(allMSs)
+			if totalMachineCount > currentMachineCount {
+				currentMachineCount = totalMachineCount
+			}
+		}
+
 		maxTotalMachines := *(deployment.Spec.Replicas) + int32(maxSurge)
 		if currentMachineCount >= maxTotalMachines {
 			// Cannot scale up.

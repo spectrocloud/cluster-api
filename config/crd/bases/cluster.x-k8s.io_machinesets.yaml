@@ -550,6 +550,12 @@ spec:
                 - Newest
                 - Oldest
                 type: string
+              includeDeletingReplicas:
+                description: when calculate machineDeployment replicas, should include
+                  replias in deleting state or not. use case is to support scale-in
+                  of a machine deployment, where need to wait for old machine completely
+                  deleted then start new machines
+                type: boolean
               minReadySeconds:
                 description: MinReadySeconds is the minimum number of seconds for
                   which a newly created machine should be ready. Defaults to 0 (machine
