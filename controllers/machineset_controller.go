@@ -230,7 +230,7 @@ func (r *MachineSetReconciler) reconcile(ctx context.Context, cluster *clusterv1
 
 	var errs []error
 	for _, machine := range filteredMachines {
-		if conditions.IsFalse(machine, clusterv1.MachineOwnerRemediatedCondition) {
+		if machine.DeletionTimestamp.IsZero() && conditions.IsFalse(machine, clusterv1.MachineOwnerRemediatedCondition) {
 			logger.Info("Deleting unhealthy machine", "machine", machine.GetName())
 			patch := client.MergeFrom(machine.DeepCopy())
 			if err := r.Client.Delete(ctx, machine); err != nil {
@@ -443,7 +443,8 @@ func shouldExcludeMachine(machineSet *clusterv1.MachineSet, machine *clusterv1.M
 		logger.V(4).Info("Machine is not controlled by machineset", "machine", machine.Name)
 		return true
 	}
-	return !machine.ObjectMeta.DeletionTimestamp.IsZero()
+
+	return false
 }
 
 // adoptOrphan sets the MachineSet as a controller OwnerReference to the Machine.

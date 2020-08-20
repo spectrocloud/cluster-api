@@ -602,7 +602,7 @@ func TestShouldExcludeMachine(t *testing.T) {
 					},
 				},
 			},
-			expected: true,
+			expected: false,
 		},
 	}
 
