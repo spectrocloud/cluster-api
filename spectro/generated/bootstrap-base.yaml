@@ -1,0 +1,226 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  labels:
+    cluster.x-k8s.io/provider: bootstrap-kubeadm
+    control-plane: controller-manager
+  name: capi-kubeadm-bootstrap-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  labels:
+    cluster.x-k8s.io/provider: bootstrap-kubeadm
+  name: capi-kubeadm-bootstrap-leader-election-role
+  namespace: capi-kubeadm-bootstrap-system
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - configmaps
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - update
+  - patch
+  - delete
+- apiGroups:
+  - ""
+  resources:
+  - configmaps/status
+  verbs:
+  - get
+  - update
+  - patch
+- apiGroups:
+  - ""
+  resources:
+  - events
+  verbs:
+  - create
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  creationTimestamp: null
+  labels:
+    cluster.x-k8s.io/provider: bootstrap-kubeadm
+  name: capi-kubeadm-bootstrap-manager-role
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - configmaps
+  - events
+  - secrets
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - bootstrap.cluster.x-k8s.io
+  resources:
+  - kubeadmconfigs
+  - kubeadmconfigs/status
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - cluster.x-k8s.io
+  resources:
+  - clusters
+  - clusters/status
+  - machines
+  - machines/status
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - exp.cluster.x-k8s.io
+  resources:
+  - machinepools
+  - machinepools/status
+  verbs:
+  - get
+  - list
+  - watch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    cluster.x-k8s.io/provider: bootstrap-kubeadm
+  name: capi-kubeadm-bootstrap-proxy-role
+rules:
+- apiGroups:
+  - authentication.k8s.io
+  resources:
+  - tokenreviews
+  verbs:
+  - create
+- apiGroups:
+  - authorization.k8s.io
+  resources:
+  - subjectaccessreviews
+  verbs:
+  - create
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  labels:
+    cluster.x-k8s.io/provider: bootstrap-kubeadm
+  name: capi-kubeadm-bootstrap-leader-election-rolebinding
+  namespace: capi-kubeadm-bootstrap-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: capi-kubeadm-bootstrap-leader-election-role
+subjects:
+- kind: ServiceAccount
+  name: default
+  namespace: capi-kubeadm-bootstrap-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  labels:
+    cluster.x-k8s.io/provider: bootstrap-kubeadm
+  name: capi-kubeadm-bootstrap-manager-rolebinding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: capi-kubeadm-bootstrap-manager-role
+subjects:
+- kind: ServiceAccount
+  name: default
+  namespace: capi-kubeadm-bootstrap-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  labels:
+    cluster.x-k8s.io/provider: bootstrap-kubeadm
+  name: capi-kubeadm-bootstrap-proxy-rolebinding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: capi-kubeadm-bootstrap-proxy-role
+subjects:
+- kind: ServiceAccount
+  name: default
+  namespace: capi-kubeadm-bootstrap-system
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    cluster.x-k8s.io/provider: bootstrap-kubeadm
+    control-plane: controller-manager
+  name: capi-kubeadm-bootstrap-controller-manager-metrics-service
+  namespace: capi-kubeadm-bootstrap-system
+spec:
+  ports:
+  - name: https
+    port: 8443
+    targetPort: https
+  selector:
+    cluster.x-k8s.io/provider: bootstrap-kubeadm
+    control-plane: controller-manager
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    cluster.x-k8s.io/provider: bootstrap-kubeadm
+    control-plane: controller-manager
+  name: capi-kubeadm-bootstrap-controller-manager
+  namespace: capi-kubeadm-bootstrap-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      cluster.x-k8s.io/provider: bootstrap-kubeadm
+      control-plane: controller-manager
+  template:
+    metadata:
+      labels:
+        cluster.x-k8s.io/provider: bootstrap-kubeadm
+        control-plane: controller-manager
+    spec:
+      containers:
+      - args:
+        - --secure-listen-address=0.0.0.0:8443
+        - --upstream=http://127.0.0.1:8080/
+        - --logtostderr=true
+        - --v=10
+        image: gcr.io/kubebuilder/kube-rbac-proxy:v0.4.1
+        name: kube-rbac-proxy
+        ports:
+        - containerPort: 8443
+          name: https
+      - args:
+        - --metrics-addr=127.0.0.1:8080
+        - --enable-leader-election
+        - --feature-gates=MachinePool=${EXP_MACHINE_POOL:=false}
+        command:
+        - /manager
+        image: gcr.io/spectro-images-public/release/cluster-api/kubeadm-bootstrap-controller:spectro-v0.3.9
+        imagePullPolicy: Always
+        name: manager
+      terminationGracePeriodSeconds: 10
+      tolerations:
+      - effect: NoSchedule
+        key: node-role.kubernetes.io/master

@@ -69,7 +69,7 @@ CLOUDINIT_GENERATED := $(CLOUDINIT_PKG_DIR)/zz_generated.bindata.go
 CLOUDINIT_SCRIPT := $(CLOUDINIT_PKG_DIR)/kubeadm-bootstrap-script.sh
 
 # Define Docker related variables. Releases should modify and double check these vars.
-REGISTRY ?= gcr.io/$(shell gcloud config get-value project)
+REGISTRY ?= gcr.io/spectro-images-public/release/cluster-api
 STAGING_REGISTRY ?= gcr.io/k8s-staging-cluster-api
 PROD_REGISTRY ?= us.gcr.io/k8s-artifacts-prod/cluster-api
 
@@ -85,7 +85,7 @@ KUBEADM_BOOTSTRAP_CONTROLLER_IMG ?= $(REGISTRY)/$(KUBEADM_BOOTSTRAP_IMAGE_NAME)
 KUBEADM_CONTROL_PLANE_IMAGE_NAME ?= kubeadm-control-plane-controller
 KUBEADM_CONTROL_PLANE_CONTROLLER_IMG ?= $(REGISTRY)/$(KUBEADM_CONTROL_PLANE_IMAGE_NAME)
 
-TAG ?= dev
+TAG ?= spectro-v0.3.9
 ARCH ?= amd64
 ALL_ARCH = amd64 arm arm64 ppc64le s390x
 
@@ -332,7 +332,6 @@ modules: ## Runs go mod to ensure modules are up to date.
 ## --------------------------------------
 ## Docker
 ## --------------------------------------
-
 .PHONY: docker-build
 docker-build: ## Build the docker images for controller managers
 	$(MAKE) ARCH=$(ARCH) docker-build-core
@@ -341,27 +340,27 @@ docker-build: ## Build the docker images for controller managers
 
 .PHONY: docker-build-core
 docker-build-core: ## Build the docker image for core controller manager
-	DOCKER_BUILDKIT=1 docker build --build-arg goproxy=$(GOPROXY) --build-arg ARCH=$(ARCH) --build-arg ldflags="$(LDFLAGS)" . -t $(CONTROLLER_IMG)-$(ARCH):$(TAG)
-	$(MAKE) set-manifest-image MANIFEST_IMG=$(CONTROLLER_IMG)-$(ARCH) MANIFEST_TAG=$(TAG) TARGET_RESOURCE="./config/manager/manager_image_patch.yaml"
+	DOCKER_BUILDKIT=1 docker build --pull --build-arg goproxy=$(GOPROXY) --build-arg ARCH=$(ARCH) . -t $(CONTROLLER_IMG):$(TAG)
+	$(MAKE) set-manifest-image MANIFEST_IMG=$(CONTROLLER_IMG) MANIFEST_TAG=$(TAG) TARGET_RESOURCE="./config/manager/manager_image_patch.yaml"
 	$(MAKE) set-manifest-pull-policy TARGET_RESOURCE="./config/manager/manager_pull_policy.yaml"
 
 .PHONY: docker-build-kubeadm-bootstrap
 docker-build-kubeadm-bootstrap: ## Build the docker image for kubeadm bootstrap controller manager
-	DOCKER_BUILDKIT=1 docker build --build-arg goproxy=$(GOPROXY) --build-arg ARCH=$(ARCH) --build-arg package=./bootstrap/kubeadm --build-arg ldflags="$(LDFLAGS)" . -t $(KUBEADM_BOOTSTRAP_CONTROLLER_IMG)-$(ARCH):$(TAG)
-	$(MAKE) set-manifest-image MANIFEST_IMG=$(KUBEADM_BOOTSTRAP_CONTROLLER_IMG)-$(ARCH) MANIFEST_TAG=$(TAG) TARGET_RESOURCE="./bootstrap/kubeadm/config/manager/manager_image_patch.yaml"
+	DOCKER_BUILDKIT=1 docker build --pull --build-arg goproxy=$(GOPROXY) --build-arg ARCH=$(ARCH) --build-arg package=./bootstrap/kubeadm . -t $(KUBEADM_BOOTSTRAP_CONTROLLER_IMG):$(TAG)
+	$(MAKE) set-manifest-image MANIFEST_IMG=$(KUBEADM_BOOTSTRAP_CONTROLLER_IMG) MANIFEST_TAG=$(TAG) TARGET_RESOURCE="./bootstrap/kubeadm/config/manager/manager_image_patch.yaml"
 	$(MAKE) set-manifest-pull-policy TARGET_RESOURCE="./bootstrap/kubeadm/config/manager/manager_pull_policy.yaml"
 
 .PHONY: docker-build-kubeadm-control-plane
 docker-build-kubeadm-control-plane: ## Build the docker image for kubeadm control plane controller manager
-	DOCKER_BUILDKIT=1 docker build --build-arg goproxy=$(GOPROXY) --build-arg ARCH=$(ARCH) --build-arg package=./controlplane/kubeadm --build-arg ldflags="$(LDFLAGS)" . -t $(KUBEADM_CONTROL_PLANE_CONTROLLER_IMG)-$(ARCH):$(TAG)
-	$(MAKE) set-manifest-image MANIFEST_IMG=$(KUBEADM_CONTROL_PLANE_CONTROLLER_IMG)-$(ARCH) MANIFEST_TAG=$(TAG) TARGET_RESOURCE="./controlplane/kubeadm/config/manager/manager_image_patch.yaml"
+	DOCKER_BUILDKIT=1 docker build --pull --build-arg goproxy=$(GOPROXY) --build-arg ARCH=$(ARCH) --build-arg package=./controlplane/kubeadm . -t $(KUBEADM_CONTROL_PLANE_CONTROLLER_IMG):$(TAG)
+	$(MAKE) set-manifest-image MANIFEST_IMG=$(KUBEADM_CONTROL_PLANE_CONTROLLER_IMG) MANIFEST_TAG=$(TAG) TARGET_RESOURCE="./controlplane/kubeadm/config/manager/manager_image_patch.yaml"
 	$(MAKE) set-manifest-pull-policy TARGET_RESOURCE="./controlplane/kubeadm/config/manager/manager_pull_policy.yaml"
 
 .PHONY: docker-push
 docker-push: ## Push the docker images
-	docker push $(CONTROLLER_IMG)-$(ARCH):$(TAG)
-	docker push $(KUBEADM_BOOTSTRAP_CONTROLLER_IMG)-$(ARCH):$(TAG)
-	docker push $(KUBEADM_CONTROL_PLANE_CONTROLLER_IMG)-$(ARCH):$(TAG)
+	docker push $(CONTROLLER_IMG):$(TAG)
+	docker push $(KUBEADM_BOOTSTRAP_CONTROLLER_IMG):$(TAG)
+	docker push $(KUBEADM_CONTROL_PLANE_CONTROLLER_IMG):$(TAG)
 
 ## --------------------------------------
 ## Docker — All ARCH
