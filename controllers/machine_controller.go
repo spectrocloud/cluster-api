@@ -568,10 +568,7 @@ func (r *MachineReconciler) deleteNode(ctx context.Context, cluster *clusterv1.C
 		},
 	}
 
-	if err := remoteClient.Delete(ctx, node); err != nil {
-		return errors.Wrapf(err, "error deleting node %s", name)
-	}
-	return nil
+	return remoteClient.Delete(ctx, node)
 }
 
 func (r *MachineReconciler) reconcileDeleteBootstrap(ctx context.Context, m *clusterv1.Machine) (bool, error) {
