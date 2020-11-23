@@ -41,42 +41,17 @@ rules:
   verbs:
   - create
 ---
+aggregationRule:
+  clusterRoleSelectors:
+  - matchLabels:
+      kubeadm.controlplane.cluster.x-k8s.io/aggregate-to-manager: "true"
 apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
+kind: ClusterRole
 metadata:
-  creationTimestamp: null
   labels:
     cluster.x-k8s.io/provider: control-plane-kubeadm
-  name: capi-kubeadm-control-plane-manager-role
-  namespace: capi-kubeadm-control-plane-system
-rules:
-- apiGroups:
-  - ""
-  resources:
-  - configmaps
-  verbs:
-  - create
-  - get
-  - list
-  - watch
-- apiGroups:
-  - rbac
-  resources:
-  - rolebindings
-  verbs:
-  - create
-  - get
-  - list
-  - watch
-- apiGroups:
-  - rbac
-  resources:
-  - roles
-  verbs:
-  - create
-  - get
-  - list
-  - watch
+  name: capi-kubeadm-control-plane-aggregated-manager-role
+rules: []
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
@@ -84,6 +59,7 @@ metadata:
   creationTimestamp: null
   labels:
     cluster.x-k8s.io/provider: control-plane-kubeadm
+    kubeadm.controlplane.cluster.x-k8s.io/aggregate-to-manager: "true"
   name: capi-kubeadm-control-plane-manager-role
 rules:
 - apiGroups:
@@ -141,6 +117,7 @@ rules:
   - get
   - list
   - patch
+  - update
   - watch
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -188,7 +165,7 @@ metadata:
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: capi-kubeadm-control-plane-manager-role
+  name: capi-kubeadm-control-plane-aggregated-manager-role
 subjects:
 - kind: ServiceAccount
   name: default
