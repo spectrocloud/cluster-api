@@ -84,11 +84,22 @@ releaseSeries:
 <h1> Embedded metadata </h1>
 
 The `clusterctl` command can ship with embedded metadata for pre-defined providers.
-If, as a provider implementer, you are interested to this feature, please send a PR to the Cluster API repository.
+If, as a provider implementer, you are interested to this feature, please send a PR to the [Cluster API repository](https://sigs.k8s.io/cluster-api).
 
 </aside>
 
-### Components YAML 
+<aside class="note">
+
+<h1> Note on user experience </h1>
+
+If provider implementers only update the clusterctl's built-in metadata and don't
+provide a `metadata.yaml` in a new release, users are forced to update `clusterctl`
+to the latest released version in order to properly install the provider.
+
+As a related example, see the details in [issue 3418].
+</aside>
+
+### Components YAML
 
 The provider is required to generate a **components YAML** file and publish it to the provider's repository.
 This file is a single YAML with _all_ the components required for installing the provider itself (CRDs, Controller, RBAC etc.). 
@@ -197,8 +208,9 @@ providers.
 |CAPV          | cluster.x-k8s.io/provider=infrastructure-vsphere   |
 |CAPD          | cluster.x-k8s.io/provider=infrastructure-docker    |
 |CAPM3         | cluster.x-k8s.io/provider=infrastructure-metal3    |
-|CAPP          | cluster.x-k8s.io/provider=infrastructure-packet     |
+|CAPP          | cluster.x-k8s.io/provider=infrastructure-packet    |
 |CAPZ          | cluster.x-k8s.io/provider=infrastructure-azure     |
+|CAPO          | cluster.x-k8s.io/provider=infrastructure-openstack |
 
 ### Workload cluster templates
 
@@ -308,13 +320,24 @@ Provider authors should be aware that `clusterctl move` command implements a dis
 
 * All the objects of Kind defined in one of the CRDs installed by clusterctl using `clusterctl init`. 
 * `Secret` and `ConfigMap` objects.
-* the `OwnerReference` chain of the above objects.
+* The `OwnerReference` chain of the above objects.
+* Any object of Kind in which its CRD has the "move" label (`clusterctl.cluster.x-k8s.io/move`) attached to it.
+
+<aside class="note warning">
+
+<h1>Warning</h1>
+
+When using the "move" label, if the CRD is a global resource, the object is copied to the target cluster but not removed from the source cluster. It is up to the user to remove the source object as necessary.
+
+</aside>
 
 `clusterctl move` does NOT consider any objects:
 
 * Not included in the set of objects defined above.
-* Included in the set of objects defined above, but not directly or indirectly to a `Cluster` object through the `OwnerReference` chain.
- 
+* Included in the set of objects defined above, but not:
+  * Directly or indirectly linked to a `Cluster` object through the `OwnerReference` chain.
+  * Directly or indirectly linked to a `ClusterResourceSet` object through the `OwnerReference` chain.
+
 If moving some of excluded object is required, the provider authors should create documentation describing the
 the exact move sequence to be executed by the user.
 
@@ -324,3 +347,4 @@ Additionally, provider authors should be aware that `clusterctl move` assumes al
 
 <!--LINKS-->
 [drone-envsubst]: https://github.com/drone/envsubst
+[issue 3418]: https://github.com/kubernetes-sigs/cluster-api/issues/3418

@@ -54,11 +54,10 @@ func NewHelper(obj runtime.Object, crClient client.Client) (*Helper, error) {
 	}
 
 	// Convert the object to unstructured to compare against our before copy.
-	raw, err := runtime.DefaultUnstructuredConverter.ToUnstructured(obj.DeepCopyObject())
+	unstructuredObj, err := toUnstructured(obj)
 	if err != nil {
 		return nil, err
 	}
-	unstructuredObj := &unstructured.Unstructured{Object: raw}
 
 	// Check if the object satisfies the Cluster API conditions contract.
 	_, canInterfaceConditions := obj.(conditions.Setter)
@@ -84,11 +83,11 @@ func (h *Helper) Patch(ctx context.Context, obj runtime.Object, opts ...Option) 
 	}
 
 	// Convert the object to unstructured to compare against our before copy.
-	raw, err := runtime.DefaultUnstructuredConverter.ToUnstructured(obj.DeepCopyObject())
+	var err error
+	h.after, err = toUnstructured(obj)
 	if err != nil {
 		return err
 	}
-	h.after = &unstructured.Unstructured{Object: raw}
 
 	// Determine if the object has status.
 	if unstructuredHasStatus(h.after) {
@@ -113,9 +112,16 @@ func (h *Helper) Patch(ctx context.Context, obj runtime.Object, opts ...Option) 
 
 	// Issue patches and return errors in an aggregate.
 	return kerrors.NewAggregate([]error{
+		// Patch the conditions first.
+		//
+		// Given that we pass in metadata.resourceVersion to perform a 3-way-merge conflict resolution,
+		// patching conditions first avoids an extra loop if spec or status patch succeeds first
+		// given that causes the resourceVersion to mutate.
+		h.patchStatusConditions(ctx, obj, options.ForceOverwriteConditions, options.OwnedConditions),
+
+		// Then proceed to patch the rest of the object.
 		h.patch(ctx, obj),
 		h.patchStatus(ctx, obj),
-		h.patchStatusConditions(ctx, obj, options.OwnedConditions),
 	})
 }
 
@@ -152,7 +158,7 @@ func (h *Helper) patchStatus(ctx context.Context, obj runtime.Object) error {
 //
 // Condition changes are then applied to the latest version of the object, and if there are
 // no unresolvable conflicts, the patch is sent again.
-func (h *Helper) patchStatusConditions(ctx context.Context, obj runtime.Object, ownedConditions []clusterv1.ConditionType) error {
+func (h *Helper) patchStatusConditions(ctx context.Context, obj runtime.Object, forceOverwrite bool, ownedConditions []clusterv1.ConditionType) error {
 	// Nothing to do if the object isn't a condition patcher.
 	if !h.isConditionsSetter {
 		return nil
@@ -212,7 +218,7 @@ func (h *Helper) patchStatusConditions(ctx context.Context, obj runtime.Object, 
 		conditionsPatch := client.MergeFromWithOptions(latest.DeepCopyObject(), client.MergeFromWithOptimisticLock{})
 
 		// Set the condition patch previously created on the new object.
-		if err := diff.Apply(latest, conditions.WithOwnedConditions(ownedConditions...)); err != nil {
+		if err := diff.Apply(latest, conditions.WithForceOverwrite(forceOverwrite), conditions.WithOwnedConditions(ownedConditions...)); err != nil {
 			return false, err
 		}
 
@@ -232,31 +238,9 @@ func (h *Helper) patchStatusConditions(ctx context.Context, obj runtime.Object, 
 
 // calculatePatch returns the before/after objects to be given in a controller-runtime patch, scoped down to the absolute necessary.
 func (h *Helper) calculatePatch(afterObj runtime.Object, focus patchType) (runtime.Object, runtime.Object, error) {
-	// Make a copy of the unstructured objects first.
-	before := h.before.DeepCopy()
-	after := h.after.DeepCopy()
-
-	// Let's loop on the copies of our before/after and remove all the keys we don't need.
-	for _, v := range []*unstructured.Unstructured{before, after} {
-		// Ranges over the keys of the unstructured object, think of this as the very top level of an object
-		// when submitting a yaml to kubectl or a client.
-		//
-		// These would be keys like `apiVersion`, `kind`, `metadata`, `spec`, `status`, etc.
-		for key := range v.Object {
-			// If the current key isn't something we absolutetly need (see the map for reference),
-			// and it's not our current focus, then we should remove it.
-			if key != focus.Key() && !preserveUnstructuredKeys[key] {
-				unstructured.RemoveNestedField(v.Object, key)
-				continue
-			}
-			// If we've determined that we're able to interface with conditions.Setter interface,
-			// when dealing with the status patch, we need to remove it from the list of changes,
-			// so the other method can take care of it.
-			if h.isConditionsSetter && focus == statusPatch {
-				unstructured.RemoveNestedField(v.Object, "status", "conditions")
-			}
-		}
-	}
+	// Get a shallow unsafe copy of the before/after object in unstructured form.
+	before := unsafeUnstructuredCopy(h.before, focus, h.isConditionsSetter)
+	after := unsafeUnstructuredCopy(h.after, focus, h.isConditionsSetter)
 
 	// We've now applied all modifications to local unstructured objects,
 	// make copies of the original objects and convert them back.
@@ -268,7 +252,6 @@ func (h *Helper) calculatePatch(afterObj runtime.Object, focus patchType) (runti
 	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(after.Object, afterObj); err != nil {
 		return nil, nil, err
 	}
-
 	return beforeObj, afterObj, nil
 }
 

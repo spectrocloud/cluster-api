@@ -38,7 +38,6 @@ import (
 	kubeadmv1beta1 "sigs.k8s.io/cluster-api/bootstrap/kubeadm/types/v1beta1"
 	bsutil "sigs.k8s.io/cluster-api/bootstrap/util"
 	"sigs.k8s.io/cluster-api/controllers/remote"
-	capierrors "sigs.k8s.io/cluster-api/errors"
 	expv1 "sigs.k8s.io/cluster-api/exp/api/v1alpha3"
 	"sigs.k8s.io/cluster-api/feature"
 	"sigs.k8s.io/cluster-api/util"
@@ -204,7 +203,6 @@ func (r *KubeadmConfigReconciler) Reconcile(req ctrl.Request) (_ ctrl.Result, re
 				bootstrapv1.DataSecretAvailableCondition,
 				bootstrapv1.CertificatesAvailableCondition,
 			),
-			conditions.WithStepCounter(),
 		)
 		// Patch ObservedGeneration only if the reconciliation completed successfully
 		patchOpts := []patch.Option{}
@@ -297,7 +295,7 @@ func (r *KubeadmConfigReconciler) handleClusterNotInitialized(ctx context.Contex
 	// this is required in order to avoid the condition's LastTransitionTime to flicker in case of errors surfacing
 	// using the DataSecretGeneratedFailedReason
 	if conditions.GetReason(scope.Config, bootstrapv1.DataSecretAvailableCondition) != bootstrapv1.DataSecretGenerationFailedReason {
-		conditions.MarkFalse(scope.Config, bootstrapv1.DataSecretAvailableCondition, bootstrapv1.WaitingForControlPlaneAvailableReason, clusterv1.ConditionSeverityInfo, "")
+		conditions.MarkFalse(scope.Config, bootstrapv1.DataSecretAvailableCondition, clusterv1.WaitingForControlPlaneAvailableReason, clusterv1.ConditionSeverityInfo, "")
 	}
 
 	// if it's NOT a control plane machine, requeue
@@ -390,7 +388,7 @@ func (r *KubeadmConfigReconciler) handleClusterNotInitialized(ctx context.Contex
 		verbosityFlag = fmt.Sprintf("--v %s", strconv.Itoa(int(*scope.Config.Spec.Verbosity)))
 	}
 
-	files, err := r.resolveFiles(ctx, scope.Config, certificates.AsFiles()...)
+	files, err := r.resolveFiles(ctx, scope.Config)
 	if err != nil {
 		conditions.MarkFalse(scope.Config, bootstrapv1.DataSecretAvailableCondition, bootstrapv1.DataSecretGenerationFailedReason, clusterv1.ConditionSeverityWarning, err.Error())
 		return ctrl.Result{}, err
@@ -441,13 +439,11 @@ func (r *KubeadmConfigReconciler) joinWorker(ctx context.Context, scope *Scope) 
 	}
 	conditions.MarkTrue(scope.Config, bootstrapv1.CertificatesAvailableCondition)
 
-	// ensure that joinConfiguration.Discovery is properly set for joining node on the current cluster
-	if err := r.reconcileDiscovery(ctx, scope.Cluster, scope.Config, certificates); err != nil {
-		if requeueErr, ok := errors.Cause(err).(capierrors.HasRequeueAfterError); ok {
-			scope.Info(err.Error())
-			return ctrl.Result{RequeueAfter: requeueErr.GetRequeueAfter()}, nil
-		}
+	// Ensure that joinConfiguration.Discovery is properly set for joining node on the current cluster.
+	if res, err := r.reconcileDiscovery(ctx, scope.Cluster, scope.Config, certificates); err != nil {
 		return ctrl.Result{}, err
+	} else if !res.IsZero() {
+		return res, nil
 	}
 
 	joinData, err := kubeadmv1beta1.ConfigurationToYAML(scope.Config.Spec.JoinConfiguration)
@@ -508,7 +504,7 @@ func (r *KubeadmConfigReconciler) joinControlplane(ctx context.Context, scope *S
 		scope.Config.Spec.JoinConfiguration.ControlPlane = &kubeadmv1beta1.JoinControlPlane{}
 	}
 
-	certificates := secret.NewCertificatesForJoiningControlPlane()
+	certificates := secret.NewControlPlaneJoinCerts(scope.Config.Spec.ClusterConfiguration)
 	err := certificates.Lookup(
 		ctx,
 		r.Client,
@@ -524,13 +520,11 @@ func (r *KubeadmConfigReconciler) joinControlplane(ctx context.Context, scope *S
 	}
 	conditions.MarkTrue(scope.Config, bootstrapv1.CertificatesAvailableCondition)
 
-	// ensure that joinConfiguration.Discovery is properly set for joining node on the current cluster
-	if err := r.reconcileDiscovery(ctx, scope.Cluster, scope.Config, certificates); err != nil {
-		if requeueErr, ok := errors.Cause(err).(capierrors.HasRequeueAfterError); ok {
-			scope.Info(err.Error())
-			return ctrl.Result{RequeueAfter: requeueErr.GetRequeueAfter()}, nil
-		}
+	// Ensure that joinConfiguration.Discovery is properly set for joining node on the current cluster.
+	if res, err := r.reconcileDiscovery(ctx, scope.Cluster, scope.Config, certificates); err != nil {
 		return ctrl.Result{}, err
+	} else if !res.IsZero() {
+		return res, nil
 	}
 
 	joinData, err := kubeadmv1beta1.ConfigurationToYAML(scope.Config.Spec.JoinConfiguration)
@@ -546,7 +540,7 @@ func (r *KubeadmConfigReconciler) joinControlplane(ctx context.Context, scope *S
 		verbosityFlag = fmt.Sprintf("--v %s", strconv.Itoa(int(*scope.Config.Spec.Verbosity)))
 	}
 
-	files, err := r.resolveFiles(ctx, scope.Config, certificates.AsFiles()...)
+	files, err := r.resolveFiles(ctx, scope.Config)
 	if err != nil {
 		conditions.MarkFalse(scope.Config, bootstrapv1.DataSecretAvailableCondition, bootstrapv1.DataSecretGenerationFailedReason, clusterv1.ConditionSeverityWarning, err.Error())
 		return ctrl.Result{}, err
@@ -582,11 +576,11 @@ func (r *KubeadmConfigReconciler) joinControlplane(ctx context.Context, scope *S
 
 // resolveFiles maps .Spec.Files into cloudinit.Files, resolving any object references
 // along the way.
-func (r *KubeadmConfigReconciler) resolveFiles(ctx context.Context, cfg *bootstrapv1.KubeadmConfig, merge ...bootstrapv1.File) ([]bootstrapv1.File, error) {
-	collected := append(cfg.Spec.Files, merge...)
+func (r *KubeadmConfigReconciler) resolveFiles(ctx context.Context, cfg *bootstrapv1.KubeadmConfig) ([]bootstrapv1.File, error) {
+	collected := make([]bootstrapv1.File, 0, len(cfg.Spec.Files))
 
-	for i := range collected {
-		in := collected[i]
+	for i := range cfg.Spec.Files {
+		in := cfg.Spec.Files[i]
 		if in.ContentFrom != nil {
 			data, err := r.resolveSecretFileContent(ctx, cfg.Namespace, in)
 			if err != nil {
@@ -594,9 +588,8 @@ func (r *KubeadmConfigReconciler) resolveFiles(ctx context.Context, cfg *bootstr
 			}
 			in.ContentFrom = nil
 			in.Content = string(data)
-			collected[i] = in
 		}
-
+		collected = append(collected, in)
 	}
 
 	return collected, nil
@@ -626,7 +619,7 @@ func (r *KubeadmConfigReconciler) ClusterToKubeadmConfigs(o handler.MapObject) [
 
 	c, ok := o.Object.(*clusterv1.Cluster)
 	if !ok {
-		r.Log.Error(errors.Errorf("expected a Cluster but got a %T", o.Object), "failed to get Machine for Cluster")
+		r.Log.Error(errors.Errorf("expected a Cluster but got a %T", o.Object), "failed to get KubeadmConfigs for Cluster")
 		return nil
 	}
 
@@ -648,6 +641,22 @@ func (r *KubeadmConfigReconciler) ClusterToKubeadmConfigs(o handler.MapObject) [
 			m.Spec.Bootstrap.ConfigRef.GroupVersionKind().GroupKind() == bootstrapv1.GroupVersion.WithKind("KubeadmConfig").GroupKind() {
 			name := client.ObjectKey{Namespace: m.Namespace, Name: m.Spec.Bootstrap.ConfigRef.Name}
 			result = append(result, ctrl.Request{NamespacedName: name})
+		}
+	}
+
+	if feature.Gates.Enabled(feature.MachinePool) {
+		machinePoolList := &expv1.MachinePoolList{}
+		if err := r.Client.List(context.Background(), machinePoolList, selectors...); err != nil {
+			r.Log.Error(err, "failed to list MachinePools", "Cluster", c.Name, "Namespace", c.Namespace)
+			return nil
+		}
+
+		for _, mp := range machinePoolList.Items {
+			if mp.Spec.Template.Spec.Bootstrap.ConfigRef != nil &&
+				mp.Spec.Template.Spec.Bootstrap.ConfigRef.GroupVersionKind().GroupKind() == bootstrapv1.GroupVersion.WithKind("KubeadmConfig").GroupKind() {
+				name := client.ObjectKey{Namespace: mp.Namespace, Name: mp.Spec.Template.Spec.Bootstrap.ConfigRef.Name}
+				result = append(result, ctrl.Request{NamespacedName: name})
+			}
 		}
 	}
 
@@ -691,12 +700,12 @@ func (r *KubeadmConfigReconciler) MachinePoolToBootstrapMapFunc(o handler.MapObj
 // The implementation func respect user provided discovery configurations, but in case some of them are missing, a valid BootstrapToken object
 // is automatically injected into config.JoinConfiguration.Discovery.
 // This allows to simplify configuration UX, by providing the option to delegate to CABPK the configuration of kubeadm join discovery.
-func (r *KubeadmConfigReconciler) reconcileDiscovery(ctx context.Context, cluster *clusterv1.Cluster, config *bootstrapv1.KubeadmConfig, certificates secret.Certificates) error {
+func (r *KubeadmConfigReconciler) reconcileDiscovery(ctx context.Context, cluster *clusterv1.Cluster, config *bootstrapv1.KubeadmConfig, certificates secret.Certificates) (ctrl.Result, error) {
 	log := r.Log.WithValues("kubeadmconfig", fmt.Sprintf("%s/%s", config.Namespace, config.Name))
 
 	// if config already contains a file discovery configuration, respect it without further validations
 	if config.Spec.JoinConfiguration.Discovery.File != nil {
-		return nil
+		return ctrl.Result{}, nil
 	}
 
 	// otherwise it is necessary to ensure token discovery is properly configured
@@ -709,7 +718,7 @@ func (r *KubeadmConfigReconciler) reconcileDiscovery(ctx context.Context, cluste
 		hashes, err := certificates.GetByPurpose(secret.ClusterCA).Hashes()
 		if err != nil {
 			log.Error(err, "Unable to generate Cluster CA certificate hashes")
-			return err
+			return ctrl.Result{}, err
 		}
 		config.Spec.JoinConfiguration.Discovery.BootstrapToken.CACertHashes = hashes
 	}
@@ -718,7 +727,8 @@ func (r *KubeadmConfigReconciler) reconcileDiscovery(ctx context.Context, cluste
 	apiServerEndpoint := config.Spec.JoinConfiguration.Discovery.BootstrapToken.APIServerEndpoint
 	if apiServerEndpoint == "" {
 		if !cluster.Spec.ControlPlaneEndpoint.IsValid() {
-			return errors.Wrap(&capierrors.RequeueAfterError{RequeueAfter: 10 * time.Second}, "Waiting for Cluster Controller to set Cluster.Spec.ControlPlaneEndpoint")
+			log.V(1).Info("Waiting for Cluster Controller to set Cluster.Spec.ControlPlaneEndpoint")
+			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 		}
 
 		apiServerEndpoint = cluster.Spec.ControlPlaneEndpoint.String()
@@ -730,12 +740,12 @@ func (r *KubeadmConfigReconciler) reconcileDiscovery(ctx context.Context, cluste
 	if config.Spec.JoinConfiguration.Discovery.BootstrapToken.Token == "" {
 		remoteClient, err := r.remoteClientGetter(ctx, r.Client, util.ObjectKey(cluster), r.scheme)
 		if err != nil {
-			return err
+			return ctrl.Result{}, err
 		}
 
 		token, err := createToken(remoteClient)
 		if err != nil {
-			return errors.Wrapf(err, "failed to create new bootstrap token")
+			return ctrl.Result{}, errors.Wrapf(err, "failed to create new bootstrap token")
 		}
 
 		config.Spec.JoinConfiguration.Discovery.BootstrapToken.Token = token
@@ -748,7 +758,7 @@ func (r *KubeadmConfigReconciler) reconcileDiscovery(ctx context.Context, cluste
 		config.Spec.JoinConfiguration.Discovery.BootstrapToken.UnsafeSkipCAVerification = true
 	}
 
-	return nil
+	return ctrl.Result{}, nil
 }
 
 // reconcileTopLevelObjectSettings injects into config.ClusterConfiguration values from top level objects like cluster and machine.

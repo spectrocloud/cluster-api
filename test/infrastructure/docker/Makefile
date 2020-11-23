@@ -36,6 +36,7 @@ export DOCKER_CLI_EXPERIMENTAL := enabled
 TOOLS_DIR := hack/tools
 TOOLS_BIN_DIR := $(TOOLS_DIR)/bin
 BIN_DIR := bin
+EXP_DIR := exp
 
 # Binaries.
 CONTROLLER_GEN := $(TOOLS_BIN_DIR)/controller-gen
@@ -108,7 +109,8 @@ generate: $(CONTROLLER_GEN) ## Generate code
 generate-go: $(CONTROLLER_GEN) $(CONVERSION_GEN) ## Runs Go related generate targets
 	$(CONTROLLER_GEN) \
 		object:headerFile=$(ROOT)/hack/boilerplate/boilerplate.generatego.txt \
-		paths=./api/...
+		paths=./api/... \
+		paths=./$(EXP_DIR)/api/...
 	$(CONVERSION_GEN) \
 		--input-dirs=./api/v1alpha3 \
 		--output-file-base=zz_generated.conversion \
@@ -118,6 +120,8 @@ generate-go: $(CONTROLLER_GEN) $(CONVERSION_GEN) ## Runs Go related generate tar
 generate-manifests: $(CONTROLLER_GEN) ## Generate manifests e.g. CRD, RBAC etc.
 	$(CONTROLLER_GEN) \
 		paths=./api/... \
+		paths=./$(EXP_DIR)/api/... \
+		paths=./$(EXP_DIR)/controllers/... \
 		paths=./controllers/... \
 		crd:crdVersions=v1 \
 		rbac:roleName=manager-role \
@@ -134,8 +138,14 @@ modules: ## Runs go mod to ensure modules are up to date.
 ## Docker
 ## --------------------------------------
 
+.PHONY: docker-pull-prerequisites
+docker-pull-prerequisites:
+	docker pull docker.io/docker/dockerfile:experimental
+	docker pull docker.io/library/golang:1.13.15
+	docker pull gcr.io/distroless/static:latest
+
 .PHONY: docker-build
-docker-build: ## Build the docker image for controller-manager
+docker-build: docker-pull-prerequisites ## Build the docker image for controller-manager
 	DOCKER_BUILDKIT=1 docker build --build-arg goproxy=$(GOPROXY) --build-arg ARCH=$(ARCH) ../../.. -t $(CONTROLLER_IMG)-$(ARCH):$(TAG) --file Dockerfile
 	MANIFEST_IMG=$(CONTROLLER_IMG)-$(ARCH) MANIFEST_TAG=$(TAG) $(MAKE) set-manifest-image
 	$(MAKE) set-manifest-pull-policy
@@ -184,7 +194,7 @@ set-manifest-pull-policy:
 ## Release
 ## --------------------------------------
 
-GIT_TAG := $(shell git describe --match "test/infrastructure/docker/*" --abbrev=0 2>/dev/null)
+GIT_TAG := $(shell git describe --abbrev=0 2>/dev/null)
 RELEASE_TAG := $(lastword $(subst /, ,$(GIT_TAG)))
 RELEASE_DIR := out
 
@@ -196,25 +206,18 @@ release: clean-release ## Builds and push container images using the latest git 
 	@if [ -z "${RELEASE_TAG}" ]; then echo "RELEASE_TAG is not set"; exit 1; fi
 	@if ! [ -z "$$(git status --porcelain)" ]; then echo "Your local git repository contains uncommitted changes, use git clean before proceeding."; exit 1; fi
 	git checkout "${GIT_TAG}"
-	# Push the release image to the staging bucket first.
-	REGISTRY=$(STAGING_REGISTRY) TAG=$(RELEASE_TAG) \
-		$(MAKE) docker-build-all docker-push-all
 	# Set the manifest image to the staging bucket.
 	MANIFEST_IMG=$(STAGING_REGISTRY)/$(IMAGE_NAME) MANIFEST_TAG=$(RELEASE_TAG) \
 		$(MAKE) set-manifest-image
 	PULL_POLICY=IfNotPresent $(MAKE) set-manifest-pull-policy
 	$(MAKE) release-manifests
-	$(MAKE) release-binaries
 
 .PHONY: release-manifests
 release-manifests: $(RELEASE_DIR) ## Builds the manifests to publish with a release
-	kustomize build config/ > $(RELEASE_DIR)/provider-components.yaml
+	kustomize build config/ > $(RELEASE_DIR)/infrastructure-components.yaml
 
 .PHONY: release-staging
 release-staging: ## Builds and push container images to the staging bucket.
-	docker pull docker.io/docker/dockerfile:experimental
-	docker pull docker.io/library/golang:1.13.12
-	docker pull gcr.io/distroless/static:latest
 	REGISTRY=$(STAGING_REGISTRY) $(MAKE) docker-build-all docker-push-all release-alias-tag
 
 RELEASE_ALIAS_TAG=$(PULL_BASE_REF)

@@ -21,15 +21,19 @@ spec:
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
-    - description: KubeadmControlPlane API Server is ready to receive requests
-      jsonPath: .status.ready
-      name: Ready
-      type: boolean
     - description: This denotes whether or not the control plane has the uploaded
         kubeadm-config configmap
       jsonPath: .status.initialized
       name: Initialized
       type: boolean
+    - description: KubeadmControlPlane API Server is ready to receive requests
+      jsonPath: .status.ready
+      name: API Server Available
+      type: boolean
+    - description: Kubernetes version associated with this control plane
+      jsonPath: .spec.version
+      name: Version
+      type: string
     - description: Total number of non-terminated machines targeted by this control
         plane
       jsonPath: .status.replicas
@@ -37,16 +41,16 @@ spec:
       type: integer
     - description: Total number of fully running and ready control plane machines
       jsonPath: .status.readyReplicas
-      name: Ready Replicas
+      name: Ready
       type: integer
     - description: Total number of non-terminated machines targeted by this control
         plane that have the desired template spec
       jsonPath: .status.updatedReplicas
-      name: Updated Replicas
+      name: Updated
       type: integer
     - description: Total number of unavailable machines targeted by this control plane
       jsonPath: .status.unavailableReplicas
-      name: Unavailable Replicas
+      name: Unavailable
       type: integer
     name: v1alpha3
     schema:
@@ -1028,6 +1032,13 @@ spec:
                     format: int32
                     type: integer
                 type: object
+              nodeDrainTimeout:
+                description: 'NodeDrainTimeout is the total amount of time that the
+                  controller will spend on draining a controlplane node The default
+                  value is 0, meaning that the node can be drained without any time
+                  limitations. NOTE: NodeDrainTimeout is different from `kubectl drain
+                  --timeout`'
+                type: string
               replicas:
                 description: Number of desired machines. Defaults to 1. When stacked
                   etcd is used only odd numbers are permitted, as per [etcd best practice](https://etcd.io/docs/v3.3.12/faq/#why-an-odd-number-of-cluster-members).

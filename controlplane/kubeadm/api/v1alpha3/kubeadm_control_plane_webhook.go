@@ -22,13 +22,14 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/blang/semver"
 	"github.com/coredns/corefile-migration/migration"
-	kubeadmv1 "sigs.k8s.io/cluster-api/bootstrap/kubeadm/types/v1beta1"
-
 	jsonpatch "github.com/evanphx/json-patch"
+	"github.com/pkg/errors"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/validation/field"
+	kubeadmv1 "sigs.k8s.io/cluster-api/bootstrap/kubeadm/types/v1beta1"
 	"sigs.k8s.io/cluster-api/util"
 	"sigs.k8s.io/cluster-api/util/container"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -86,6 +87,7 @@ const (
 	preKubeadmCommands   = "preKubeadmCommands"
 	postKubeadmCommands  = "postKubeadmCommands"
 	files                = "files"
+	users                = "users"
 )
 
 // ValidateUpdate implements webhook.Validator so a webhook will be registered for the type
@@ -114,10 +116,13 @@ func (in *KubeadmControlPlane) ValidateUpdate(old runtime.Object) error {
 		{spec, kubeadmConfigSpec, preKubeadmCommands},
 		{spec, kubeadmConfigSpec, postKubeadmCommands},
 		{spec, kubeadmConfigSpec, files},
+		{spec, kubeadmConfigSpec, "verbosity"},
+		{spec, kubeadmConfigSpec, users},
 		{spec, "infrastructureTemplate", "name"},
 		{spec, "replicas"},
 		{spec, "version"},
 		{spec, "upgradeAfter"},
+		{spec, "nodeDrainTimeout"},
 	}
 
 	allErrs := in.validateCommon()
@@ -158,6 +163,7 @@ func (in *KubeadmControlPlane) ValidateUpdate(old runtime.Object) error {
 		}
 	}
 
+	allErrs = append(allErrs, in.validateVersion(prev.Spec.Version)...)
 	allErrs = append(allErrs, in.validateEtcd(prev)...)
 	allErrs = append(allErrs, in.validateCoreDNSVersion(prev)...)
 
@@ -334,7 +340,7 @@ func (in *KubeadmControlPlane) validateCoreDNSVersion(prev *KubeadmControlPlane)
 			allErrs,
 			field.Forbidden(
 				field.NewPath("spec", "kubeadmConfigSpec", "clusterConfiguration", "dns", "imageTag"),
-				fmt.Sprintf("cannot migrate CoreDNS up to '%v' from '%v'", toVersion, fromVersion),
+				fmt.Sprintf("cannot migrate CoreDNS up to '%v' from '%v': %v", toVersion, fromVersion, err),
 			),
 		)
 	}
@@ -389,6 +395,60 @@ func (in *KubeadmControlPlane) validateEtcd(prev *KubeadmControlPlane) (allErrs 
 				),
 			)
 		}
+	}
+
+	return allErrs
+}
+
+func (in *KubeadmControlPlane) validateVersion(previousVersion string) (allErrs field.ErrorList) {
+	fromVersion, err := util.ParseMajorMinorPatch(previousVersion)
+	if err != nil {
+		allErrs = append(allErrs,
+			field.InternalError(
+				field.NewPath("spec", "version"),
+				errors.Wrapf(err, "failed to parse current kubeadmcontrolplane version: %s", previousVersion),
+			),
+		)
+		return allErrs
+	}
+
+	toVersion, err := util.ParseMajorMinorPatch(in.Spec.Version)
+	if err != nil {
+		allErrs = append(allErrs,
+			field.InternalError(
+				field.NewPath("spec", "version"),
+				errors.Wrapf(err, "failed to parse updated kubeadmcontrolplane version: %s", in.Spec.Version),
+			),
+		)
+		return allErrs
+	}
+
+	// Check if we're trying to upgrade to Kubernetes v1.19.0, which is not supported.
+	//
+	// See https://github.com/kubernetes-sigs/cluster-api/issues/3564
+	if fromVersion.NE(toVersion) && toVersion.Equals(semver.MustParse("1.19.0")) {
+		allErrs = append(allErrs,
+			field.Forbidden(
+				field.NewPath("spec", "version"),
+				"cannot update Kubernetes version to v1.19.0, for more information see https://github.com/kubernetes-sigs/cluster-api/issues/3564",
+			),
+		)
+		return allErrs
+	}
+
+	// Since upgrades to the next minor version are allowed, irrespective of the patch version.
+	ceilVersion := semver.Version{
+		Major: fromVersion.Major,
+		Minor: fromVersion.Minor + 2,
+		Patch: 0,
+	}
+	if toVersion.GTE(ceilVersion) {
+		allErrs = append(allErrs,
+			field.Forbidden(
+				field.NewPath("spec", "version"),
+				fmt.Sprintf("cannot update Kubernetes version from %s to %s", previousVersion, in.Spec.Version),
+			),
+		)
 	}
 
 	return allErrs

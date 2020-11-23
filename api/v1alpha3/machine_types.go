@@ -37,6 +37,18 @@ const (
 
 	// MachineDeploymentLabelName is the label set on machines if they're controlled by MachineDeployment
 	MachineDeploymentLabelName = "cluster.x-k8s.io/deployment-name"
+
+	// PreDrainDeleteHookAnnotationPrefix annotation specifies the prefix we
+	// search each annotation for during the pre-drain.delete lifecycle hook
+	// to pause reconciliation of deletion. These hooks will prevent removal of
+	// draining the associated node until all are removed.
+	PreDrainDeleteHookAnnotationPrefix = "pre-drain.delete.hook.machine.cluster.x-k8s.io"
+
+	// PreTerminateDeleteHookAnnotationPrefix annotation specifies the prefix we
+	// search each annotation for during the pre-terminate.delete lifecycle hook
+	// to pause reconciliation of deletion. These hooks will prevent removal of
+	// an instance from an infrastructure provider until all are removed.
+	PreTerminateDeleteHookAnnotationPrefix = "pre-terminate.delete.hook.machine.cluster.x-k8s.io"
 )
 
 // ANCHOR: MachineSpec
@@ -77,6 +89,12 @@ type MachineSpec struct {
 	// Must match a key in the FailureDomains map stored on the cluster object.
 	// +optional
 	FailureDomain *string `json:"failureDomain,omitempty"`
+
+	// NodeDrainTimeout is the total amount of time that the controller will spend on draining a node.
+	// The default value is 0, meaning that the node can be drained without any time limitations.
+	// NOTE: NodeDrainTimeout is different from `kubectl drain --timeout`
+	// +optional
+	NodeDrainTimeout *metav1.Duration `json:"nodeDrainTimeout,omitempty"`
 }
 
 // ANCHOR_END: MachineSpec
@@ -224,6 +242,7 @@ type Bootstrap struct {
 // +kubebuilder:storageversion
 // +kubebuilder:printcolumn:name="ProviderID",type="string",JSONPath=".spec.providerID",description="Provider ID"
 // +kubebuilder:printcolumn:name="Phase",type="string",JSONPath=".status.phase",description="Machine status such as Terminating/Pending/Running/Failed etc"
+// +kubebuilder:printcolumn:name="Version",type="string",JSONPath=".spec.version",description="Kubernetes version associated with this Machine"
 // +kubebuilder:printcolumn:name="NodeName",type="string",JSONPath=".status.nodeRef.name",description="Node name associated with this machine",priority=1
 
 // Machine is the Schema for the machines API

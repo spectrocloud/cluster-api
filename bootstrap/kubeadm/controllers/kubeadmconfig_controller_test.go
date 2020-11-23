@@ -422,7 +422,7 @@ func TestKubeadmConfigReconciler_Reconcile_RequeueJoiningNodesIfControlPlaneNotI
 			g.Expect(err).NotTo(HaveOccurred())
 			g.Expect(result.Requeue).To(BeFalse())
 			g.Expect(result.RequeueAfter).To(Equal(30 * time.Second))
-			assertHasFalseCondition(g, myclient, tc.request, bootstrapv1.DataSecretAvailableCondition, clusterv1.ConditionSeverityInfo, bootstrapv1.WaitingForControlPlaneAvailableReason)
+			assertHasFalseCondition(g, myclient, tc.request, bootstrapv1.DataSecretAvailableCondition, clusterv1.ConditionSeverityInfo, clusterv1.WaitingForControlPlaneAvailableReason)
 		})
 	}
 }
@@ -1078,7 +1078,8 @@ func TestKubeadmConfigReconciler_Reconcile_DiscoveryReconcileBehaviors(t *testin
 		t.Run(tc.name, func(t *testing.T) {
 			g := NewWithT(t)
 
-			err := k.reconcileDiscovery(context.Background(), tc.cluster, tc.config, secret.Certificates{})
+			res, err := k.reconcileDiscovery(context.Background(), tc.cluster, tc.config, secret.Certificates{})
+			g.Expect(res.IsZero()).To(BeTrue())
 			g.Expect(err).NotTo(HaveOccurred())
 
 			err = tc.validateDiscovery(g, tc.config)
@@ -1088,7 +1089,7 @@ func TestKubeadmConfigReconciler_Reconcile_DiscoveryReconcileBehaviors(t *testin
 }
 
 // Test failure cases for the discovery reconcile function.
-func TestKubeadmConfigReconciler_Reconcile_DisocveryReconcileFailureBehaviors(t *testing.T) {
+func TestKubeadmConfigReconciler_Reconcile_DiscoveryReconcileFailureBehaviors(t *testing.T) {
 	k := &KubeadmConfigReconciler{
 		Log:    log.Log,
 		Client: nil,
@@ -1098,9 +1099,12 @@ func TestKubeadmConfigReconciler_Reconcile_DisocveryReconcileFailureBehaviors(t 
 		name    string
 		cluster *clusterv1.Cluster
 		config  *bootstrapv1.KubeadmConfig
+
+		result ctrl.Result
+		err    error
 	}{
 		{
-			name:    "Fail if cluster has not ControlPlaneEndpoint",
+			name:    "Should requeue if cluster has not ControlPlaneEndpoint",
 			cluster: &clusterv1.Cluster{}, // cluster without endpoints
 			config: &bootstrapv1.KubeadmConfig{
 				Spec: bootstrapv1.KubeadmConfigSpec{
@@ -1113,6 +1117,7 @@ func TestKubeadmConfigReconciler_Reconcile_DisocveryReconcileFailureBehaviors(t 
 					},
 				},
 			},
+			result: ctrl.Result{RequeueAfter: 10 * time.Second},
 		},
 	}
 
@@ -1120,8 +1125,13 @@ func TestKubeadmConfigReconciler_Reconcile_DisocveryReconcileFailureBehaviors(t 
 		t.Run(tc.name, func(t *testing.T) {
 			g := NewWithT(t)
 
-			err := k.reconcileDiscovery(context.Background(), tc.cluster, tc.config, secret.Certificates{})
-			g.Expect(err).To(HaveOccurred())
+			res, err := k.reconcileDiscovery(context.Background(), tc.cluster, tc.config, secret.Certificates{})
+			g.Expect(res).To(Equal(tc.result))
+			if tc.err == nil {
+				g.Expect(err).To(BeNil())
+			} else {
+				g.Expect(err).To(Equal(tc.err))
+			}
 		})
 	}
 }
@@ -1306,6 +1316,7 @@ func TestKubeadmConfigReconciler_Reconcile_AlwaysCheckCAVerificationUnlessReques
 // If a cluster object changes then all associated KubeadmConfigs should be re-reconciled.
 // This allows us to not requeue a kubeadm config while we wait for InfrastructureReady.
 func TestKubeadmConfigReconciler_ClusterToKubeadmConfigs(t *testing.T) {
+	_ = feature.MutableGates.Set("MachinePool=true")
 	g := NewWithT(t)
 
 	cluster := newCluster("my-cluster")
@@ -1318,6 +1329,13 @@ func TestKubeadmConfigReconciler_ClusterToKubeadmConfigs(t *testing.T) {
 		expectedNames = append(expectedNames, configName)
 		objs = append(objs, m, c)
 	}
+	for i := 3; i < 6; i++ {
+		mp := newMachinePool(cluster, fmt.Sprintf("my-machinepool-%d", i))
+		configName := fmt.Sprintf("my-config-%d", i)
+		c := newMachinePoolKubeadmConfig(mp, configName)
+		expectedNames = append(expectedNames, configName)
+		objs = append(objs, mp, c)
+	}
 	fakeClient := helpers.NewFakeClientWithScheme(setupScheme(), objs...)
 	reconciler := &KubeadmConfigReconciler{
 		Log:    log.Log,
@@ -1327,7 +1345,7 @@ func TestKubeadmConfigReconciler_ClusterToKubeadmConfigs(t *testing.T) {
 		Object: cluster,
 	}
 	configs := reconciler.ClusterToKubeadmConfigs(o)
-	names := make([]string, 3)
+	names := make([]string, 6)
 	for i := range configs {
 		names[i] = configs[i].Name
 	}
@@ -1475,6 +1493,148 @@ func TestKubeadmConfigReconciler_Reconcile_PatchWhenErrorOccurred(t *testing.T) 
 	// check if the kubeadm config has been patched
 	g.Expect(cfg.Spec.InitConfiguration).ToNot(BeNil())
 	g.Expect(cfg.Status.ObservedGeneration).NotTo(BeNil())
+}
+
+func TestKubeadmConfigReconciler_ResolveFiles(t *testing.T) {
+	testSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "source",
+		},
+		Data: map[string][]byte{
+			"key": []byte("foo"),
+		},
+	}
+
+	cases := map[string]struct {
+		cfg     *bootstrapv1.KubeadmConfig
+		objects []runtime.Object
+		expect  []bootstrapv1.File
+	}{
+		"content should pass through": {
+			cfg: &bootstrapv1.KubeadmConfig{
+				Spec: bootstrapv1.KubeadmConfigSpec{
+					Files: []bootstrapv1.File{
+						{
+							Content:     "foo",
+							Path:        "/path",
+							Owner:       "root:root",
+							Permissions: "0600",
+						},
+					},
+				},
+			},
+			expect: []bootstrapv1.File{
+				{
+					Content:     "foo",
+					Path:        "/path",
+					Owner:       "root:root",
+					Permissions: "0600",
+				},
+			},
+		},
+		"contentFrom should convert correctly": {
+			cfg: &bootstrapv1.KubeadmConfig{
+				Spec: bootstrapv1.KubeadmConfigSpec{
+					Files: []bootstrapv1.File{
+						{
+							ContentFrom: &bootstrapv1.FileSource{
+								Secret: bootstrapv1.SecretFileSource{
+									Name: "source",
+									Key:  "key",
+								},
+							},
+							Path:        "/path",
+							Owner:       "root:root",
+							Permissions: "0600",
+						},
+					},
+				},
+			},
+			expect: []bootstrapv1.File{
+				{
+					Content:     "foo",
+					Path:        "/path",
+					Owner:       "root:root",
+					Permissions: "0600",
+				},
+			},
+			objects: []runtime.Object{testSecret},
+		},
+		"multiple files should work correctly": {
+			cfg: &bootstrapv1.KubeadmConfig{
+				Spec: bootstrapv1.KubeadmConfigSpec{
+					Files: []bootstrapv1.File{
+						{
+							Content:     "bar",
+							Path:        "/bar",
+							Owner:       "root:root",
+							Permissions: "0600",
+						},
+						{
+							ContentFrom: &bootstrapv1.FileSource{
+								Secret: bootstrapv1.SecretFileSource{
+									Name: "source",
+									Key:  "key",
+								},
+							},
+							Path:        "/path",
+							Owner:       "root:root",
+							Permissions: "0600",
+						},
+					},
+				},
+			},
+			expect: []bootstrapv1.File{
+				{
+					Content:     "bar",
+					Path:        "/bar",
+					Owner:       "root:root",
+					Permissions: "0600",
+				},
+				{
+					Content:     "foo",
+					Path:        "/path",
+					Owner:       "root:root",
+					Permissions: "0600",
+				},
+			},
+			objects: []runtime.Object{testSecret},
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			g := NewWithT(t)
+
+			myclient := helpers.NewFakeClientWithScheme(setupScheme(), tc.objects...)
+			k := &KubeadmConfigReconciler{
+				Log:             log.Log,
+				Client:          myclient,
+				KubeadmInitLock: &myInitLocker{},
+			}
+
+			// make a list of files we expect to be sourced from secrets
+			// after we resolve files, assert that the original spec has
+			// not been mutated and all paths we expected to be sourced
+			// from secrets still are.
+			contentFrom := map[string]bool{}
+			for _, file := range tc.cfg.Spec.Files {
+				if file.ContentFrom != nil {
+					contentFrom[file.Path] = true
+				}
+			}
+
+			files, err := k.resolveFiles(context.Background(), tc.cfg)
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(files).To(Equal(tc.expect))
+			for _, file := range tc.cfg.Spec.Files {
+				if contentFrom[file.Path] {
+					g.Expect(file.ContentFrom).NotTo(BeNil())
+					g.Expect(file.Content).To(Equal(""))
+				}
+			}
+		})
+	}
 }
 
 // test utils

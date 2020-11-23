@@ -8,13 +8,29 @@ workflow that offers easy deployments and rapid iterative builds.
 ## Prerequisites
 
 1. [Docker](https://docs.docker.com/install/) v19.03 or newer
-1. [kind](https://kind.sigs.k8s.io) v0.7 or newer
-   (other clusters can be used if `preload_images_for_kind` is set to false)
-1. [kustomize](https://github.com/kubernetes-sigs/kustomize/blob/master/docs/INSTALL.md) standalone
-   (`kubectl kustomize` does not work because it is missing some features of kustomize v3)
+1. [kind](https://kind.sigs.k8s.io) v0.7 or newer (other clusters can be
+   used if `preload_images_for_kind` is set to false)
+1. [kustomize](https://github.com/kubernetes-sigs/kustomize/blob/master/docs/INSTALL.md)
+   standalone (`kubectl kustomize` does not work because it is missing
+   some features of kustomize v3)
 1. [Tilt](https://docs.tilt.dev/install.html) v0.12.0 or newer
-1. Clone the [Cluster API](https://github.com/kubernetes-sigs/cluster-api) repository locally
+1. [envsubst](https://github.com/drone/envsubst) or similar to handle
+   clusterctl var replacement. Note: drone/envsubst releases v1.0.2 and
+   earlier do not have the binary packaged under cmd/envsubst. It is
+   available in Go psuedo-version `v1.0.3-0.20200709231038-aa43e1c1a629`
+1. Clone the [Cluster
+   API](https://github.com/kubernetes-sigs/cluster-api) repository
+   locally
 1. Clone the provider(s) you want to deploy locally as well
+
+We provide a make target to generate the envsubst binary if desired.
+See the [provider contract](./../clusterctl/provider-contract.md) for
+more details about how clusterctl uses variables.
+
+
+```
+make envsubst
+```
 
 ## Getting started
 
@@ -132,7 +148,7 @@ base64 -i ~/path/to/gcp/credentials.json
 Set to `manual` to disable auto-rebuilding and require users to trigger rebuilds of individual changed components through the UI.
 
 **extra_args** (Object, default={}): A mapping of provider to additional arguments to pass to the main binary configured
-for this provider. Each item in the array will be passed in to the manager for the given provider. 
+for this provider. Each item in the array will be passed in to the manager for the given provider.
 
 Example:
 
@@ -212,6 +228,11 @@ The manager image will use docker-slim, so to download files, use `additional_he
 COPY --from=tilt-helper /usr/bin/docker /usr/bin/docker
 COPY --from=tilt-helper /go/kubernetes/client/bin/kubectl /usr/bin/kubectl
 ```
+
+**kustomize_config** (Bool, default=true): Whether or not running kustomize on the ./config folder of the provider.
+Set to `false` if your provider does not have a ./config folder or you do not want it to be applied in the cluster.
+
+**go_main** (String, default="main.go"): The go main file if not located at the root of the folder
 
 ## Customizing Tilt
 

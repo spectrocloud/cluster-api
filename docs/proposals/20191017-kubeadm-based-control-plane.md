@@ -18,7 +18,7 @@ reviewers:
   - "@hardikdr"
   - "@sbueringer"
 creation-date: 2019-10-17
-last-updated: 2019-12-04
+last-updated: 2020-09-07
 status: implementable
 ---
 
@@ -26,42 +26,50 @@ status: implementable
 
 ## Table of Contents
 
-- [Control Plane Management](#control-plane-management)
-  - [Table of Contents](#table-of-contents)
-  - [Glossary](#glossary)
-    - [References](#references)
-  - [Summary](#summary)
-  - [Motivation](#motivation)
-    - [Goals](#goals)
-      - [Additional goals of the default kubeadm machine-based Implementation](#additional-goals-of-the-default-kubeadm-machine-based-implementation)
-    - [Non-Goals / Future Work](#non-goals--future-work)
-  - [Proposal](#proposal)
-    - [User Stories](#user-stories)
-      - [Identified features from user stories](#identified-features-from-user-stories)
-    - [Implementation Details/Notes/Constraints](#implementation-detailsnotesconstraints)
-      - [New API Types](#new-api-types)
-      - [Modifications required to existing API Types](#modifications-required-to-existing-api-types)
-      - [Behavioral Changes from v1alpha2](#behavioral-changes-from-v1alpha2)
-      - [Behaviors](#behaviors)
-        - [Create](#create)
-        - [Scale Up](#scale-up)
-        - [Scale Down](#scale-down)
-        - [Delete of the entire KubeadmControlPlane (kubectl delete controlplane my-controlplane)](#delete-of-the-entire-kubeadmcontrolplane-kubectl-delete-controlplane-my-controlplane)
-        - [Cluster upgrade (using create-swap-and-delete)](#cluster-upgrade-using-create-swap-and-delete)
-          - [Constraints and Assumptions](#constraints-and-assumptions)
-        - [Control plane healthcheck](#control-plane-healthcheck)
-        - [Adoption of pre-v1alpha3 Control Plane Machines](#adoption-of-pre-v1alpha3-control-plane-machines)
-      - [Code organization](#code-organization)
-    - [Risks and Mitigations](#risks-and-mitigations)
-      - [etcd membership](#etcd-membership)
-      - [Upgrade where changes needed to KubeadmConfig are not currently possible](#upgrade-where-changes-needed-to-kubeadmconfig-are-not-currently-possible)
-  - [Design Details](#design-details)
-    - [Test Plan](#test-plan)
-    - [Graduation Criteria](#graduation-criteria)
-      - [Alpha -> Beta Graduation](#alpha---beta-graduation)
-    - [Upgrade Strategy](#upgrade-strategy)
-  - [Alternatives](#alternatives)
-  - [Implementation History](#implementation-history)
+   * [Kubeadm Based Control Plane Management](#kubeadm-based-control-plane-management)
+      * [Table of Contents](#table-of-contents)
+      * [Glossary](#glossary)
+         * [References](#references)
+      * [Summary](#summary)
+      * [Motivation](#motivation)
+         * [Goals](#goals)
+         * [Non-Goals / Future Work](#non-goals--future-work)
+      * [Proposal](#proposal)
+         * [User Stories](#user-stories)
+            * [Identified features from user stories](#identified-features-from-user-stories)
+         * [Implementation Details/Notes/Constraints](#implementation-detailsnotesconstraints)
+            * [New API Types](#new-api-types)
+            * [Modifications required to existing API Types](#modifications-required-to-existing-api-types)
+            * [Behavioral Changes from v1alpha2](#behavioral-changes-from-v1alpha2)
+            * [Behaviors](#behaviors)
+               * [Create](#create)
+               * [Scale Up](#scale-up)
+               * [Scale Down](#scale-down)
+               * [Delete of the entire KubeadmControlPlane (kubectl delete controlplane my-controlplane)](#delete-of-the-entire-kubeadmcontrolplane-kubectl-delete-controlplane-my-controlplane)
+               * [KubeadmControlPlane rollout (using create-swap-and-delete)](#kubeadmcontrolplane-rollout-using-create-swap-and-delete)
+                  * [Constraints and Assumptions](#constraints-and-assumptions)
+               * [Remediation (using delete-and-recreate)](#remediation-using-delete-and-recreate)
+                  * [Why delete and recreate](#why-delete-and-recreate)
+                  * [Scenario 1: Three replicas, one machine marked for remediation](#scenario-1-three-replicas-one-machine-marked-for-remediation)
+                  * [Scenario 2: Three replicas, two machines marked for remediation](#scenario-2-three-replicas-two-machines-marked-for-remediation)
+                  * [Scenario 3: Three replicas, one unresponsive etcd member, one (different) unhealthy machine](#scenario-3-three-replicas-one-unresponsive-etcd-member-one-different-unhealthy-machine)
+                  * [Scenario 4: Unhealthy machines combined with rollout](#scenario-4-unhealthy-machines-combined-with-rollout)
+               * [Health checks](#health-checks)
+                  * [Etcd (external)](#etcd-external)
+                  * [Etcd (stacked)](#etcd-stacked)
+                  * [Kubernetes Control Plane](#kubernetes-control-plane)
+               * [Adoption of pre-v1alpha3 Control Plane Machines](#adoption-of-pre-v1alpha3-control-plane-machines)
+            * [Code organization](#code-organization)
+         * [Risks and Mitigations](#risks-and-mitigations)
+            * [etcd membership](#etcd-membership)
+            * [Upgrade where changes needed to KubeadmConfig are not currently possible](#upgrade-where-changes-needed-to-kubeadmconfig-are-not-currently-possible)
+      * [Design Details](#design-details)
+         * [Test Plan](#test-plan)
+         * [Graduation Criteria](#graduation-criteria)
+            * [Alpha -&gt; Beta Graduation](#alpha---beta-graduation)
+         * [Upgrade Strategy](#upgrade-strategy)
+      * [Alternatives](#alternatives)
+      * [Implementation History](#implementation-history)
 
 ## Glossary
 
@@ -91,15 +99,19 @@ for the default implementation would not preclude the use of alternative control
 
 - To establish new resource types for control plane management
 - To support single node and multiple node control plane instances, with the requirement that the infrastructure provider supports some type of a stable endpoint for the API Server (Load Balancer, VIP, etc).
+- To enable scaling of the number of control plane nodes
 - To enable declarative orchestrated control plane upgrades
 - To provide a default machine-based implementation using kubeadm
 - To provide a kubeadm-based implementation that is infrastructure provider agnostic
 - To enable declarative orchestrated replacement of control plane machines, such as to roll out an OS-level CVE fix.
 - To manage a kubeadm-based, "stacked etcd" control plane
-- To enable scaling of the number of control plane nodes
-- To support pre-existing, user-managed, external etcd clusters
-- To support only user-initiated remediation:
+- To manage a kubeadm-based, "external etcd" control plane (using a pre-existing, user-managed, etcd clusters).
+- To manage control plane deployments across failure domains.
+- To support user-initiated remediation:
   E.g. user deletes a Machine. Control Plane Provider reconciles by removing the corresponding etcd member and updating related metadata
+- To support auto remediation triggered by MachineHealthCheck objects:
+  E.g. a MachineHealthCheck marks a machine for remediation. Control Plane Provider reconciles by removing the machine and replaces it with a new one
+  **if and only if** the operation is not potentially destructive for the cluster (e.g. the operation could cause a permanent quorum loss).
 
 ### Non-Goals / Future Work
 
@@ -108,18 +120,16 @@ Non-Goals listed in this document are intended to scope bound the current v1alph
 - To manage non-machine based topologies, e.g.
   - Pod based control planes.
   - Non-node control planes (i.e. EKS, GKE, AKS).
-- To manage control plane deployments across failure domains, follow up work for this will be tracked on [this issue](https://github.com/kubernetes-sigs/cluster-api/issues/1647).
 - To define a mechanism for providing a stable API endpoint for providers that do not currently have one, follow up work for this will be tracked on [this issue](https://github.com/kubernetes-sigs/cluster-api/issues/1687)
 - To predefine the exact contract/interoperability mechanism for alternative control plane providers, follow up work for this will be tracked on [this issue](https://github.com/kubernetes-sigs/cluster-api/issues/1727)
 - To manage CA certificates outside of what is provided by Kubeadm bootstrapping
 - To manage etcd clusters in any topology other than stacked etcd (externally managed etcd clusters can still be leveraged).
 - To address disaster recovery constraints, e.g. restoring a control plane from 0 replicas using a filesystem or volume snapshot copy of data persisted in etcd.
 - To support rollbacks, as there is no data store rollback guarantee for Kubernetes. Consumers should perform backups of the cluster prior to performing potentially destructive operations.
-- To mutate the configuration of live, running clusters (e.g. changing api-server flags), as this is the responsibility of the [component configuration working group](https://github.com/kubernetes/community/tree/master/wg-component-standard).
-- To support auto remediation. Using such a mechanism to automatically replace machines may lead to unintended behaviours and we want to have real world feedback on the health indicators chosen and remediation strategies developed prior to attempting automated remediation.
+- To mutate the configuration of live, running clusters (e.g. changing api-server flags), as this is the responsibility of the [component configuration working group](https://git.k8s.io/community/wg-component-standard).
 - To provide configuration of external cloud providers (i.e. the [cloud-controller-manager](https://kubernetes.io/docs/tasks/administer-cluster/running-cloud-controller/)).This is deferred to kubeadm.
 - To provide CNI configuration. This is deferred to external, higher level tooling.
-- To provide the upgrade logic to handle changes to infrastructure (networks, firewalls etc…) that may need to be done to support a control plane on a newer version of Kubernetes (e.g. a cloud controller manager requires updated permissions against infrastructure APIs). We expect the work on [add-on components](https://github.com/kubernetes/community/tree/master/sig-cluster-lifecycle#cluster-addons)) to help to resolve some of these issues.
+- To provide the upgrade logic to handle changes to infrastructure (networks, firewalls etc…) that may need to be done to support a control plane on a newer version of Kubernetes (e.g. a cloud controller manager requires updated permissions against infrastructure APIs). We expect the work on [add-on components](https://git.k8s.io/community/sig-cluster-lifecycle#cluster-addons)) to help to resolve some of these issues.
 - To provide automation around the horizontal or vertical scaling of control plane components, especially as etcd places hard performance limits beyond 3 nodes (due to latency).
 - To support upgrades where the infrastructure does not rely on a Load Balancer for access to the API Server.
 - To implement a fully modeled state machine and/or Conditions, a larger effort for Cluster API more broadly is being organized on [this issue](https://github.com/kubernetes-sigs/cluster-api/issues/1658))
@@ -151,156 +161,7 @@ Non-Goals listed in this document are intended to scope bound the current v1alph
 
 #### New API Types
 
-KubeadmControlPlane:
-
-```go
-package v1alpha3
-
-import (
-    corev1  "k8s.io/api/core/v1"
-    metav1  "k8s.io/apimachinery/pkg/apis/meta/v1"
-    cabpkv1 "sigs.k8s.io/cluster-api-bootstrap-provider-kubeadm/api/v1alpha2"
-)
-
-// KubeadmControlPlaneSpec defines the desired state of KubeadmControlPlane.
-type KubeadmControlPlaneSpec struct {
-    // Number of desired machines. Defaults to 1. When stacked etcd is used only
-    // odd numbers are permitted, as per [etcd best practice](https://etcd.io/docs/v3.3.12/faq/#why-an-odd-number-of-cluster-members).
-    // This is a pointer to distinguish between explicit zero and not specified.
-    // +optional
-    Replicas *int32 `json:"replicas,omitempty"`
-
-    // Version defines the desired Kubernetes version.
-    Version string `json:"version"`
-
-    // InfrastructureTemplate is a required reference to a custom resource
-    // offered by an infrastructure provider.
-    InfrastructureTemplate corev1.ObjectReference `json:"infrastructureTemplate"`
-
-    // KubeadmConfigSpec is a KubeadmConfigSpec
-    // to use for initializing and joining machines to the control plane.
-    KubeadmConfigSpec cabpkv1.KubeadmConfigSpec `json:"kubeadmConfigSpec"`
-}
-
-// KubeadmControlPlaneStatus defines the observed state of KubeadmControlPlane.
-type KubeadmControlPlaneStatus struct {
-    // Selector is the label selector in string format to avoid introspection
-    // by clients, and is used to provide the CRD-based integration for the
-    // scale subresource and additional integrations for things like kubectl
-    // describe.. The string will be in the same format as the query-param syntax.
-    // More info about label selectors: http://kubernetes.io/docs/user-guide/labels#label-selectors
-    // +optional
-    Selector string `json:"selector,omitempty"`
-
-    // Total number of non-terminated machines targeted by this control plane
-    // (their labels match the selector).
-    // +optional
-    Replicas int32 `json:"replicas,omitempty"`
-
-    // Total number of non-terminated machines targeted by this control plane
-    // that have the desired template spec.
-    // +optional
-    UpdatedReplicas int32 `json:"updatedReplicas,omitempty"`
-
-    // Total number of fully running and ready control plane machines.
-    // +optional
-    ReadyReplicas int32 `json:"readyReplicas,omitempty"`
-
-    // Total number of unavailable machines targeted by this control plane.
-    // This is the total number of machines that are still required for
-    // the deployment to have 100% available capacity. They may either
-    // be machines that are running but not yet ready or machines
-    // that still have not been created.
-    // +optional
-    UnavailableReplicas int32 `json:"unavailableReplicas,omitempty"`
-
-    // Initialized denotes whether or not the control plane has the
-    // uploaded kubeadm-config configmap.
-    // +optional
-    Initialized bool `json:"initialized,omitempty”`
-
-    // Ready denotes that the KubeadmControlPlane API Server is ready to
-    // receive requests.
-    // +optional
-    Ready bool `json:"ready,omitempty"`
-
-    // FailureReason indicates that there is a problem reconciling the
-    // state, and will be set to a token value suitable for
-    // programmatic interpretation.
-    // +optional
-    FailureReason KubeadmControlPlaneStatusError `json:"errorReason,omitempty"`
-
-    // FailureMessage indicates that there is a problem reconciling the
-    // state, and will be set to a descriptive error message.
-    // +optional
-    FailureMessage *string `json:"errorMessage,omitempty"`
-
-// +kubebuilder:object:root=true
-// +kubebuilder:resource:path=controlplanes,shortName=cp,scope=Namespaced,categories=cluster-api
-// +kubebuilder:storageversion
-// +kubebuilder:subresource:status
-// +kubebuilder:subresource:scale:specpath=.spec.replicas,statuspath=.status.replicas,selectorpath=.status.selector
-
-// KubeadmControlPlane is the Schema for the KubeadmControlPlane API.
-type KubeadmControlPlane struct {
-    metav1.TypeMeta   `json:",inline"`
-    metav1.ObjectMeta `json:"metadata,omitempty"`
-
-    Spec   KubeadmControlPlaneSpec   `json:"spec,omitempty"`
-    Status KubeadmControlPlaneStatus `json:"status,omitempty"`
-}
-
-// +kubebuilder:object:root=true
-
-// KubeadmControlPlaneList contains a list of KubeadmControlPlane.
-type KubeadmControlPlaneList struct {
-    metav1.TypeMeta `json:",inline"`
-    metav1.ListMeta `json:"metadata,omitempty"`
-    Items           []KubeadmControlPlane `json:"items"`
-}
-
-func init() {
-    SchemeBuilder.Register(&KubeadmControlPlane{}, &KubeadmControlPlaneList{})
-}
-
-type KubeadmControlPlaneStatusError string
-
-// A more descriptive kind of error that represents an error condition that
-// should be set in the KubeadmControlPlane.Status. The "Reason" field is meant for short,
-// enum-style constants meant to be interpreted by control planes. The "Message"
-// field is meant to be read by humans.
-type KubeadmControlPlaneError struct {
-    Reason  KubeadmControlPlaneStatusError
-    Message string
-}
-
-func (e *KubeadmControlPlaneError) Error() string {
-    return e.Message
-}
-
-const (
-    // InvalidConfigurationKubeadmControlPlaneError indicates that the kubeadm control plane
-    // configuration is invalid.
-    InvalidConfigurationKubeadmControlPlaneError KubeadmControlPlaneStatusError = "InvalidConfiguration"
-
-    // UnsupportedChangeKubeadmControlPlaneError indicates that the kubeadm control plane
-    // spec has been updated in an unsupported way. That cannot be
-    // reconciled.
-    UnsupportedChangeKubeadmControlPlaneError KubeadmControlPlaneStatusError = "UnsupportedChange"
-
-    // CreateKubeadmControlPlaneError indicates that an error was encountered
-    // when trying to create the kubeadm control plane.
-    CreateKubeadmControlPlaneError KubeadmControlPlaneStatusError = "CreateError"
-
-    // UpdateKubeadmControlPlaneError indicates that an error was encountered
-    // when trying to update the kubeadm control plane.
-    UpdateKubeadmControlPlaneError KubeadmControlPlaneStatusError = "UpdateError"
-
-    // DeleteKubeadmControlPlaneError indicates that an error was encountered
-    // when trying to delete the kubeadm control plane.
-    DeleteKubeadmControlPlaneError KubeadmControlPlaneStatusError = "DeleteError"
-)
-```
+See [kubeadm_control_plane_types.go](https://github.com/kubernetes-sigs/cluster-api/blob/master/controlplane/kubeadm/api/v1alpha3/kubeadm_control_plane_types.go)
 
 With the following validations:
 
@@ -308,12 +169,16 @@ With the following validations:
   - `KubeadmControlPlane.Spec.Replicas` is an odd number.
   - Configuration of external etcd is determined by introspecting the provided `KubeadmConfigSpec`.
 - `KubeadmControlPlane.Spec.Replicas` is >= 0 or is nil
-- `KubeadmControlPlane.Spec.Version != ""` (openapi)
-- `KubeadmControlPlane.Spec.KubeadmConfigSpec` must be treated as immutable (via webhook)
+- `KubeadmControlPlane.Spec.Version` should be a valid semantic version
+- `KubeadmControlPlane.Spec.KubeadmConfigSpec` allows mutations required for supporting following use cases:
+    - Change of imagesRepository/imageTags (with validation of CoreDNS supported upgrade)
+    - Change of node registration options
+    - Change of pre/post kubeadm commands 
+    - Change of cloud init files
 
 And the following defaulting:
 
-- `KubeadmControlPlane.Spec.Replicas: 1` (openapi or webhook)
+- `KubeadmControlPlane.Spec.Replicas: 1` 
 
 #### Modifications required to existing API Types
 
@@ -348,7 +213,6 @@ And the following defaulting:
 ##### Create
 
 - After a KubeadmControlPlane object is created, it must bootstrap a control plane with a given number of replicas.
-- If an error occurs, `KubeadmControlPlane.Status.FailureReason` and `KubeadmControlPlane.Status.FailureMessage` are populated.
 - `KubeadmControlPlane.Spec.Replicas` must be an odd number.
 - Can create an arbitrary number of control planes if etcd is external to the control plane, which will be determined by introspecting `KubeadmControlPlane.Spec.KubeadmConfigSpec`.
 - Creating a KubeadmControlPlane with > 1 replicas is equivalent to creating a KubeadmControlPlane with 1 replica followed by scaling the KubeadmControlPlane to the desired number of replicas
@@ -453,71 +317,63 @@ spec:
 - Allow scale up a control plane with stacked etcd to only odd numbers, as per
   [etcd best practice](https://etcd.io/docs/v3.3.12/faq/#why-an-odd-number-of-cluster-members).
 - However, allow a control plane using an external etcd cluster to scale up to other numbers such as 2 or 4.
-- Scale up operations must not be done in conjunction with an upgrade operation, this should be enforced using a validation webhook.
+- Scale up operations must not be done in conjunction with:
+  - Adopting machines
+  - Upgrading machines
 - Scale up operations are blocked based on Etcd and control plane health checks.
   - See [Health checks](#Health checks) below.
+- Scale up operations creates the next machine in the failure domain with the fewest number of machines. 
 
 ![controlplane-init-6](images/controlplane/controlplane-init-6.png)
 
 ##### Scale Down
 
-The annotation steps are required to make scale down re-entrant.
-
-- Scale down a stacked control plane
-  - Wait for deletes to finish before scaling down
-  - Find the oldest machine, or machine marked for removal and target that as the replica to remove
-  - Apply an annotation to the machine marked for removal
-  - Require Etcd to be healthy
-  - Remove the replica’s etcd member from the etcd cluster
-  - Apply an annotation to the machine that has had the etcd member removed from the etcd cluster
-  - Require Control plane to be healthy
-  - Update the kubeadm generated config map
-  - Apply an annotation to the machine that the kubeadm config map has been updated
-  - Require the annotations that the etcd member has been removed and the kubeadm config map updated
-  - Remove the Machine
-- Scale down a control plane with an external etcd
-  - Same as above minus etcd management
-- Scale down operations must not be done in conjunction with an upgrade operation, this should not impact manual operations for recovery. This should also be enforced using a validation webhook.
-- Scale down operations are blocked based on Etcd and control plane health checks
-  - Etcd health is not required if a machine has already been selected for scale down
+- Allow scale down a control plane with stacked etcd to only odd numbers, as per
+  [etcd best practice](https://etcd.io/docs/v3.3.12/faq/#why-an-odd-number-of-cluster-members).
+- However, allow a control plane using an external etcd cluster to scale down to other numbers such as 2 or 4.
+- Scale up operations must not be done in conjunction with:
+  - Adopting machines
+  - Upgrading machines
+- Scale up operations are blocked based on Etcd and control plane health checks.
   - See [Health checks](#Health checks) below.
-- Scale to 0 must be rejected for the initial support, see below for deletion workflows.
+- Scale down operations removes the oldest machine in the failure domain that has the most control-plane machines on it 
 
 ![controlplane-init-7](images/controlplane/controlplane-init-7.png)
 
 ##### Delete of the entire KubeadmControlPlane (kubectl delete controlplane my-controlplane)
 
+- KubeadmControlPlane deletion should be blocked until all the worker nodes are deleted.
 - Completely removing the control plane and issuing a delete on the underlying machines.
-  - Deletion is equivalent to a scale to 1 followed by a deletion of a single replica control plane.
 - User documentation should focus on deletion of the Cluster resource rather than the KubeadmControlPlane resource.
-- Cluster deletion will need to be modified to ensure KubeadmControlPlane deletion is done in the proper order.
 
-##### Cluster upgrade (using create-swap-and-delete)
+##### KubeadmControlPlane rollout (using create-swap-and-delete)
 
-- Triggered on any changes to Version or the InfrastructureTemplate
-  - The KubeadmConfiguration, for the first iteration, is treated and validated as immutable and changes to it do not trigger an upgrade
-  - Must be able to trigger an upgrade for the underlying machine image (e.g. nothing in the above list has changed but an upgrade is required)
-      - By adding a timestamp field, `upgradeAfter`, which can be set to a specific time in the future
+- Triggered by: 
+    - Changes to Version
+    - Changes to the kubeadmConfigSpec
+    - Changes to the infrastructureRef
+    - The `upgradeAfter` field, which can be set to a specific time in the future
         - Set to `nil` or the zero value of `time.Time` if no upgrades are desired
         - An upgrade will run when that timestamp is passed
         - Good for scheduling upgrades/SLOs
         - Set `upgradeAfter` to now (in RFC3339 form) if an upgrade is required immediately
 
-- Upgrade operations rely on scale up and scale down which are be blocked based on Etcd and control plane health checks
+- Rollout operations rely on scale up and scale down which are be blocked based on Etcd and control plane health checks
   - See [Health checks](#Health checks) below.
 
-- The upgrade algorithm is as follows:
-  - Find Machines that need upgrading
-    - Configuration hash doesn't match
-    - `upgradeAfter` field is before now
-  - Mark machine as selected for upgrade
-  - Scale up control plane
-  - Mark machine as having a replacement
-  - Scale down control plane by removing a machine that has been marked for removal and has a replacement already created
-
-- Determining if a Machine is "up to date" will be done through the use of a label (controlplane.cluster.x-k8s.io/hash) that is placed on the Machine at creation time. The value of this label is generated by computing the Hash of the KubeadmControlPlaneSpec (minus the replicas field). This would allow triggering an Upgrade based on any changes to Version, InfrastructureTemplate, or the KubeadmConfiguration used (when a new configuration is referenced in a new InfrastructureTemplate).
-  - For example, a CVE is patched in containerd and updated images are available. Note that the Kubernetes version is not changed. To trigger an upgrade, the user updates the image in the InfrastructureTemplate (as in the Acme cluster example above, the image is stored in InfrastructureTemplate.Spec.OSImage.ID).
-- The controller should tolerate the manual removal of a replica during the upgrade process. A replica that fails during the upgrade may block the completion of the upgrade. Removal or other remedial action may be necessary to allow the upgrade to complete.
+- The rollout algorithm is the following:
+  - Find Machines that have an outdated spec
+  - If there is a machine requiring rollout
+    - Scale up control plane creating a machine with the new spec
+    - Scale down control plane by removing one of the machine that needs rollout (the oldest out-of date machine in the failure domain that has the most control-plane machines on it)
+    
+- In order to determine if a Machine to be rolled out, KCP implements the following:
+    - The infrastructureRef link used by each machine at creation time is stored in annotations at machine level.
+    - The kubeadmConfigSpec used by each machine at creation time is stored in annotations at machine level.
+        - If the annotation is not present (machine is either old or adopted), we won't roll out on any possible changes made in KCP's ClusterConfiguration given that we don't have enough information to make a decision.
+           Users should use KCP.Spec.UpgradeAfter field to force a rollout in this case.
+    
+- The controller should tolerate the manual or automatic removal of a replica during the upgrade process. A replica that fails during the upgrade may block the completion of the upgrade. Removal or other remedial action may be necessary to allow the upgrade to complete.
 
 ###### Constraints and Assumptions
 
@@ -525,8 +381,95 @@ The annotation steps are required to make scale down re-entrant.
 
 * Infrastructure templates are expected to be immutable, so infrastructure template contents do not have to hashed in order to detect
   changes.
+   
+##### Remediation (using delete-and-recreate)
 
+- KCP remediation is triggered by the MachineHealthCheck controller marking a machine for remediation. See 
+  [machine-health-checking proposal](https://github.com/kubernetes-sigs/cluster-api/blob/11485f4f817766c444840d8ea7e4e7d1a6b94cc9/docs/proposals/20191030-machine-health-checking.md)
+  for additional details. When there are multiple machines that are marked for remediation, the oldest one will be remediated first.
+  
+- Following rules should be satisfied in order to start remediation
+  - The cluster MUST have spec.replicas >= 3, because this is the smallest cluster size that allows any etcd failure tolerance.
+  - The number of replicas MUST be equal to or greater than the desired replicas. This rule ensures that when the cluster
+    is missing replicas, we skip remediation and instead perform regular scale up/rollout operations first. 
+  - The cluster MUST have no machines with a deletion timestamp. This rule prevents KCP taking actions while the cluster is in a transitional state.
+  - Remediation MUST preserve etcd quorum. This rule ensures that we will not remove a member that would result in etcd
+    losing a majority of members and thus become unable to field new requests.
+
+- When all the conditions for starting remediation are satisfied, KCP temporarily suspend any operation in progress
+  in order to perform remediation. 
+- Remediation will be performed by issuing a delete on the unhealthy machine; after deleting the machine, KCP
+  will restore the target number of machines by triggering a scale up (current replicas<desired replicas) and then
+  eventually resume the rollout action.
+  See [why delete and recreate](#why-delete-and-recreate) for an explanation about why KCP should remove the member first and then add its replacement.
+
+###### Why delete and recreate
+
+When replacing a KCP machine the most critical component to be taken into account is etcd, and
+according to the [etcd documentation](https://github.com/etcd-io/etcd/blob/master/Documentation/faq.md#should-i-add-a-member-before-removing-an-unhealthy-member),
+it's important to remove an unhealthy etcd member first and then add its replacement:
+
+- etcd employs distributed consensus based on a quorum model; (n/2)+1 members, a majority, must agree on a proposal before
+  it can be committed to the cluster. These proposals include key-value updates and membership changes. This model totally
+  avoids potential split brain inconsistencies. The downside is permanent quorum loss is catastrophic.
+
+- How this applies to membership: If a 3-member cluster has 1 downed member, it can still make forward progress because
+  the quorum is 2 and 2 members are still live. However, adding a new member to a 3-member cluster will increase the quorum
+  to 3 because 3 votes are required for a majority of 4 members. Since the quorum increased, this extra member buys nothing
+  in terms of fault tolerance; the cluster is still one node failure away from being unrecoverable.
+
+- Additionally, adding new members to an unhealthy control plane might be risky because it may turn out to be misconfigured
+  or incapable of joining the cluster. In that case, there's no way to recover quorum because the cluster has two members
+  down and two members up, but needs three votes to change membership to undo the botched membership addition. etcd will
+  by default reject member add attempts that could take down the cluster in this manner.
+
+- On the other hand, if the downed member is removed from cluster membership first, the number of members becomes 2 and
+  the quorum remains at 2. Following that removal by adding a new member will also keep the quorum steady at 2. So, even
+  if the new node can't be brought up, it's still possible to remove the new member through quorum on the remaining live members.
+
+As a consequence KCP remediation should remove unhealthy machine first and then add its replacement.
+
+Additionally, in order to make this approach more robust, KCP will test each etcd member for responsiveness before
+using the Status endpoint and determine as best as possible that we would not exceed failure tolerance by removing a machine.
+This should ensure we are not taking actions in case there are other etcd members not properly working on machines
+not (yet) marked for remediation by the MachineHealthCheck.
+
+###### Scenario 1: Three replicas, one machine marked for remediation
+
+If MachineHealthCheck marks one machine for remediation in a control-plane with three replicas, we will look at the etcd
+status of each machine to determine if we have at most one failed member. Assuming the etcd cluster is still all healthy, 
+or the only unresponsive member is the one to be remediated, we will scale down the machine that failed the MHC and
+then scale up a new machine to replace it.
+
+###### Scenario 2: Three replicas, two machines marked for remediation
+
+If MachineHealthCheck marks two machines for remediation in a control-plane with three replicas, remediation might happen
+depending on the status of the etcd members on the three replicas.
+
+As long as we continue to only have at most one unhealthy etcd member, we will scale down an unhealthy machine, 
+wait for it to provision and join the cluster, and then scale down the other machine.
+
+However, if more than one etcd member is unhealthy, remediation would not happen and manual intervention would be required
+to fix the unhealthy machine.
+
+###### Scenario 3: Three replicas, one unresponsive etcd member, one (different) unhealthy machine
+
+It is possible to have a scenario where a different machine than the one that failed the MHC has an unresponsive etcd. 
+In this scenario, remediation would not happen and manual intervention would be required to fix the unhealthy machine.
+
+###### Scenario 4: Unhealthy machines combined with rollout
+
+When there exist unhealthy machines and there also have been configuration changes that trigger a rollout of new machines to occur, 
+remediation and rollout will occur in tandem. 
+
+This is to say that unhealthy machines will first be scaled down, and replaced with new machines that match the desired new spec. 
+Once the unhealthy machines have been replaced, the remaining healthy machines will also be replaced one-by-one as well to complete the rollout operation.
+ 
 ##### Health checks
+
+> NOTE:  This paragraph describes KCP health checks specifically designed to ensure a kubeadm 
+generated control-plane is stable before proceeding with KCP actions like scale up, scale down and rollout. 
+KCP health checks are different from the one implemented by the MachineHealthCheck controller.  
 
 - Will be used during scaling and upgrade operations.
 
@@ -606,4 +549,6 @@ For the purposes of designing upgrades, two existing lifecycle managers were exa
 - [x] 10/17/2019: Initial Creation
 - [x] 11/19/2019: Initial KubeadmControlPlane types added [#1765](https://github.com/kubernetes-sigs/cluster-api/pull/1765)
 - [x] 12/04/2019: Updated References to ErrorMessage/ErrorReason to FailureMessage/FailureReason
-- [] 12/04/2019: Initial stubbed KubeadmControlPlane controller added [#1826](https://github.com/kubernetes-sigs/cluster-api/pull/1826)
+- [x] 12/04/2019: Initial stubbed KubeadmControlPlane controller added [#1826](https://github.com/kubernetes-sigs/cluster-api/pull/1826)
+- [x] 07/09/2020: Document updated to reflect changes up to v0.3.9 release
+- [x] 22/09/2020: KCP remediation added

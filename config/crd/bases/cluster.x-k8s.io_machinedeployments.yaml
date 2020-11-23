@@ -547,17 +547,22 @@ spec:
       jsonPath: .status.phase
       name: Phase
       type: string
-    - description: Total number of non-terminated machines targeted by this deployment
+    - description: Total number of non-terminated machines targeted by this MachineDeployment
       jsonPath: .status.replicas
       name: Replicas
       type: integer
-    - description: Total number of available machines (ready for at least minReadySeconds)
-      jsonPath: .status.availableReplicas
-      name: Available
-      type: integer
-    - description: Total number of ready machines targeted by this deployment.
+    - description: Total number of ready machines targeted by this MachineDeployment
       jsonPath: .status.readyReplicas
       name: Ready
+      type: integer
+    - description: Total number of non-terminated machines targeted by this deployment
+        that have the desired template spec
+      jsonPath: .status.updatedReplicas
+      name: Updated
+      type: integer
+    - description: Total number of unavailable machines targeted by this MachineDeployment
+      jsonPath: .status.unavailableReplicas
+      name: Unavailable
       type: integer
     name: v1alpha3
     schema:
@@ -921,6 +926,13 @@ spec:
                             description: 'UID of the referent. More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#uids'
                             type: string
                         type: object
+                      nodeDrainTimeout:
+                        description: 'NodeDrainTimeout is the total amount of time
+                          that the controller will spend on draining a node. The default
+                          value is 0, meaning that the node can be drained without
+                          any time limitations. NOTE: NodeDrainTimeout is different
+                          from `kubectl drain --timeout`'
+                        type: string
                       providerID:
                         description: ProviderID is the identification ID of the machine
                           provided by the provider. This field must match the provider

@@ -119,7 +119,6 @@ func (src *Machine) ConvertTo(dstRaw conversion.Hub) error {
 	restoreMachineSpec(&restored.Spec, &dst.Spec)
 	dst.Status.ObservedGeneration = restored.Status.ObservedGeneration
 	dst.Status.Conditions = restored.Status.Conditions
-
 	return nil
 }
 
@@ -129,6 +128,7 @@ func restoreMachineSpec(restored *v1alpha3.MachineSpec, dst *v1alpha3.MachineSpe
 	}
 	dst.Bootstrap.DataSecretName = restored.Bootstrap.DataSecretName
 	dst.FailureDomain = restored.FailureDomain
+	dst.NodeDrainTimeout = restored.NodeDrainTimeout
 }
 
 func (dst *Machine) ConvertFrom(srcRaw conversion.Hub) error {

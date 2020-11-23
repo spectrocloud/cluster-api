@@ -46,10 +46,12 @@ E2E_FRAMEWORK_DIR := test/framework
 CAPD_DIR := test/infrastructure/docker
 RELEASE_NOTES_BIN := bin/release-notes
 RELEASE_NOTES := $(TOOLS_DIR)/$(RELEASE_NOTES_BIN)
-LINK_CHECKER_BIN := bin/liche
-LINK_CHECKER := $(TOOLS_DIR)/$(LINK_CHECKER_BIN)
 GO_APIDIFF_BIN := bin/go-apidiff
 GO_APIDIFF := $(TOOLS_DIR)/$(GO_APIDIFF_BIN)
+ENVSUBST_BIN := bin/envsubst
+ENVSUBST := $(TOOLS_DIR)/$(ENVSUBST_BIN)
+
+export PATH := $(abspath $(TOOLS_BIN_DIR)):$(PATH)
 
 # Binaries.
 # Need to use abspath so we can invoke these from subdirectories
@@ -57,6 +59,7 @@ KUSTOMIZE := $(abspath $(TOOLS_BIN_DIR)/kustomize)
 CONTROLLER_GEN := $(abspath $(TOOLS_BIN_DIR)/controller-gen)
 GOLANGCI_LINT := $(abspath $(TOOLS_BIN_DIR)/golangci-lint)
 CONVERSION_GEN := $(abspath $(TOOLS_BIN_DIR)/conversion-gen)
+ENVSUBST := $(abspath $(TOOLS_BIN_DIR)/envsubst)
 
 # Bindata.
 GOBINDATA := $(abspath $(TOOLS_BIN_DIR)/go-bindata)
@@ -86,8 +89,6 @@ TAG ?= dev
 ARCH ?= amd64
 ALL_ARCH = amd64 arm arm64 ppc64le s390x
 
-GINKGO_NODES ?= 1
-
 # Allow overriding the imagePullPolicy
 PULL_POLICY ?= Always
 
@@ -111,8 +112,14 @@ help:  ## Display this help
 ## --------------------------------------
 
 .PHONY: test
-test: ## Run tests
+test: ## Run tests.
 	source ./scripts/fetch_ext_bins.sh; fetch_tools; setup_envs; go test -v ./... $(TEST_ARGS)
+
+.PHONY: test-cover
+test-cover: ## Run tests with code coverage and code generate  reports
+	source ./scripts/fetch_ext_bins.sh; fetch_tools; setup_envs; go test -v -coverprofile=out/coverage.out ./... $(TEST_ARGS)
+	go tool cover -func=out/coverage.out -o out/coverage.txt
+	go tool cover -html=out/coverage.out -o out/coverage.html
 
 .PHONY: docker-build-e2e
 docker-build-e2e: ## Rebuild all Cluster API provider images to be used in the e2e tests
@@ -167,11 +174,14 @@ $(GOBINDATA): $(TOOLS_DIR)/go.mod # Build go-bindata from tools folder.
 $(RELEASE_NOTES): $(TOOLS_DIR)/go.mod
 	cd $(TOOLS_DIR) && go build -tags=tools -o $(RELEASE_NOTES_BIN) ./release
 
-$(LINK_CHECKER): $(TOOLS_DIR)/go.mod
-	cd $(TOOLS_DIR) && go build -tags=tools -o $(LINK_CHECKER_BIN) github.com/raviqqe/liche
-
 $(GO_APIDIFF): $(TOOLS_DIR)/go.mod
 	cd $(TOOLS_DIR) && go build -tags=tools -o $(GO_APIDIFF_BIN) github.com/joelanford/go-apidiff
+
+$(ENVSUBST): $(TOOLS_DIR)/go.mod
+	cd $(TOOLS_DIR) && go build -tags=tools -o $(ENVSUBST_BIN) github.com/drone/envsubst/cmd/envsubst
+
+envsubst: $(ENVSUBST) ## Build a local copy of envsubst.
+kustomize: $(KUSTOMIZE) ## Build a local copy of kustomize.
 
 .PHONY: e2e-framework
 e2e-framework: ## Builds the CAPI e2e framework
@@ -207,7 +217,8 @@ generate: ## Generate code
 	$(MAKE) -C test/infrastructure/docker generate
 
 .PHONY: generate-go
-generate-go: ## Runs Go related generate targets
+generate-go: $(GOBINDATA) ## Runs Go related generate targets
+	go generate ./...
 	$(MAKE) generate-go-core
 	$(MAKE) generate-go-kubeadm-bootstrap
 	$(MAKE) generate-go-kubeadm-control-plane
@@ -321,27 +332,33 @@ modules: ## Runs go mod to ensure modules are up to date.
 ## Docker
 ## --------------------------------------
 
+.PHONY: docker-pull-prerequisites
+docker-pull-prerequisites:
+	docker pull docker.io/docker/dockerfile:experimental
+	docker pull docker.io/library/golang:1.13.15
+	docker pull gcr.io/distroless/static:latest
+
 .PHONY: docker-build
-docker-build: ## Build the docker images for controller managers
+docker-build: docker-pull-prerequisites ## Build the docker images for controller managers
 	$(MAKE) ARCH=$(ARCH) docker-build-core
 	$(MAKE) ARCH=$(ARCH) docker-build-kubeadm-bootstrap
 	$(MAKE) ARCH=$(ARCH) docker-build-kubeadm-control-plane
 
 .PHONY: docker-build-core
 docker-build-core: ## Build the docker image for core controller manager
-	DOCKER_BUILDKIT=1 docker build --build-arg goproxy=$(GOPROXY) --build-arg ARCH=$(ARCH) . -t $(CONTROLLER_IMG)-$(ARCH):$(TAG)
+	DOCKER_BUILDKIT=1 docker build --build-arg goproxy=$(GOPROXY) --build-arg ARCH=$(ARCH) --build-arg ldflags="$(LDFLAGS)" . -t $(CONTROLLER_IMG)-$(ARCH):$(TAG)
 	$(MAKE) set-manifest-image MANIFEST_IMG=$(CONTROLLER_IMG)-$(ARCH) MANIFEST_TAG=$(TAG) TARGET_RESOURCE="./config/manager/manager_image_patch.yaml"
 	$(MAKE) set-manifest-pull-policy TARGET_RESOURCE="./config/manager/manager_pull_policy.yaml"
 
 .PHONY: docker-build-kubeadm-bootstrap
 docker-build-kubeadm-bootstrap: ## Build the docker image for kubeadm bootstrap controller manager
-	DOCKER_BUILDKIT=1 docker build --build-arg goproxy=$(GOPROXY) --build-arg ARCH=$(ARCH) --build-arg package=./bootstrap/kubeadm . -t $(KUBEADM_BOOTSTRAP_CONTROLLER_IMG)-$(ARCH):$(TAG)
+	DOCKER_BUILDKIT=1 docker build --build-arg goproxy=$(GOPROXY) --build-arg ARCH=$(ARCH) --build-arg package=./bootstrap/kubeadm --build-arg ldflags="$(LDFLAGS)" . -t $(KUBEADM_BOOTSTRAP_CONTROLLER_IMG)-$(ARCH):$(TAG)
 	$(MAKE) set-manifest-image MANIFEST_IMG=$(KUBEADM_BOOTSTRAP_CONTROLLER_IMG)-$(ARCH) MANIFEST_TAG=$(TAG) TARGET_RESOURCE="./bootstrap/kubeadm/config/manager/manager_image_patch.yaml"
 	$(MAKE) set-manifest-pull-policy TARGET_RESOURCE="./bootstrap/kubeadm/config/manager/manager_pull_policy.yaml"
 
 .PHONY: docker-build-kubeadm-control-plane
 docker-build-kubeadm-control-plane: ## Build the docker image for kubeadm control plane controller manager
-	DOCKER_BUILDKIT=1 docker build --build-arg goproxy=$(GOPROXY) --build-arg ARCH=$(ARCH) --build-arg package=./controlplane/kubeadm . -t $(KUBEADM_CONTROL_PLANE_CONTROLLER_IMG)-$(ARCH):$(TAG)
+	DOCKER_BUILDKIT=1 docker build --build-arg goproxy=$(GOPROXY) --build-arg ARCH=$(ARCH) --build-arg package=./controlplane/kubeadm --build-arg ldflags="$(LDFLAGS)" . -t $(KUBEADM_CONTROL_PLANE_CONTROLLER_IMG)-$(ARCH):$(TAG)
 	$(MAKE) set-manifest-image MANIFEST_IMG=$(KUBEADM_CONTROL_PLANE_CONTROLLER_IMG)-$(ARCH) MANIFEST_TAG=$(TAG) TARGET_RESOURCE="./controlplane/kubeadm/config/manager/manager_image_patch.yaml"
 	$(MAKE) set-manifest-pull-policy TARGET_RESOURCE="./controlplane/kubeadm/config/manager/manager_pull_policy.yaml"
 
@@ -439,7 +456,10 @@ release: clean-release ## Builds and push container images using the latest git 
 	$(MAKE) set-manifest-pull-policy PULL_POLICY=IfNotPresent TARGET_RESOURCE="./config/manager/manager_pull_policy.yaml"
 	$(MAKE) set-manifest-pull-policy PULL_POLICY=IfNotPresent TARGET_RESOURCE="./bootstrap/kubeadm/config/manager/manager_pull_policy.yaml"
 	$(MAKE) set-manifest-pull-policy PULL_POLICY=IfNotPresent TARGET_RESOURCE="./controlplane/kubeadm/config/manager/manager_pull_policy.yaml"
-	$(MAKE) release-manifests
+	## Build the manifests
+	$(MAKE) release-manifests clean-release-git
+	## Build the development manifests
+	$(MAKE) release-manifests-dev clean-release-git
 
 .PHONY: release-manifests
 release-manifests: $(RELEASE_DIR) $(KUSTOMIZE) ## Builds the manifests to publish with a release
@@ -457,6 +477,14 @@ release-manifests: $(RELEASE_DIR) $(KUSTOMIZE) ## Builds the manifests to publis
 	echo "---" >> $(RELEASE_DIR)/cluster-api-components.yaml
 	cat $(RELEASE_DIR)/control-plane-components.yaml >> $(RELEASE_DIR)/cluster-api-components.yaml
 
+.PHONY: release-manifests-dev
+release-manifests-dev: ## Builds the development manifests and copies them in the release folder
+	# Release CAPD components and add them to the release dir
+	$(MAKE) -C test/infrastructure/docker/ release
+	cp test/infrastructure/docker/out/infrastructure-components.yaml $(RELEASE_DIR)/infrastructure-components-development.yaml
+	# Adds CAPD templates
+	cp test/infrastructure/docker/templates/* $(RELEASE_DIR)/
+
 release-binaries: ## Builds the binaries to publish with a release
 	RELEASE_BINARY=./cmd/clusterctl GOOS=linux GOARCH=amd64 $(MAKE) release-binary
 	RELEASE_BINARY=./cmd/clusterctl GOOS=darwin GOARCH=amd64 $(MAKE) release-binary
@@ -469,15 +497,12 @@ release-binary: $(RELEASE_DIR)
 		-e GOARCH=$(GOARCH) \
 		-v "$$(pwd):/workspace$(DOCKER_VOL_OPTS)" \
 		-w /workspace \
-		golang:1.13.12 \
+		golang:1.13.15 \
 		go build -a -ldflags "$(LDFLAGS) -extldflags '-static'" \
 		-o $(RELEASE_DIR)/$(notdir $(RELEASE_BINARY))-$(GOOS)-$(GOARCH) $(RELEASE_BINARY)
 
 .PHONY: release-staging
 release-staging: ## Builds and push container images to the staging bucket.
-	docker pull docker.io/docker/dockerfile:experimental
-	docker pull docker.io/library/golang:1.13.12
-	docker pull gcr.io/distroless/static:latest
 	REGISTRY=$(STAGING_REGISTRY) $(MAKE) docker-build-all docker-push-all release-alias-tag
 
 RELEASE_ALIAS_TAG=$(PULL_BASE_REF)
@@ -521,6 +546,10 @@ clean-bin: ## Remove all generated binaries
 clean-release: ## Remove the release folder
 	rm -rf $(RELEASE_DIR)
 
+.PHONY: clean-release-git
+clean-release-git: ## Restores the git files usually modified during a release
+	git restore ./*manager_image_patch.yaml ./*manager_pull_policy.yaml
+
 .PHONY: clean-book
 clean-book: ## Remove all generated GitBook files
 	rm -rf ./docs/book/_book
@@ -544,7 +573,6 @@ verify:
 	./hack/verify-doctoc.sh
 	./hack/verify-shellcheck.sh
 	./hack/verify-starlark.sh
-	$(MAKE) verify-book-links
 	$(MAKE) verify-modules
 	$(MAKE) verify-gen
 	$(MAKE) verify-docker-provider
@@ -573,9 +601,9 @@ verify-docker-provider:
 	cd $(CAPD_DIR); $(MAKE) verify
 
 .PHONY: verify-book-links
-verify-book-links: $(LINK_CHECKER)
-	 # Ignore localhost links and set concurrency to a reasonable number
-	$(LINK_CHECKER) -r docs/book -x "^https?://" -c 10
+verify-book-links:
+	$(MAKE) -C docs/book verify
+
 ## --------------------------------------
 ## Others / Utilities
 ## --------------------------------------
@@ -587,3 +615,4 @@ diagrams: ## Build proposal diagrams
 .PHONY: serve-book
 serve-book: ## Build and serve the book with live-reloading enabled
 	$(MAKE) -C docs/book serve
+

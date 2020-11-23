@@ -25,6 +25,7 @@ import (
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
@@ -256,6 +257,26 @@ func TestHasOwner(t *testing.T) {
 			expected: true,
 		},
 		{
+			name: "owned by cluster from older version",
+			refList: []metav1.OwnerReference{
+				{
+					Kind:       "Cluster",
+					APIVersion: "cluster.x-k8s.io/v1alpha2",
+				},
+			},
+			expected: true,
+		},
+		{
+			name: "owned by a MachineDeployment from older version",
+			refList: []metav1.OwnerReference{
+				{
+					Kind:       "MachineDeployment",
+					APIVersion: "cluster.x-k8s.io/v1alpha2",
+				},
+			},
+			expected: true,
+		},
+		{
 			name: "owned by something else",
 			refList: []metav1.OwnerReference{
 				{
@@ -454,6 +475,12 @@ func TestGetOwnerClusterSuccessByName(t *testing.T) {
 	cluster, err := GetOwnerCluster(context.TODO(), c, objm)
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(cluster).NotTo(BeNil())
+
+	// Make sure API version does not matter
+	objm.OwnerReferences[0].APIVersion = "cluster.x-k8s.io/v1alpha1234"
+	cluster, err = GetOwnerCluster(context.TODO(), c, objm)
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(cluster).NotTo(BeNil())
 }
 
 func TestGetOwnerMachineSuccessByName(t *testing.T) {
@@ -570,6 +597,46 @@ func TestGetMachinesForCluster(t *testing.T) {
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(machines.Items).To(HaveLen(1))
 	g.Expect(machines.Items[0].Labels[clusterv1.ClusterLabelName]).To(Equal(cluster.Name))
+}
+
+func TestIsExternalManagedControlPlane(t *testing.T) {
+	g := NewWithT(t)
+
+	t.Run("should return true if control plane status externalManagedControlPlane is true", func(t *testing.T) {
+		controlPlane := &unstructured.Unstructured{
+			Object: map[string]interface{}{
+				"status": map[string]interface{}{
+					"externalManagedControlPlane": true,
+				},
+			},
+		}
+		result := IsExternalManagedControlPlane(controlPlane)
+		g.Expect(result).Should(Equal(true))
+	})
+
+	t.Run("should return false if control plane status externalManagedControlPlane is false", func(t *testing.T) {
+		controlPlane := &unstructured.Unstructured{
+			Object: map[string]interface{}{
+				"status": map[string]interface{}{
+					"externalManagedControlPlane": false,
+				},
+			},
+		}
+		result := IsExternalManagedControlPlane(controlPlane)
+		g.Expect(result).Should(Equal(false))
+	})
+
+	t.Run("should return false if control plane status externalManagedControlPlane is not set", func(t *testing.T) {
+		controlPlane := &unstructured.Unstructured{
+			Object: map[string]interface{}{
+				"status": map[string]interface{}{
+					"someOtherStatusField": "someValue",
+				},
+			},
+		}
+		result := IsExternalManagedControlPlane(controlPlane)
+		g.Expect(result).Should(Equal(false))
+	})
 }
 
 func TestEnsureOwnerRef(t *testing.T) {

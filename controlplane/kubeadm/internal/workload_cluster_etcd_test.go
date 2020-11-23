@@ -36,53 +36,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
-func TestWorkload_EtcdIsHealthy(t *testing.T) {
-	g := NewWithT(t)
-
-	workload := &Workload{
-		Client: &fakeClient{
-			get: map[string]interface{}{
-				"kube-system/etcd-test-1": etcdPod("etcd-test-1", withReadyOption),
-				"kube-system/etcd-test-2": etcdPod("etcd-test-2", withReadyOption),
-				"kube-system/etcd-test-3": etcdPod("etcd-test-3", withReadyOption),
-				"kube-system/etcd-test-4": etcdPod("etcd-test-4"),
-			},
-			list: &corev1.NodeList{
-				Items: []corev1.Node{
-					nodeNamed("test-1", withProviderID("my-provider-id-1")),
-					nodeNamed("test-2", withProviderID("my-provider-id-2")),
-					nodeNamed("test-3", withProviderID("my-provider-id-3")),
-					nodeNamed("test-4", withProviderID("my-provider-id-4")),
-				},
-			},
-		},
-		etcdClientGenerator: &fakeEtcdClientGenerator{
-			forNodesClient: &etcd.Client{
-				EtcdClient: &fake2.FakeEtcdClient{
-					EtcdEndpoints: []string{},
-					MemberListResponse: &clientv3.MemberListResponse{
-						Members: []*pb.Member{
-							{Name: "test-1", ID: uint64(1)},
-							{Name: "test-2", ID: uint64(2)},
-							{Name: "test-3", ID: uint64(3)},
-						},
-					},
-					AlarmResponse: &clientv3.AlarmResponse{
-						Alarms: []*pb.AlarmMember{},
-					},
-				},
-			},
-		},
-	}
-	ctx := context.Background()
-	health, err := workload.EtcdIsHealthy(ctx)
-	g.Expect(err).NotTo(HaveOccurred())
-
-	for _, err := range health {
-		g.Expect(err).NotTo(HaveOccurred())
-	}
-}
-
 func TestUpdateEtcdVersionInKubeadmConfigMap(t *testing.T) {
 	kubeadmConfig := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
@@ -506,48 +459,135 @@ func TestForwardEtcdLeadership(t *testing.T) {
 	})
 }
 
-type fakeEtcdClientGenerator struct {
-	forNodesClient  *etcd.Client
-	forLeaderClient *etcd.Client
-	forNodesErr     error
-	forLeaderErr    error
+func TestReconcileEtcdMembers(t *testing.T) {
+	kubeadmConfig := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      kubeadmConfigKey,
+			Namespace: metav1.NamespaceSystem,
+		},
+		Data: map[string]string{
+			clusterStatusKey: `apiEndpoints:
+  ip-10-0-0-1.ec2.internal:
+    advertiseAddress: 10.0.0.1
+    bindPort: 6443
+  ip-10-0-0-2.ec2.internal:
+    advertiseAddress: 10.0.0.2
+    bindPort: 6443
+    someFieldThatIsAddedInTheFuture: bar
+  ip-10-0-0-3.ec2.internal:
+    advertiseAddress: 10.0.0.3
+    bindPort: 6443
+apiVersion: kubeadm.k8s.io/vNbetaM
+kind: ClusterStatus`,
+		},
+	}
+	node1 := &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "ip-10-0-0-1.ec2.internal",
+			Namespace: "ns1",
+			Labels: map[string]string{
+				labelNodeRoleControlPlane: "",
+			},
+		},
+	}
+	node2 := node1.DeepCopy()
+	node2.Name = "ip-10-0-0-2.ec2.internal"
+
+	fakeEtcdClient := &fake2.FakeEtcdClient{
+		MemberListResponse: &clientv3.MemberListResponse{
+			Members: []*pb.Member{
+				{Name: "ip-10-0-0-1.ec2.internal", ID: uint64(1)},
+				{Name: "ip-10-0-0-2.ec2.internal", ID: uint64(2)},
+				{Name: "ip-10-0-0-3.ec2.internal", ID: uint64(3)},
+			},
+		},
+		AlarmResponse: &clientv3.AlarmResponse{
+			Alarms: []*pb.AlarmMember{},
+		},
+	}
+
+	tests := []struct {
+		name                string
+		objs                []runtime.Object
+		etcdClientGenerator etcdClientFor
+		expectErr           bool
+		assert              func(*WithT)
+	}{
+		{
+			// the node to be removed is ip-10-0-0-3.ec2.internal since the
+			// other two have nodes
+			name: "successfully removes the etcd member without a node and removes the node from kubeadm config",
+			objs: []runtime.Object{node1.DeepCopy(), node2.DeepCopy(), kubeadmConfig.DeepCopy()},
+			etcdClientGenerator: &fakeEtcdClientGenerator{
+				forNodesClient: &etcd.Client{
+					EtcdClient: fakeEtcdClient,
+				},
+			},
+			expectErr: false,
+			assert: func(g *WithT) {
+				g.Expect(fakeEtcdClient.RemovedMember).To(Equal(uint64(3)))
+			},
+		},
+		{
+			name: "return error if there aren't enough control plane nodes",
+			objs: []runtime.Object{node1.DeepCopy(), kubeadmConfig.DeepCopy()},
+			etcdClientGenerator: &fakeEtcdClientGenerator{
+				forNodesClient: &etcd.Client{
+					EtcdClient: fakeEtcdClient,
+				},
+			},
+			expectErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			g := NewWithT(t)
+
+			for _, o := range tt.objs {
+				g.Expect(testEnv.CreateObj(ctx, o)).To(Succeed())
+				defer func(do runtime.Object) {
+					g.Expect(testEnv.Cleanup(ctx, do)).To(Succeed())
+				}(o)
+			}
+
+			w := &Workload{
+				Client:              testEnv,
+				etcdClientGenerator: tt.etcdClientGenerator,
+			}
+			ctx := context.TODO()
+			_, err := w.ReconcileEtcdMembers(ctx)
+			if tt.expectErr {
+				g.Expect(err).To(HaveOccurred())
+				return
+			}
+			g.Expect(err).ToNot(HaveOccurred())
+
+			if tt.assert != nil {
+				tt.assert(g)
+			}
+		})
+	}
+
 }
 
-func (c *fakeEtcdClientGenerator) forNodes(_ context.Context, _ []corev1.Node) (*etcd.Client, error) {
+type fakeEtcdClientGenerator struct {
+	forNodesClient     *etcd.Client
+	forNodesClientFunc func([]corev1.Node) (*etcd.Client, error)
+	forLeaderClient    *etcd.Client
+	forNodesErr        error
+	forLeaderErr       error
+}
+
+func (c *fakeEtcdClientGenerator) forNodes(_ context.Context, n []corev1.Node) (*etcd.Client, error) {
+	if c.forNodesClientFunc != nil {
+		return c.forNodesClientFunc(n)
+	}
 	return c.forNodesClient, c.forNodesErr
 }
 
 func (c *fakeEtcdClientGenerator) forLeader(_ context.Context, _ []corev1.Node) (*etcd.Client, error) {
 	return c.forLeaderClient, c.forLeaderErr
-}
-
-type podOption func(*corev1.Pod)
-
-func etcdPod(name string, options ...podOption) *corev1.Pod {
-	p := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
-			Namespace: metav1.NamespaceSystem,
-		},
-	}
-	for _, opt := range options {
-		opt(p)
-	}
-	return p
-}
-func withReadyOption(pod *corev1.Pod) {
-	readyCondition := corev1.PodCondition{
-		Type:   corev1.PodReady,
-		Status: corev1.ConditionTrue,
-	}
-	pod.Status.Conditions = append(pod.Status.Conditions, readyCondition)
-}
-
-func withProviderID(pi string) func(corev1.Node) corev1.Node {
-	return func(node corev1.Node) corev1.Node {
-		node.Spec.ProviderID = pi
-		return node
-	}
 }
 
 func defaultMachine(transforms ...func(m *clusterv1.Machine)) *clusterv1.Machine {
@@ -562,4 +602,13 @@ func defaultMachine(transforms ...func(m *clusterv1.Machine)) *clusterv1.Machine
 		t(m)
 	}
 	return m
+}
+
+func nodeNamed(name string) corev1.Node {
+	node := corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: name,
+		},
+	}
+	return node
 }

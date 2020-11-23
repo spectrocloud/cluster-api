@@ -63,6 +63,15 @@ func LoadE2EConfig(ctx context.Context, input LoadE2EConfigInput) *E2EConfig {
 	return config
 }
 
+// SetCNIEnvVar read CNI from cniManifestPath and sets an environmental variable that keeps CNI resources.
+// A ClusterResourceSet can be used to apply CNI using this environmental variable.
+//
+// Deprecated: Use FileTransformations in the CreateRepositoryInput to embedded CNI into cluster templates during create repository.
+// The new approach does not uses env variables so we can avoid https://github.com/kubernetes-sigs/cluster-api/issues/3797;
+// This func is preserved for avoiding to break users in the v0.3 series, but it is now a no-op.
+func SetCNIEnvVar(cniManifestPath string, cniEnvVar string) {
+}
+
 // E2EConfig defines the configuration of an e2e test environment.
 type E2EConfig struct {
 	// Name is the name of the Kind management cluster.
@@ -376,7 +385,7 @@ func (c *E2EConfig) GetVariable(varName string) string {
 	return version
 }
 
-// GetVariable returns an Int64Ptr variable from the e2e config file.
+// GetInt64PtrVariable returns an Int64Ptr variable from the e2e config file.
 func (c *E2EConfig) GetInt64PtrVariable(varName string) *int64 {
 	wCountStr := c.GetVariable(varName)
 	if wCountStr == "" {
@@ -386,4 +395,16 @@ func (c *E2EConfig) GetInt64PtrVariable(varName string) *int64 {
 	wCount, err := strconv.ParseInt(wCountStr, 10, 64)
 	Expect(err).NotTo(HaveOccurred())
 	return pointer.Int64Ptr(wCount)
+}
+
+// GetInt32PtrVariable returns an Int32Ptr variable from the e2e config file.
+func (c *E2EConfig) GetInt32PtrVariable(varName string) *int32 {
+	wCountStr := c.GetVariable(varName)
+	if wCountStr == "" {
+		return nil
+	}
+
+	wCount, err := strconv.ParseUint(wCountStr, 10, 32)
+	Expect(err).NotTo(HaveOccurred())
+	return pointer.Int32Ptr(int32(wCount))
 }

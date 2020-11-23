@@ -66,6 +66,12 @@ type KubeadmControlPlaneSpec struct {
 	// KubeadmControlPlane
 	// +optional
 	UpgradeAfter *metav1.Time `json:"upgradeAfter,omitempty"`
+
+	// NodeDrainTimeout is the total amount of time that the controller will spend on draining a controlplane node
+	// The default value is 0, meaning that the node can be drained without any time limitations.
+	// NOTE: NodeDrainTimeout is different from `kubectl drain --timeout`
+	// +optional
+	NodeDrainTimeout *metav1.Duration `json:"nodeDrainTimeout,omitempty"`
 }
 
 // KubeadmControlPlaneStatus defines the observed state of KubeadmControlPlane.
@@ -135,12 +141,13 @@ type KubeadmControlPlaneStatus struct {
 // +kubebuilder:storageversion
 // +kubebuilder:subresource:status
 // +kubebuilder:subresource:scale:specpath=.spec.replicas,statuspath=.status.replicas,selectorpath=.status.selector
-// +kubebuilder:printcolumn:name="Ready",type=boolean,JSONPath=".status.ready",description="KubeadmControlPlane API Server is ready to receive requests"
 // +kubebuilder:printcolumn:name="Initialized",type=boolean,JSONPath=".status.initialized",description="This denotes whether or not the control plane has the uploaded kubeadm-config configmap"
+// +kubebuilder:printcolumn:name="API Server Available",type=boolean,JSONPath=".status.ready",description="KubeadmControlPlane API Server is ready to receive requests"
+// +kubebuilder:printcolumn:name="Version",type=string,JSONPath=".spec.version",description="Kubernetes version associated with this control plane"
 // +kubebuilder:printcolumn:name="Replicas",type=integer,JSONPath=".status.replicas",description="Total number of non-terminated machines targeted by this control plane"
-// +kubebuilder:printcolumn:name="Ready Replicas",type=integer,JSONPath=".status.readyReplicas",description="Total number of fully running and ready control plane machines"
-// +kubebuilder:printcolumn:name="Updated Replicas",type=integer,JSONPath=".status.updatedReplicas",description="Total number of non-terminated machines targeted by this control plane that have the desired template spec"
-// +kubebuilder:printcolumn:name="Unavailable Replicas",type=integer,JSONPath=".status.unavailableReplicas",description="Total number of unavailable machines targeted by this control plane"
+// +kubebuilder:printcolumn:name="Ready",type=integer,JSONPath=".status.readyReplicas",description="Total number of fully running and ready control plane machines"
+// +kubebuilder:printcolumn:name="Updated",type=integer,JSONPath=".status.updatedReplicas",description="Total number of non-terminated machines targeted by this control plane that have the desired template spec"
+// +kubebuilder:printcolumn:name="Unavailable",type=integer,JSONPath=".status.unavailableReplicas",description="Total number of unavailable machines targeted by this control plane"
 
 // KubeadmControlPlane is the Schema for the KubeadmControlPlane API.
 type KubeadmControlPlane struct {

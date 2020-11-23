@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/blang/semver"
+	"github.com/gobuffalo/flect"
 	"github.com/pkg/errors"
 	corev1 "k8s.io/api/core/v1"
 	v1 "k8s.io/api/core/v1"
@@ -38,6 +39,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/version"
+	"k8s.io/client-go/metadata"
 	"k8s.io/client-go/rest"
 	"k8s.io/klog/klogr"
 	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha3"
@@ -195,6 +197,16 @@ func GetControlPlaneMachinesFromList(machineList *clusterv1.MachineList) (res []
 	return
 }
 
+// IsExternalManagedControlPlane returns a bool indicating whether the control plane referenced
+// in the passed Unstructured resource is an externally managed control plane such as AKS, EKS, GKE, etc.
+func IsExternalManagedControlPlane(controlPlane *unstructured.Unstructured) bool {
+	managed, found, err := unstructured.NestedBool(controlPlane.Object, "status", "externalManagedControlPlane")
+	if err != nil || !found {
+		return false
+	}
+	return managed
+}
+
 // GetMachineIfExists gets a machine from the API server if it exists.
 func GetMachineIfExists(c client.Client, namespace, name string) (*clusterv1.Machine, error) {
 	if c == nil {
@@ -243,7 +255,14 @@ func GetClusterFromMetadata(ctx context.Context, c client.Client, obj metav1.Obj
 // GetOwnerCluster returns the Cluster object owning the current resource.
 func GetOwnerCluster(ctx context.Context, c client.Client, obj metav1.ObjectMeta) (*clusterv1.Cluster, error) {
 	for _, ref := range obj.OwnerReferences {
-		if ref.Kind == "Cluster" && ref.APIVersion == clusterv1.GroupVersion.String() {
+		if ref.Kind != "Cluster" {
+			continue
+		}
+		gv, err := schema.ParseGroupVersion(ref.APIVersion)
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
+		if gv.Group == clusterv1.GroupVersion.Group {
 			return GetClusterByName(ctx, c, obj.Namespace, ref.Name)
 		}
 	}
@@ -484,15 +503,25 @@ func UnstructuredUnmarshalField(obj *unstructured.Unstructured, v interface{}, f
 	return nil
 }
 
-// HasOwner checks if any of the references in the passed list match the given apiVersion and one of the given kinds
+// HasOwner checks if any of the references in the passed list match the given group from apiVersion and one of the given kinds.
 func HasOwner(refList []metav1.OwnerReference, apiVersion string, kinds []string) bool {
+	gv, err := schema.ParseGroupVersion(apiVersion)
+	if err != nil {
+		return false
+	}
+
 	kMap := make(map[string]bool)
 	for _, kind := range kinds {
 		kMap[kind] = true
 	}
 
 	for _, mr := range refList {
-		if mr.APIVersion == apiVersion && kMap[mr.Kind] {
+		mrGroupVersion, err := schema.ParseGroupVersion(mr.APIVersion)
+		if err != nil {
+			return false
+		}
+
+		if mrGroupVersion.Group == gv.Group && kMap[mr.Kind] {
 			return true
 		}
 	}
@@ -520,10 +549,11 @@ func GetCRDWithContract(ctx context.Context, c client.Client, gvk schema.GroupVe
 			return nil, errors.Wrapf(err, "failed to list CustomResourceDefinitions for %v", gvk)
 		}
 
-		for _, crd := range crdList.Items {
+		for i := range crdList.Items {
+			crd := crdList.Items[i]
 			if crd.Spec.Group == gvk.Group &&
 				crd.Spec.Names.Kind == gvk.Kind {
-				return crd.DeepCopy(), nil
+				return &crd, nil
 			}
 		}
 
@@ -533,6 +563,26 @@ func GetCRDWithContract(ctx context.Context, c client.Client, gvk schema.GroupVe
 	}
 
 	return nil, errors.Errorf("failed to find a CustomResourceDefinition for %v with contract %q", gvk, contract)
+}
+
+// GetCRDMetadataFromGVK retrieves a CustomResourceDefinition metadata from the API server using client-go's metadata only client.
+//
+// This function is greatly more efficient than GetCRDWithContract and should be preferred in most cases.
+func GetCRDMetadataFromGVK(ctx context.Context, restConfig *rest.Config, gvk schema.GroupVersionKind) (*metav1.PartialObjectMetadata, error) {
+	// Make sure a rest config is available.
+	if restConfig == nil {
+		return nil, errors.Errorf("cannot create a metadata client without a rest config")
+	}
+
+	// Create a metadata-only client.
+	metadataClient, err := metadata.NewForConfig(restConfig)
+	if err != nil {
+		return nil, errors.Wrapf(err, "failed to create metadata only client")
+	}
+
+	// Get the partial metadata CRD.
+	generatedName := fmt.Sprintf("%s.%s", flect.Pluralize(strings.ToLower(gvk.Kind)), gvk.Group)
+	return metadataClient.Resource(apiextensionsv1.SchemeGroupVersion.WithResource("customresourcedefinitions")).Get(generatedName, metav1.GetOptions{})
 }
 
 // KubeAwareAPIVersions is a sortable slice of kube-like version strings.
@@ -651,4 +701,23 @@ func ManagerDelegatingClientFunc(cache cache.Cache, config *rest.Config, options
 		Writer:       c,
 		StatusClient: c,
 	}, nil
+}
+
+// LowestNonZeroResult compares two reconciliation results
+// and returns the one with lowest requeue time.
+func LowestNonZeroResult(i, j ctrl.Result) ctrl.Result {
+	switch {
+	case i.IsZero():
+		return j
+	case j.IsZero():
+		return i
+	case i.Requeue:
+		return i
+	case j.Requeue:
+		return j
+	case i.RequeueAfter < j.RequeueAfter:
+		return i
+	default:
+		return j
+	}
 }

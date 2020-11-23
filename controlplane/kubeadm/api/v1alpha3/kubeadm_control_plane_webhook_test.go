@@ -59,7 +59,7 @@ func TestKubeadmControlPlaneValidateCreate(t *testing.T) {
 				Name:      "infraTemplate",
 			},
 			Replicas: pointer.Int32Ptr(1),
-			Version:  "v1.16.6",
+			Version:  "v1.19.0",
 		},
 	}
 	invalidNamespace := valid.DeepCopy()
@@ -209,6 +209,14 @@ func TestKubeadmControlPlaneValidateUpdate(t *testing.T) {
 						Path: "test",
 					},
 				},
+				Users: []bootstrapv1.User{
+					{
+						Name: "user",
+						SSHAuthorizedKeys: []string{
+							"ssh-rsa foo",
+						},
+					},
+				},
 			},
 			Version: "v1.16.6",
 		},
@@ -241,7 +249,16 @@ func TestKubeadmControlPlaneValidateUpdate(t *testing.T) {
 			Path: "abc",
 		},
 	}
-	validUpdate.Spec.Version = "v1.16.6"
+	validUpdate.Spec.Version = "v1.17.1"
+	validUpdate.Spec.KubeadmConfigSpec.Users = []bootstrapv1.User{
+		{
+			Name: "bar",
+			SSHAuthorizedKeys: []string{
+				"ssh-rsa bar",
+				"ssh-rsa foo",
+			},
+		},
+	}
 	validUpdate.Spec.InfrastructureTemplate.Name = "orange"
 	validUpdate.Spec.Replicas = pointer.Int32Ptr(5)
 	now := metav1.NewTime(time.Now())
@@ -288,6 +305,14 @@ func TestKubeadmControlPlaneValidateUpdate(t *testing.T) {
 
 	kubernetesVersion := before.DeepCopy()
 	kubernetesVersion.Spec.KubeadmConfigSpec.ClusterConfiguration.KubernetesVersion = "some kubernetes version"
+
+	prevKCPWithVersion := func(version string) *KubeadmControlPlane {
+		prev := before.DeepCopy()
+		prev.Spec.Version = version
+		return prev
+	}
+	skipMinorControlPlaneVersion := prevKCPWithVersion("v1.18.1")
+	emptyControlPlaneVersion := prevKCPWithVersion("")
 
 	controlPlaneEndpoint := before.DeepCopy()
 	controlPlaneEndpoint.Spec.KubeadmConfigSpec.ClusterConfiguration.ControlPlaneEndpoint = "some control plane endpoint"
@@ -424,6 +449,10 @@ func TestKubeadmControlPlaneValidateUpdate(t *testing.T) {
 
 	withoutClusterConfiguration := before.DeepCopy()
 	withoutClusterConfiguration.Spec.KubeadmConfigSpec.ClusterConfiguration = nil
+
+	disallowedUpgrade118Prev := prevKCPWithVersion("v1.18.8")
+	disallowedUpgrade119Version := before.DeepCopy()
+	disallowedUpgrade119Version.Spec.Version = "v1.19.0"
 
 	tests := []struct {
 		name      string
@@ -664,6 +693,30 @@ func TestKubeadmControlPlaneValidateUpdate(t *testing.T) {
 			expectErr: false,
 			before:    withoutClusterConfiguration,
 			kcp:       withoutClusterConfiguration,
+		},
+		{
+			name:      "should fail when skipping control plane minor versions",
+			expectErr: true,
+			before:    before,
+			kcp:       skipMinorControlPlaneVersion,
+		},
+		{
+			name:      "should fail when no control plane version is passed",
+			expectErr: true,
+			before:    before,
+			kcp:       emptyControlPlaneVersion,
+		},
+		{
+			name:      "should pass if control plane version is the same",
+			expectErr: false,
+			before:    before,
+			kcp:       before.DeepCopy(),
+		},
+		{
+			name:      "should return error when trying to upgrade to v1.19.0",
+			expectErr: true,
+			before:    disallowedUpgrade118Prev,
+			kcp:       disallowedUpgrade119Version,
 		},
 	}
 

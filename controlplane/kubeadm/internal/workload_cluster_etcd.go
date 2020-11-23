@@ -18,6 +18,7 @@ package internal
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/pkg/errors"
 	corev1 "k8s.io/api/core/v1"
@@ -34,112 +35,15 @@ type etcdClientFor interface {
 	forLeader(ctx context.Context, nodes []corev1.Node) (*etcd.Client, error)
 }
 
-// EtcdIsHealthy runs checks for every etcd member in the cluster to satisfy our definition of healthy.
-// This is a best effort check and nodes can become unhealthy after the check is complete. It is not a guarantee.
-// It's used a signal for if we should allow a target cluster to scale up, scale down or upgrade.
-// It returns a map of nodes checked along with an error for a given node.
-func (w *Workload) EtcdIsHealthy(ctx context.Context) (HealthCheckResult, error) {
-	var knownClusterID uint64
-	var knownMemberIDSet etcdutil.UInt64Set
-
+// ReconcileEtcdMembers iterates over all etcd members and finds members that do not have corresponding nodes.
+// If there are any such members, it deletes them from etcd and removes their nodes from the kubeadm configmap so that kubeadm does not run etcd health checks on them.
+func (w *Workload) ReconcileEtcdMembers(ctx context.Context) ([]string, error) {
 	controlPlaneNodes, err := w.getControlPlaneNodes(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	expectedMembers := 0
-	response := make(map[string]error)
-	for _, node := range controlPlaneNodes.Items {
-		name := node.Name
-		response[name] = nil
-		if node.Spec.ProviderID == "" {
-			response[name] = errors.New("empty provider ID")
-			continue
-		}
-
-		// Check to see if the pod is ready
-		etcdPodKey := ctrlclient.ObjectKey{
-			Namespace: metav1.NamespaceSystem,
-			Name:      staticPodName("etcd", name),
-		}
-		pod := corev1.Pod{}
-		if err := w.Client.Get(ctx, etcdPodKey, &pod); err != nil {
-			response[name] = errors.Wrap(err, "failed to get etcd pod")
-			continue
-		}
-		if err := checkStaticPodReadyCondition(pod); err != nil {
-			// Nothing wrong here, etcd on this node is just not running.
-			// If it's a true failure the healthcheck will fail since it won't have checked enough members.
-			continue
-		}
-		// Only expect a member reports healthy if its pod is ready.
-		// This fixes the known state where the control plane has a crash-looping etcd pod that is not part of the
-		// etcd cluster.
-		expectedMembers++
-
-		// Create the etcd Client for the etcd Pod scheduled on the Node
-		etcdClient, err := w.etcdClientGenerator.forNodes(ctx, []corev1.Node{node})
-		if err != nil {
-			response[name] = errors.Wrap(err, "failed to create etcd client")
-			continue
-		}
-
-		// List etcd members. This checks that the member is healthy, because the request goes through consensus.
-		members, err := etcdClient.Members(ctx)
-		if err != nil {
-			response[name] = errors.Wrap(err, "failed to list etcd members using etcd client")
-			continue
-		}
-
-		member := etcdutil.MemberForName(members, name)
-
-		// Check that the member reports no alarms.
-		if len(member.Alarms) > 0 {
-			response[name] = errors.Errorf("etcd member reports alarms: %v", member.Alarms)
-			continue
-		}
-
-		// Check that the member belongs to the same cluster as all other members.
-		clusterID := member.ClusterID
-		if knownClusterID == 0 {
-			knownClusterID = clusterID
-		} else if knownClusterID != clusterID {
-			response[name] = errors.Errorf("etcd member has cluster ID %d, but all previously seen etcd members have cluster ID %d", clusterID, knownClusterID)
-			continue
-		}
-
-		// Check that the member list is stable.
-		memberIDSet := etcdutil.MemberIDSet(members)
-		if knownMemberIDSet.Len() == 0 {
-			knownMemberIDSet = memberIDSet
-		} else {
-			unknownMembers := memberIDSet.Difference(knownMemberIDSet)
-			if unknownMembers.Len() > 0 {
-				response[name] = errors.Errorf("etcd member reports members IDs %v, but all previously seen etcd members reported member IDs %v", memberIDSet.UnsortedList(), knownMemberIDSet.UnsortedList())
-			}
-			continue
-		}
-	}
-
-	// TODO: ensure that each pod is owned by a node that we're managing. That would ensure there are no out-of-band etcd members
-
-	// Check that there is exactly one etcd member for every healthy pod.
-	// This allows us to handle the expected case where there is a failing pod but it's been removed from the member list.
-	if expectedMembers != len(knownMemberIDSet) {
-		return response, errors.Errorf("there are %d healthy etcd pods, but %d etcd members", expectedMembers, len(knownMemberIDSet))
-	}
-
-	return response, nil
-}
-
-// ReconcileEtcdMembers iterates over all etcd members and finds members that do not have corresponding nodes.
-// If there are any such members, it deletes them from etcd and removes their nodes from the kubeadm configmap so that kubeadm does not run etcd health checks on them.
-func (w *Workload) ReconcileEtcdMembers(ctx context.Context) error {
-	controlPlaneNodes, err := w.getControlPlaneNodes(ctx)
-	if err != nil {
-		return err
-	}
-
+	removedMembers := []string{}
 	errs := []error{}
 	for _, node := range controlPlaneNodes.Items {
 		// Create the etcd Client for the etcd Pod scheduled on the Node
@@ -147,6 +51,7 @@ func (w *Workload) ReconcileEtcdMembers(ctx context.Context) error {
 		if err != nil {
 			continue
 		}
+		defer etcdClient.Close()
 
 		members, err := etcdClient.Members(ctx)
 		if err != nil {
@@ -155,6 +60,11 @@ func (w *Workload) ReconcileEtcdMembers(ctx context.Context) error {
 		// Check if any member's node is missing from workload cluster
 		// If any, delete it with best effort
 		for _, member := range members {
+			// If this member is just added, it has a empty name until the etcd pod starts. Ignore it.
+			if member.Name == "" {
+				continue
+			}
+
 			isFound := false
 			for _, node := range controlPlaneNodes.Items {
 				if member.Name == node.Name {
@@ -166,6 +76,7 @@ func (w *Workload) ReconcileEtcdMembers(ctx context.Context) error {
 			if isFound {
 				continue
 			}
+			removedMembers = append(removedMembers, fmt.Sprintf("%d (Name: %s)", member.ID, member.Name))
 			if err := w.removeMemberForNode(ctx, member.Name); err != nil {
 				errs = append(errs, err)
 			}
@@ -175,7 +86,7 @@ func (w *Workload) ReconcileEtcdMembers(ctx context.Context) error {
 			}
 		}
 	}
-	return kerrors.NewAggregate(errs)
+	return removedMembers, kerrors.NewAggregate(errs)
 }
 
 // UpdateEtcdVersionInKubeadmConfigMap sets the imageRepository or the imageTag or both in the kubeadm config map.
@@ -226,6 +137,7 @@ func (w *Workload) removeMemberForNode(ctx context.Context, name string) error {
 	if err != nil {
 		return errors.Wrap(err, "failed to create etcd client")
 	}
+	defer etcdClient.Close()
 
 	// List etcd members. This checks that the member is healthy, because the request goes through consensus.
 	members, err := etcdClient.Members(ctx)
@@ -267,6 +179,7 @@ func (w *Workload) ForwardEtcdLeadership(ctx context.Context, machine *clusterv1
 	if err != nil {
 		return errors.Wrap(err, "failed to create etcd client")
 	}
+	defer etcdClient.Close()
 
 	members, err := etcdClient.Members(ctx)
 	if err != nil {
@@ -288,4 +201,37 @@ func (w *Workload) ForwardEtcdLeadership(ctx context.Context, machine *clusterv1
 		return errors.Wrapf(err, "failed to move leader")
 	}
 	return nil
+}
+
+type EtcdMemberStatus struct {
+	Name       string
+	Responsive bool
+}
+
+// EtcdStatus returns the current status of the etcd cluster
+// NOTE: This methods uses control plane machines/nodes only to get in contact with etcd,
+// but then it relies on etcd as ultimate source of truth for the list of members.
+// This is intended to allow informed decisions on actions impacting etcd quorum.
+func (w *Workload) EtcdMembers(ctx context.Context) ([]string, error) {
+	nodes, err := w.getControlPlaneNodes(ctx)
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to list control plane nodes")
+	}
+
+	etcdClient, err := w.etcdClientGenerator.forLeader(ctx, nodes.Items)
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to create etcd client")
+	}
+	defer etcdClient.Close()
+
+	members, err := etcdClient.Members(ctx)
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to list etcd members using etcd client")
+	}
+
+	names := []string{}
+	for _, member := range members {
+		names = append(names, member.Name)
+	}
+	return names, nil
 }

@@ -30,19 +30,21 @@ import (
 	clusterctlv1 "sigs.k8s.io/cluster-api/cmd/clusterctl/api/v1alpha3"
 	fakebootstrap "sigs.k8s.io/cluster-api/cmd/clusterctl/internal/test/providers/bootstrap"
 	fakecontrolplane "sigs.k8s.io/cluster-api/cmd/clusterctl/internal/test/providers/controlplane"
+	fakeexternal "sigs.k8s.io/cluster-api/cmd/clusterctl/internal/test/providers/external"
 	fakeinfrastructure "sigs.k8s.io/cluster-api/cmd/clusterctl/internal/test/providers/infrastructure"
 	addonsv1alpha3 "sigs.k8s.io/cluster-api/exp/addons/api/v1alpha3"
 	expv1 "sigs.k8s.io/cluster-api/exp/api/v1alpha3"
 )
 
 type FakeCluster struct {
-	namespace          string
-	name               string
-	controlPlane       *FakeControlPlane
-	machinePools       []*FakeMachinePool
-	machineDeployments []*FakeMachineDeployment
-	machineSets        []*FakeMachineSet
-	machines           []*FakeMachine
+	namespace             string
+	name                  string
+	controlPlane          *FakeControlPlane
+	machinePools          []*FakeMachinePool
+	machineDeployments    []*FakeMachineDeployment
+	machineSets           []*FakeMachineSet
+	machines              []*FakeMachine
+	withCloudConfigSecret bool
 }
 
 // NewFakeCluster return a FakeCluster that can generate a cluster object, all its own ancillary objects:
@@ -65,6 +67,11 @@ func (f *FakeCluster) WithControlPlane(fakeControlPlane *FakeControlPlane) *Fake
 
 func (f *FakeCluster) WithMachinePools(fakeMachinePool ...*FakeMachinePool) *FakeCluster {
 	f.machinePools = append(f.machinePools, fakeMachinePool...)
+	return f
+}
+
+func (f *FakeCluster) WithCloudConfigSecret() *FakeCluster {
+	f.withCloudConfigSecret = true
 	return f
 }
 
@@ -147,6 +154,24 @@ func (f *FakeCluster) Objs() []runtime.Object {
 		cluster,
 		clusterInfrastructure,
 		caSecret,
+	}
+
+	if f.withCloudConfigSecret {
+		cloudSecret := &corev1.Secret{ // provided by the user -- ** NOT RECONCILED **
+			TypeMeta: metav1.TypeMeta{
+				Kind:       "Secret",
+				APIVersion: "v1",
+			},
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      f.name + "-cloud-config",
+				Namespace: f.namespace,
+			},
+		}
+
+		cloudSecret.SetLabels(map[string]string{
+			clusterctlv1.ClusterctlMoveLabelName: "",
+		})
+		objs = append(objs, cloudSecret)
 	}
 
 	// if the cluster has a control plane object
@@ -1092,6 +1117,35 @@ func (f *FakeClusterResourceSet) Objs() []runtime.Object {
 	return objs
 }
 
+type FakeExternalObject struct {
+	name      string
+	namespace string
+}
+
+func NewFakeExternalObject(namespace, name string) *FakeExternalObject {
+	return &FakeExternalObject{
+		name:      name,
+		namespace: namespace,
+	}
+}
+
+func (f *FakeExternalObject) Objs() []runtime.Object {
+	externalObj := &fakeexternal.GenericExternalObject{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: fakeexternal.GroupVersion.String(),
+			Kind:       "GenericExternalObject",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      f.name,
+			Namespace: f.namespace,
+		},
+	}
+
+	setUID(externalObj)
+
+	return []runtime.Object{externalObj}
+}
+
 func SelectClusterObj(objs []runtime.Object, namespace, name string) *clusterv1.Cluster {
 	for _, o := range objs {
 		if o.GetObjectKind().GroupVersionKind().GroupKind() != clusterv1.GroupVersion.WithKind("Cluster").GroupKind() {
@@ -1104,7 +1158,12 @@ func SelectClusterObj(objs []runtime.Object, namespace, name string) *clusterv1.
 		}
 
 		if accessor.GetName() == name && accessor.GetNamespace() == namespace {
-			cluster := &clusterv1.Cluster{}
+			cluster := &clusterv1.Cluster{
+				TypeMeta: metav1.TypeMeta{
+					APIVersion: clusterv1.GroupVersion.String(),
+					Kind:       "Cluster",
+				},
+			}
 			if err := FakeScheme.Convert(o, cluster, nil); err != nil {
 				panic(fmt.Sprintf("failed to convert %s to cluster: %v", o.GetObjectKind(), err))
 			}
@@ -1162,6 +1221,10 @@ func FakeCustomResourceDefinition(group string, kind string, versions ...string)
 func FakeCRDList() []*apiextensionslv1.CustomResourceDefinition {
 	version := "v1alpha3"
 
+	// Ensure external objects are of a CRD type with the "force move" label
+	externalCRD := FakeCustomResourceDefinition(fakeexternal.GroupVersion.Group, "GenericExternalObject", version)
+	externalCRD.Labels[clusterctlv1.ClusterctlMoveLabelName] = ""
+
 	return []*apiextensionslv1.CustomResourceDefinition{
 		FakeCustomResourceDefinition(clusterv1.GroupVersion.Group, "Cluster", version),
 		FakeCustomResourceDefinition(clusterv1.GroupVersion.Group, "Machine", version),
@@ -1176,5 +1239,6 @@ func FakeCRDList() []*apiextensionslv1.CustomResourceDefinition {
 		FakeCustomResourceDefinition(fakeinfrastructure.GroupVersion.Group, "GenericInfrastructureMachineTemplate", version),
 		FakeCustomResourceDefinition(fakebootstrap.GroupVersion.Group, "GenericBootstrapConfig", version),
 		FakeCustomResourceDefinition(fakebootstrap.GroupVersion.Group, "GenericBootstrapConfigTemplate", version),
+		externalCRD,
 	}
 }

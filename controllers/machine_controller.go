@@ -36,7 +36,6 @@ import (
 	"k8s.io/klog"
 	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha3"
 	"sigs.k8s.io/cluster-api/controllers/external"
-	"sigs.k8s.io/cluster-api/controllers/metrics"
 	"sigs.k8s.io/cluster-api/controllers/noderefutil"
 	"sigs.k8s.io/cluster-api/controllers/remote"
 	capierrors "sigs.k8s.io/cluster-api/errors"
@@ -75,7 +74,8 @@ type MachineReconciler struct {
 	Log     logr.Logger
 	Tracker *remote.ClusterCacheTracker
 
-	config          *rest.Config
+	controller      controller.Controller
+	restConfig      *rest.Config
 	scheme          *runtime.Scheme
 	recorder        record.EventRecorder
 	externalTracker external.ObjectTracker
@@ -108,8 +108,18 @@ func (r *MachineReconciler) SetupWithManager(mgr ctrl.Manager, options controlle
 		return errors.Wrap(err, "failed to add Watch for Clusters to controller manager")
 	}
 
+	// Add index to Machine for listing by Node reference.
+	if err := mgr.GetCache().IndexField(&clusterv1.Machine{},
+		clusterv1.MachineNodeNameIndex,
+		r.indexMachineByNodeName,
+	); err != nil {
+		return errors.Wrap(err, "error setting index fields")
+	}
+
+	r.controller = controller
+
 	r.recorder = mgr.GetEventRecorderFor("machine-controller")
-	r.config = mgr.GetConfig()
+	r.restConfig = mgr.GetConfig()
 	r.scheme = mgr.GetScheme()
 	r.externalTracker = external.ObjectTracker{
 		Controller: controller,
@@ -168,21 +178,8 @@ func (r *MachineReconciler) Reconcile(req ctrl.Request) (_ ctrl.Result, reterr e
 	}
 
 	defer func() {
-		// Always update the readyCondition with the summary of the machine conditions.
-		conditions.SetSummary(m,
-			conditions.WithConditions(
-				clusterv1.BootstrapReadyCondition,
-				clusterv1.InfrastructureReadyCondition,
-				// TODO: add MHC conditions here
-			),
-			conditions.WithStepCounterIfOnly(
-				clusterv1.BootstrapReadyCondition,
-				clusterv1.InfrastructureReadyCondition,
-			),
-		)
 
 		r.reconcilePhase(ctx, m)
-		r.reconcileMetrics(ctx, m)
 
 		// Always attempt to patch the object and status after each reconciliation.
 		// Patch ObservedGeneration only if the reconciliation completed successfully
@@ -190,7 +187,7 @@ func (r *MachineReconciler) Reconcile(req ctrl.Request) (_ ctrl.Result, reterr e
 		if reterr == nil {
 			patchOpts = append(patchOpts, patch.WithStatusObservedGeneration{})
 		}
-		if err := patchHelper.Patch(ctx, m, patchOpts...); err != nil {
+		if err := patchMachine(ctx, patchHelper, m, patchOpts...); err != nil {
 			reterr = kerrors.NewAggregate([]error{reterr, err})
 		}
 	}()
@@ -216,9 +213,53 @@ func (r *MachineReconciler) Reconcile(req ctrl.Request) (_ ctrl.Result, reterr e
 	return r.reconcile(ctx, cluster, m)
 }
 
+func patchMachine(ctx context.Context, patchHelper *patch.Helper, machine *clusterv1.Machine, options ...patch.Option) error {
+	// Always update the readyCondition by summarizing the state of other conditions.
+	// A step counter is added to represent progress during the provisioning process (instead we are hiding it
+	// after provisioning - e.g. when a MHC condition exists - or during the deletion process).
+	conditions.SetSummary(machine,
+		conditions.WithConditions(
+			// Infrastructure problems should take precedence over all the other conditions
+			clusterv1.InfrastructureReadyCondition,
+			// Boostrap comes after, but it is relevant only during initial machine provisioning.
+			clusterv1.BootstrapReadyCondition,
+			// MHC reported condition should take precedence over the remediation progress
+			clusterv1.MachineHealthCheckSuccededCondition,
+			clusterv1.MachineOwnerRemediatedCondition,
+		),
+		conditions.WithStepCounterIf(machine.ObjectMeta.DeletionTimestamp.IsZero()),
+		conditions.WithStepCounterIfOnly(
+			clusterv1.BootstrapReadyCondition,
+			clusterv1.InfrastructureReadyCondition,
+		),
+	)
+
+	// Patch the object, ignoring conflicts on the conditions owned by this controller.
+	// Also, if requested, we are adding additional options like e.g. Patch ObservedGeneration when issuing the
+	// patch at the end of the reconcile loop.
+	options = append(options,
+		patch.WithOwnedConditions{Conditions: []clusterv1.ConditionType{
+			clusterv1.ReadyCondition,
+			clusterv1.BootstrapReadyCondition,
+			clusterv1.InfrastructureReadyCondition,
+			clusterv1.DrainingSucceededCondition,
+			clusterv1.MachineHealthCheckSuccededCondition,
+			clusterv1.MachineOwnerRemediatedCondition,
+		}},
+	)
+
+	return patchHelper.Patch(ctx, machine, options...)
+}
+
 func (r *MachineReconciler) reconcile(ctx context.Context, cluster *clusterv1.Cluster, m *clusterv1.Machine) (ctrl.Result, error) {
 	logger := r.Log.WithValues("machine", m.Name, "namespace", m.Namespace)
-	logger = logger.WithValues("cluster", cluster.Name)
+
+	if cluster.Status.ControlPlaneInitialized {
+		if err := r.watchClusterNodes(ctx, cluster); err != nil {
+			logger.Error(err, "error watching nodes on target cluster")
+			return ctrl.Result{}, err
+		}
+	}
 
 	// If the Machine belongs to a cluster, add an owner reference.
 	if r.shouldAdopt(m) {
@@ -230,48 +271,26 @@ func (r *MachineReconciler) reconcile(ctx context.Context, cluster *clusterv1.Cl
 		})
 	}
 
-	// Call the inner reconciliation methods.
-	reconciliationErrors := []error{
-		r.reconcileBootstrap(ctx, cluster, m),
-		r.reconcileInfrastructure(ctx, cluster, m),
-		r.reconcileNodeRef(ctx, cluster, m),
+	phases := []func(context.Context, *clusterv1.Cluster, *clusterv1.Machine) (ctrl.Result, error){
+		r.reconcileBootstrap,
+		r.reconcileInfrastructure,
+		r.reconcileNode,
 	}
 
-	// Parse the errors, making sure we record if there is a RequeueAfterError.
 	res := ctrl.Result{}
 	errs := []error{}
-	for _, err := range reconciliationErrors {
-		if requeueErr, ok := errors.Cause(err).(capierrors.HasRequeueAfterError); ok {
-			// Only record and log the first RequeueAfterError.
-			if !res.Requeue {
-				res.Requeue = true
-				res.RequeueAfter = requeueErr.GetRequeueAfter()
-				logger.Error(err, "Reconciliation for Machine asked to requeue")
-			}
+	for _, phase := range phases {
+		// Call the inner reconciliation methods.
+		phaseResult, err := phase(ctx, cluster, m)
+		if err != nil {
+			errs = append(errs, err)
+		}
+		if len(errs) > 0 {
 			continue
 		}
-
-		errs = append(errs, err)
+		res = util.LowestNonZeroResult(res, phaseResult)
 	}
 	return res, kerrors.NewAggregate(errs)
-}
-
-func (r *MachineReconciler) reconcileMetrics(_ context.Context, m *clusterv1.Machine) {
-	if m.Status.BootstrapReady {
-		metrics.MachineBootstrapReady.WithLabelValues(m.Name, m.Namespace, m.Spec.ClusterName).Set(1)
-	} else {
-		metrics.MachineBootstrapReady.WithLabelValues(m.Name, m.Namespace, m.Spec.ClusterName).Set(0)
-	}
-	if m.Status.InfrastructureReady {
-		metrics.MachineInfrastructureReady.WithLabelValues(m.Name, m.Namespace, m.Spec.ClusterName).Set(1)
-	} else {
-		metrics.MachineInfrastructureReady.WithLabelValues(m.Name, m.Namespace, m.Spec.ClusterName).Set(0)
-	}
-	if m.Status.NodeRef != nil {
-		metrics.MachineNodeReady.WithLabelValues(m.Name, m.Namespace, m.Spec.ClusterName).Set(1)
-	} else {
-		metrics.MachineNodeReady.WithLabelValues(m.Name, m.Namespace, m.Spec.ClusterName).Set(0)
-	}
 }
 
 func (r *MachineReconciler) reconcileDelete(ctx context.Context, cluster *clusterv1.Cluster, m *clusterv1.Machine) (ctrl.Result, error) {
@@ -290,20 +309,70 @@ func (r *MachineReconciler) reconcileDelete(ctx context.Context, cluster *cluste
 	}
 
 	if isDeleteNodeAllowed {
-		// Drain node before deletion.
-		if _, exists := m.ObjectMeta.Annotations[clusterv1.ExcludeNodeDrainingAnnotation]; !exists {
+		// pre-drain.delete lifecycle hook
+		// Return early without error, will requeue if/when the hook owner removes the annotation.
+		if annotations.HasWithPrefix(clusterv1.PreDrainDeleteHookAnnotationPrefix, m.ObjectMeta.Annotations) {
+			conditions.MarkFalse(m, clusterv1.PreDrainDeleteHookSucceededCondition, clusterv1.WaitingExternalHookReason, clusterv1.ConditionSeverityInfo, "")
+			return ctrl.Result{}, nil
+		}
+		conditions.MarkTrue(m, clusterv1.PreDrainDeleteHookSucceededCondition)
+
+		// Drain node before deletion and issue a patch in order to make this operation visible to the users.
+		if r.isNodeDrainAllowed(m) {
+			patchHelper, err := patch.NewHelper(m, r.Client)
+			if err != nil {
+				return ctrl.Result{}, err
+			}
+
 			logger.Info("Draining node", "node", m.Status.NodeRef.Name)
+			// The DrainingSucceededCondition never exists before the node is drained for the first time,
+			// so its transition time can be used to record the first time draining.
+			// This `if` condition prevents the transition time to be changed more than once.
+			if conditions.Get(m, clusterv1.DrainingSucceededCondition) == nil {
+				conditions.MarkFalse(m, clusterv1.DrainingSucceededCondition, clusterv1.DrainingReason, clusterv1.ConditionSeverityInfo, "Draining the node before deletion")
+			}
+
+			if err := patchMachine(ctx, patchHelper, m); err != nil {
+				return ctrl.Result{}, errors.Wrap(err, "failed to patch Machine")
+			}
+
 			if err := r.drainNode(ctx, cluster, m.Status.NodeRef.Name, m.Name); err != nil {
+				conditions.MarkFalse(m, clusterv1.DrainingSucceededCondition, clusterv1.DrainingFailedReason, clusterv1.ConditionSeverityWarning, err.Error())
 				r.recorder.Eventf(m, corev1.EventTypeWarning, "FailedDrainNode", "error draining Machine's node %q: %v", m.Status.NodeRef.Name, err)
 				return ctrl.Result{}, err
 			}
+
+			conditions.MarkTrue(m, clusterv1.DrainingSucceededCondition)
 			r.recorder.Eventf(m, corev1.EventTypeNormal, "SuccessfulDrainNode", "success draining Machine's node %q", m.Status.NodeRef.Name)
 		}
 	}
 
-	if ok, err := r.reconcileDeleteExternal(ctx, m); !ok || err != nil {
-		// Return early and don't remove the finalizer if we got an error or
-		// the external reconciliation deletion isn't ready.
+	// pre-term.delete lifecycle hook
+	// Return early without error, will requeue if/when the hook owner removes the annotation.
+	if annotations.HasWithPrefix(clusterv1.PreTerminateDeleteHookAnnotationPrefix, m.ObjectMeta.Annotations) {
+		conditions.MarkFalse(m, clusterv1.PreTerminateDeleteHookSucceededCondition, clusterv1.WaitingExternalHookReason, clusterv1.ConditionSeverityInfo, "")
+		return ctrl.Result{}, nil
+	}
+	conditions.MarkTrue(m, clusterv1.PreTerminateDeleteHookSucceededCondition)
+
+	// Return early and don't remove the finalizer if we got an error or
+	// the external reconciliation deletion isn't ready.
+
+	patchHelper, err := patch.NewHelper(m, r.Client)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	conditions.MarkFalse(m, clusterv1.MachineNodeHealthyCondition, clusterv1.DeletingReason, clusterv1.ConditionSeverityInfo, "")
+	if err := patchMachine(ctx, patchHelper, m); err != nil {
+		conditions.MarkFalse(m, clusterv1.MachineNodeHealthyCondition, clusterv1.DeletionFailedReason, clusterv1.ConditionSeverityInfo, "")
+		return ctrl.Result{}, errors.Wrap(err, "failed to patch Machine")
+	}
+
+	if ok, err := r.reconcileDeleteInfrastructure(ctx, m); !ok || err != nil {
+		return ctrl.Result{}, err
+	}
+
+	if ok, err := r.reconcileDeleteBootstrap(ctx, m); !ok || err != nil {
 		return ctrl.Result{}, err
 	}
 
@@ -321,12 +390,43 @@ func (r *MachineReconciler) reconcileDelete(ctx context.Context, cluster *cluste
 		})
 		if waitErr != nil {
 			logger.Error(deleteNodeErr, "Timed out deleting node, moving on", "node", m.Status.NodeRef.Name)
+			conditions.MarkFalse(m, clusterv1.MachineNodeHealthyCondition, clusterv1.DeletionFailedReason, clusterv1.ConditionSeverityWarning, "")
 			r.recorder.Eventf(m, corev1.EventTypeWarning, "FailedDeleteNode", "error deleting Machine's node: %v", deleteNodeErr)
 		}
 	}
 
 	controllerutil.RemoveFinalizer(m, clusterv1.MachineFinalizer)
 	return ctrl.Result{}, nil
+}
+
+func (r *MachineReconciler) isNodeDrainAllowed(m *clusterv1.Machine) bool {
+	if _, exists := m.ObjectMeta.Annotations[clusterv1.ExcludeNodeDrainingAnnotation]; exists {
+		return false
+	}
+
+	if r.nodeDrainTimeoutExceeded(m) {
+		return false
+	}
+
+	return true
+
+}
+
+func (r *MachineReconciler) nodeDrainTimeoutExceeded(machine *clusterv1.Machine) bool {
+	// if the NodeDrainTineout type is not set by user
+	if machine.Spec.NodeDrainTimeout == nil || machine.Spec.NodeDrainTimeout.Seconds() <= 0 {
+		return false
+	}
+
+	// if the draining succeeded condition does not exist
+	if conditions.Get(machine, clusterv1.DrainingSucceededCondition) == nil {
+		return false
+	}
+
+	now := time.Now()
+	firstTimeDrain := conditions.GetLastTransitionTime(machine, clusterv1.DrainingSucceededCondition)
+	diff := now.Sub(firstTimeDrain.Time)
+	return diff.Seconds() >= machine.Spec.NodeDrainTimeout.Seconds()
 }
 
 // isDeleteNodeAllowed returns nil only if the Machine's NodeRef is not nil
@@ -340,6 +440,30 @@ func (r *MachineReconciler) isDeleteNodeAllowed(ctx context.Context, cluster *cl
 	// Cannot delete something that doesn't exist.
 	if machine.Status.NodeRef == nil {
 		return errNilNodeRef
+	}
+
+	// controlPlaneRef is an optional field in the Cluster so skip the external
+	// managed control plane check if it is nil
+	if cluster.Spec.ControlPlaneRef != nil {
+		controlPlane, err := external.Get(ctx, r.Client, cluster.Spec.ControlPlaneRef, cluster.Spec.ControlPlaneRef.Namespace)
+		if apierrors.IsNotFound(err) {
+			// If control plane object in the reference does not exist, log and skip check for
+			// external managed control plane
+			r.Log.Error(err, "control plane object specified in cluster spec.controlPlaneRef does not exist", "kind", cluster.Spec.ControlPlaneRef.Kind, "name", cluster.Spec.ControlPlaneRef.Name)
+		} else {
+			if err != nil {
+				// If any other error occurs when trying to get the control plane object,
+				// return the error so we can retry
+				return err
+			}
+
+			// Check if the ControlPlane is externally managed (AKS, EKS, GKE, etc)
+			// and skip the following section if control plane is externally managed
+			// because there will be no control plane nodes registered
+			if util.IsExternalManagedControlPlane(controlPlane) {
+				return nil
+			}
+		}
 	}
 
 	// Get all of the machines that belong to this cluster.
@@ -450,45 +574,136 @@ func (r *MachineReconciler) deleteNode(ctx context.Context, cluster *clusterv1.C
 	return nil
 }
 
-// reconcileDeleteExternal tries to delete external references, returning true if it cannot find any.
-func (r *MachineReconciler) reconcileDeleteExternal(ctx context.Context, m *clusterv1.Machine) (bool, error) {
-	objects := []*unstructured.Unstructured{}
-	references := []*corev1.ObjectReference{
-		m.Spec.Bootstrap.ConfigRef,
-		&m.Spec.InfrastructureRef,
+func (r *MachineReconciler) reconcileDeleteBootstrap(ctx context.Context, m *clusterv1.Machine) (bool, error) {
+	obj, err := r.reconcileDeleteExternal(ctx, m, m.Spec.Bootstrap.ConfigRef)
+	if err != nil {
+		return false, err
 	}
 
-	// Loop over the references and try to retrieve it with the client.
-	for _, ref := range references {
-		if ref == nil {
-			continue
-		}
-
-		obj, err := external.Get(ctx, r.Client, ref, m.Namespace)
-		if err != nil && !apierrors.IsNotFound(errors.Cause(err)) {
-			return false, errors.Wrapf(err, "failed to get %s %q for Machine %q in namespace %q",
-				ref.GroupVersionKind(), ref.Name, m.Name, m.Namespace)
-		}
-		if obj != nil {
-			objects = append(objects, obj)
-		}
+	if obj == nil {
+		// Marks the bootstrap as deleted
+		conditions.MarkFalse(m, clusterv1.BootstrapReadyCondition, clusterv1.DeletedReason, clusterv1.ConditionSeverityInfo, "")
+		return true, nil
 	}
 
-	// Issue a delete request for any object that has been found.
-	for _, obj := range objects {
+	// Report a summary of current status of the bootstrap object defined for this machine.
+	conditions.SetMirror(m, clusterv1.BootstrapReadyCondition,
+		conditions.UnstructuredGetter(obj),
+		conditions.WithFallbackValue(false, clusterv1.DeletingReason, clusterv1.ConditionSeverityInfo, ""),
+	)
+	return false, nil
+}
+
+func (r *MachineReconciler) reconcileDeleteInfrastructure(ctx context.Context, m *clusterv1.Machine) (bool, error) {
+	obj, err := r.reconcileDeleteExternal(ctx, m, &m.Spec.InfrastructureRef)
+	if err != nil {
+		return false, err
+	}
+
+	if obj == nil {
+		// Marks the infrastructure as deleted
+		conditions.MarkFalse(m, clusterv1.InfrastructureReadyCondition, clusterv1.DeletedReason, clusterv1.ConditionSeverityInfo, "")
+		return true, nil
+	}
+
+	// Report a summary of current status of the bootstrap object defined for this machine.
+	conditions.SetMirror(m, clusterv1.InfrastructureReadyCondition,
+		conditions.UnstructuredGetter(obj),
+		conditions.WithFallbackValue(false, clusterv1.DeletingReason, clusterv1.ConditionSeverityInfo, ""),
+	)
+	return false, nil
+}
+
+// reconcileDeleteExternal tries to delete external references.
+func (r *MachineReconciler) reconcileDeleteExternal(ctx context.Context, m *clusterv1.Machine, ref *corev1.ObjectReference) (*unstructured.Unstructured, error) {
+	if ref == nil {
+		return nil, nil
+	}
+
+	// get the external object
+	obj, err := external.Get(ctx, r.Client, ref, m.Namespace)
+	if err != nil && !apierrors.IsNotFound(errors.Cause(err)) {
+		return nil, errors.Wrapf(err, "failed to get %s %q for Machine %q in namespace %q",
+			ref.GroupVersionKind(), ref.Name, m.Name, m.Namespace)
+	}
+
+	if obj != nil {
+		// Issue a delete request.
 		if err := r.Client.Delete(ctx, obj); err != nil && !apierrors.IsNotFound(err) {
-			return false, errors.Wrapf(err,
+			return obj, errors.Wrapf(err,
 				"failed to delete %v %q for Machine %q in namespace %q",
 				obj.GroupVersionKind(), obj.GetName(), m.Name, m.Namespace)
 		}
 	}
 
 	// Return true if there are no more external objects.
-	return len(objects) == 0, nil
+	return obj, nil
 }
 
 func (r *MachineReconciler) shouldAdopt(m *clusterv1.Machine) bool {
 	return metav1.GetControllerOf(m) == nil && !util.HasOwner(m.OwnerReferences, clusterv1.GroupVersion.String(), []string{"Cluster"})
+}
+
+func (r *MachineReconciler) watchClusterNodes(ctx context.Context, cluster *clusterv1.Cluster) error {
+	// If there is no tracker, don't watch remote nodes
+	if r.Tracker == nil {
+		return nil
+	}
+
+	if err := r.Tracker.Watch(ctx, remote.WatchInput{
+		Name:         "machine-watchNodes",
+		Cluster:      util.ObjectKey(cluster),
+		Watcher:      r.controller,
+		Kind:         &corev1.Node{},
+		EventHandler: &handler.EnqueueRequestsFromMapFunc{ToRequests: handler.ToRequestsFunc(r.nodeToMachine)},
+	}); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (r *MachineReconciler) nodeToMachine(o handler.MapObject) []reconcile.Request {
+	node, ok := o.Object.(*corev1.Node)
+	if !ok {
+		r.Log.Error(errors.New("incorrect type"), "expected a Node", "type", fmt.Sprintf("%T", o))
+		return nil
+	}
+
+	machineList := &clusterv1.MachineList{}
+	if err := r.Client.List(
+		context.TODO(),
+		machineList,
+		client.MatchingFields{clusterv1.MachineNodeNameIndex: node.Name},
+	); err != nil {
+		r.Log.Error(err, "Failed to list machines for node", "node", node.GetName())
+		return nil
+	}
+
+	// Found no Machine for Node
+	if len(machineList.Items) != 1 {
+		if len(machineList.Items) == 0 {
+			r.Log.Error(errors.New("no matching Machine"), "Unable to retrieve machine from node", "node", node.GetName())
+		} else {
+			r.Log.Error(errors.New("multiple matching Machines"), "There are multiple machines for node", "node", node.GetName())
+		}
+		return nil
+	}
+
+	return []reconcile.Request{{NamespacedName: util.ObjectKey(&machineList.Items[0])}}
+}
+
+func (r *MachineReconciler) indexMachineByNodeName(o runtime.Object) []string {
+	machine, ok := o.(*clusterv1.Machine)
+	if !ok {
+		r.Log.Error(errors.New("incorrect type"), "expected a Machine", "type", fmt.Sprintf("%T", o))
+		return nil
+	}
+
+	if machine.Status.NodeRef != nil {
+		return []string{machine.Status.NodeRef.Name}
+	}
+
+	return nil
 }
 
 // writer implements io.Writer interface as a pass-through for klog.

@@ -19,6 +19,7 @@ package conditions
 import (
 	"reflect"
 
+	"github.com/google/go-cmp/cmp"
 	"github.com/pkg/errors"
 	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha3"
 )
@@ -28,8 +29,8 @@ type Patch []PatchOperation
 
 // PatchOperation define an operation that changes a single condition.
 type PatchOperation struct {
-	After  *clusterv1.Condition
 	Before *clusterv1.Condition
+	After  *clusterv1.Condition
 	Op     PatchOperationType
 }
 
@@ -81,6 +82,7 @@ func NewPatch(before Getter, after Getter) Patch {
 // applyOptions allows to set strategies for patch apply.
 type applyOptions struct {
 	ownedConditions []clusterv1.ConditionType
+	forceOverwrite  bool
 }
 
 func (o *applyOptions) isOwnedCondition(t clusterv1.ConditionType) bool {
@@ -97,9 +99,18 @@ type ApplyOption func(*applyOptions)
 
 // WithOwnedConditions allows to define condition types owned by the controller.
 // In case of conflicts for the owned conditions, the patch helper will always use the value provided by the controller.
+//
+// DEPRECATED: Use WithForceOverwrite.
 func WithOwnedConditions(t ...clusterv1.ConditionType) ApplyOption {
 	return func(c *applyOptions) {
 		c.ownedConditions = t
+	}
+}
+
+// WithForceOverwrite In case of conflicts for the owned conditions, the patch helper will always use the value provided by the controller.
+func WithForceOverwrite(v bool) ApplyOption {
+	return func(c *applyOptions) {
+		c.forceOverwrite = v
 	}
 }
 
@@ -119,7 +130,7 @@ func (p Patch) Apply(latest Setter, options ...ApplyOption) error {
 		switch conditionPatch.Op {
 		case AddConditionPatch:
 			// If the conditions is owned, always keep the after value.
-			if applyOpt.isOwnedCondition(conditionPatch.After.Type) {
+			if applyOpt.forceOverwrite || applyOpt.isOwnedCondition(conditionPatch.After.Type) {
 				Set(latest, conditionPatch.After)
 				continue
 			}
@@ -128,7 +139,7 @@ func (p Patch) Apply(latest Setter, options ...ApplyOption) error {
 			if latestCondition := Get(latest, conditionPatch.After.Type); latestCondition != nil {
 				// If latest and after agree on the change, then it is a conflict.
 				if !hasSameState(latestCondition, conditionPatch.After) {
-					return errors.Errorf("error patching conditions: The condition %q was modified by a different process and this caused a merge/AddCondition conflict", conditionPatch.After.Type)
+					return errors.Errorf("error patching conditions: The condition %q was modified by a different process and this caused a merge/AddCondition conflict: %v", conditionPatch.After.Type, cmp.Diff(latestCondition, conditionPatch.After))
 				}
 				// otherwise, the latest is already as intended.
 				// NOTE: We are preserving LastTransitionTime from the latest in order to avoid altering the existing value.
@@ -139,7 +150,7 @@ func (p Patch) Apply(latest Setter, options ...ApplyOption) error {
 
 		case ChangeConditionPatch:
 			// If the conditions is owned, always keep the after value.
-			if applyOpt.isOwnedCondition(conditionPatch.After.Type) {
+			if applyOpt.forceOverwrite || applyOpt.isOwnedCondition(conditionPatch.After.Type) {
 				Set(latest, conditionPatch.After)
 				continue
 			}
@@ -155,7 +166,7 @@ func (p Patch) Apply(latest Setter, options ...ApplyOption) error {
 			// the after state corresponds to the desired value. If not this is a conflict (unless we should ignore conflicts for this condition type).
 			if !reflect.DeepEqual(latestCondition, conditionPatch.Before) {
 				if !hasSameState(latestCondition, conditionPatch.After) {
-					return errors.Errorf("error patching conditions: The condition %q was modified by a different process and this caused a merge/ChangeCondition conflict", conditionPatch.After.Type)
+					return errors.Errorf("error patching conditions: The condition %q was modified by a different process and this caused a merge/ChangeCondition conflict: %v", conditionPatch.After.Type, cmp.Diff(latestCondition, conditionPatch.After))
 				}
 				// Otherwise the latest is already as intended.
 				// NOTE: We are preserving LastTransitionTime from the latest in order to avoid altering the existing value.
@@ -166,7 +177,7 @@ func (p Patch) Apply(latest Setter, options ...ApplyOption) error {
 
 		case RemoveConditionPatch:
 			// If the conditions is owned, always keep the after value (condition should be deleted).
-			if applyOpt.isOwnedCondition(conditionPatch.Before.Type) {
+			if applyOpt.forceOverwrite || applyOpt.isOwnedCondition(conditionPatch.Before.Type) {
 				Delete(latest, conditionPatch.Before.Type)
 				continue
 			}
@@ -175,7 +186,7 @@ func (p Patch) Apply(latest Setter, options ...ApplyOption) error {
 			// if so then this is a conflict.
 			if latestCondition := Get(latest, conditionPatch.Before.Type); latestCondition != nil {
 				if !hasSameState(latestCondition, conditionPatch.Before) {
-					return errors.Errorf("error patching conditions: The condition %q was modified by a different process and this caused a merge/RemoveCondition conflict", conditionPatch.Before.Type)
+					return errors.Errorf("error patching conditions: The condition %q was modified by a different process and this caused a merge/RemoveCondition conflict: %v", conditionPatch.Before.Type, cmp.Diff(latestCondition, conditionPatch.Before))
 				}
 			}
 			// Otherwise the latest and after agreed on the delete operation, so there's nothing to change.

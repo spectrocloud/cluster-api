@@ -27,6 +27,7 @@ import (
 	clusterctlv1 "sigs.k8s.io/cluster-api/cmd/clusterctl/api/v1alpha3"
 	fakebootstrap "sigs.k8s.io/cluster-api/cmd/clusterctl/internal/test/providers/bootstrap"
 	fakecontrolplane "sigs.k8s.io/cluster-api/cmd/clusterctl/internal/test/providers/controlplane"
+	fakeexternal "sigs.k8s.io/cluster-api/cmd/clusterctl/internal/test/providers/external"
 	fakeinfrastructure "sigs.k8s.io/cluster-api/cmd/clusterctl/internal/test/providers/infrastructure"
 	addonsv1alpha3 "sigs.k8s.io/cluster-api/exp/addons/api/v1alpha3"
 	expv1 "sigs.k8s.io/cluster-api/exp/api/v1alpha3"
@@ -35,8 +36,9 @@ import (
 )
 
 type FakeProxy struct {
-	cs   client.Client
-	objs []runtime.Object
+	cs        client.Client
+	namespace string
+	objs      []runtime.Object
 }
 
 var (
@@ -53,11 +55,12 @@ func init() {
 
 	_ = fakebootstrap.AddToScheme(FakeScheme)
 	_ = fakecontrolplane.AddToScheme(FakeScheme)
+	_ = fakeexternal.AddToScheme(FakeScheme)
 	_ = fakeinfrastructure.AddToScheme(FakeScheme)
 }
 
 func (f *FakeProxy) CurrentNamespace() (string, error) {
-	return "default", nil
+	return f.namespace, nil
 }
 
 func (f *FakeProxy) ValidateKubernetesVersion() error {
@@ -121,11 +124,18 @@ func (f *FakeProxy) ListResources(labels map[string]string, namespaces ...string
 }
 
 func NewFakeProxy() *FakeProxy {
-	return &FakeProxy{}
+	return &FakeProxy{
+		namespace: "default",
+	}
 }
 
 func (f *FakeProxy) WithObjs(objs ...runtime.Object) *FakeProxy {
 	f.objs = append(f.objs, objs...)
+	return f
+}
+
+func (f *FakeProxy) WithNamespace(n string) *FakeProxy {
+	f.namespace = n
 	return f
 }
 

@@ -81,6 +81,10 @@ func (f fakeClient) GetClusterTemplate(options GetClusterTemplateOptions) (Templ
 	return f.internalClient.GetClusterTemplate(options)
 }
 
+func (f fakeClient) GetKubeconfig(options GetKubeconfigOptions) (string, error) {
+	return f.internalClient.GetKubeconfig(options)
+}
+
 func (f fakeClient) Init(options InitOptions) ([]Components, error) {
 	return f.internalClient.Init(options)
 }
@@ -101,8 +105,16 @@ func (f fakeClient) PlanUpgrade(options PlanUpgradeOptions) ([]UpgradePlan, erro
 	return f.internalClient.PlanUpgrade(options)
 }
 
+func (f fakeClient) PlanCertManagerUpgrade(options PlanUpgradeOptions) (CertManagerUpgradePlan, error) {
+	return f.internalClient.PlanCertManagerUpgrade(options)
+}
+
 func (f fakeClient) ApplyUpgrade(options ApplyUpgradeOptions) error {
 	return f.internalClient.ApplyUpgrade(options)
+}
+
+func (f fakeClient) ProcessYAML(options ProcessYAMLOptions) (YamlPrinter, error) {
+	return f.internalClient.ProcessYAML(options)
 }
 
 // newFakeClient returns a clusterctl client that allows to execute tests on a set of fake config, fake repositories and fake clusters.
@@ -121,9 +133,9 @@ func newFakeClient(configClient config.Client) *fakeClient {
 
 	var clusterClientFactory = func(i ClusterClientFactoryInput) (cluster.Client, error) {
 		// converting the client.Kubeconfig to cluster.Kubeconfig alias
-		k := cluster.Kubeconfig(i.kubeconfig)
+		k := cluster.Kubeconfig(i.Kubeconfig)
 		if _, ok := fake.clusters[k]; !ok {
-			return nil, errors.Errorf("Cluster for kubeconfig %q and/or context %q does not exist.", i.kubeconfig.Path, i.kubeconfig.Context)
+			return nil, errors.Errorf("Cluster for kubeconfig %q and/or context %q does not exist.", i.Kubeconfig.Path, i.Kubeconfig.Context)
 		}
 		return fake.clusters[k], nil
 	}
@@ -132,10 +144,10 @@ func newFakeClient(configClient config.Client) *fakeClient {
 		InjectConfig(fake.configClient),
 		InjectClusterClientFactory(clusterClientFactory),
 		InjectRepositoryFactory(func(input RepositoryClientFactoryInput) (repository.Client, error) {
-			if _, ok := fake.repositories[input.provider.ManifestLabel()]; !ok {
-				return nil, errors.Errorf("Repository for kubeconfig %q does not exist.", input.provider.ManifestLabel())
+			if _, ok := fake.repositories[input.Provider.ManifestLabel()]; !ok {
+				return nil, errors.Errorf("Repository for kubeconfig %q does not exist.", input.Provider.ManifestLabel())
 			}
-			return fake.repositories[input.provider.ManifestLabel()], nil
+			return fake.repositories[input.Provider.ManifestLabel()], nil
 		}),
 	)
 
@@ -186,7 +198,7 @@ func newFakeCluster(kubeconfig cluster.Kubeconfig, configClient config.Client) *
 
 // newFakeCertManagerClient creates a new CertManagerClient
 // allows the caller to define which images are needed for the manager to run
-func newFakeCertManagerClient(imagesReturnImages []string, imagesReturnError error) cluster.CertManagerClient {
+func newFakeCertManagerClient(imagesReturnImages []string, imagesReturnError error) *fakeCertManagerClient {
 	return &fakeCertManagerClient{
 		images:      imagesReturnImages,
 		imagesError: imagesReturnError,
@@ -194,18 +206,32 @@ func newFakeCertManagerClient(imagesReturnImages []string, imagesReturnError err
 }
 
 type fakeCertManagerClient struct {
-	images      []string
-	imagesError error
+	images          []string
+	imagesError     error
+	certManagerPlan cluster.CertManagerUpgradePlan
 }
 
 var _ cluster.CertManagerClient = &fakeCertManagerClient{}
 
-func (p *fakeCertManagerClient) EnsureWebhook() error {
+func (p *fakeCertManagerClient) EnsureInstalled() error {
 	return nil
+}
+
+func (p *fakeCertManagerClient) EnsureLatestVersion() error {
+	return nil
+}
+
+func (p *fakeCertManagerClient) PlanUpgrade() (cluster.CertManagerUpgradePlan, error) {
+	return p.certManagerPlan, nil
 }
 
 func (p *fakeCertManagerClient) Images() ([]string, error) {
 	return p.images, p.imagesError
+}
+
+func (p *fakeCertManagerClient) WithCertManagerPlan(plan CertManagerUpgradePlan) *fakeCertManagerClient {
+	p.certManagerPlan = cluster.CertManagerUpgradePlan(plan)
+	return p
 }
 
 type fakeClusterClient struct {
@@ -256,6 +282,10 @@ func (f *fakeClusterClient) ProviderUpgrader() cluster.ProviderUpgrader {
 
 func (f *fakeClusterClient) Template() cluster.TemplateClient {
 	return f.internalclient.Template()
+}
+
+func (f *fakeClusterClient) WorkloadCluster() cluster.WorkloadCluster {
+	return f.internalclient.WorkloadCluster()
 }
 
 func (f *fakeClusterClient) WithObjs(objs ...runtime.Object) *fakeClusterClient {

@@ -27,7 +27,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/utils/pointer"
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha3"
+
 	"sigs.k8s.io/cluster-api/test/framework"
 	"sigs.k8s.io/cluster-api/test/framework/clusterctl"
 	"sigs.k8s.io/cluster-api/util"
@@ -47,11 +47,11 @@ type QuickStartSpecInput struct {
 // This test is meant to provide a first, fast signal to detect regression; it is recommended to use it as a PR blocker test.
 func QuickStartSpec(ctx context.Context, inputGetter func() QuickStartSpecInput) {
 	var (
-		specName      = "quick-start"
-		input         QuickStartSpecInput
-		namespace     *corev1.Namespace
-		cancelWatches context.CancelFunc
-		cluster       *clusterv1.Cluster
+		specName         = "quick-start"
+		input            QuickStartSpecInput
+		namespace        *corev1.Namespace
+		cancelWatches    context.CancelFunc
+		clusterResources *clusterctl.ApplyClusterTemplateAndWaitResult
 	)
 
 	BeforeEach(func() {
@@ -63,7 +63,6 @@ func QuickStartSpec(ctx context.Context, inputGetter func() QuickStartSpecInput)
 		Expect(os.MkdirAll(input.ArtifactFolder, 0755)).To(Succeed(), "Invalid argument. input.ArtifactFolder can't be created for %s spec", specName)
 
 		Expect(input.E2EConfig.Variables).To(HaveKey(KubernetesVersion))
-		Expect(input.E2EConfig.Variables).To(HaveKey(CNIPath))
 
 		// Setup a Namespace where to host objects for this spec and create a watcher for the namespace events.
 		namespace, cancelWatches = setupSpecNamespace(ctx, specName, input.BootstrapClusterProxy, input.ArtifactFolder)
@@ -73,7 +72,7 @@ func QuickStartSpec(ctx context.Context, inputGetter func() QuickStartSpecInput)
 
 		By("Creating a workload cluster")
 
-		cluster, _, _ = clusterctl.ApplyClusterTemplateAndWait(ctx, clusterctl.ApplyClusterTemplateAndWaitInput{
+		clusterResources = clusterctl.ApplyClusterTemplateAndWait(ctx, clusterctl.ApplyClusterTemplateAndWaitInput{
 			ClusterProxy: input.BootstrapClusterProxy,
 			ConfigCluster: clusterctl.ConfigClusterInput{
 				LogFolder:                filepath.Join(input.ArtifactFolder, "clusters", input.BootstrapClusterProxy.GetName()),
@@ -82,12 +81,11 @@ func QuickStartSpec(ctx context.Context, inputGetter func() QuickStartSpecInput)
 				InfrastructureProvider:   clusterctl.DefaultInfrastructureProvider,
 				Flavor:                   clusterctl.DefaultFlavor,
 				Namespace:                namespace.Name,
-				ClusterName:              fmt.Sprintf("cluster-%s", util.RandomString(6)),
+				ClusterName:              fmt.Sprintf("%s-%s", specName, util.RandomString(6)),
 				KubernetesVersion:        input.E2EConfig.GetVariable(KubernetesVersion),
 				ControlPlaneMachineCount: pointer.Int64Ptr(1),
 				WorkerMachineCount:       pointer.Int64Ptr(1),
 			},
-			CNIManifestPath:              input.E2EConfig.GetVariable(CNIPath),
 			WaitForClusterIntervals:      input.E2EConfig.GetIntervals(specName, "wait-cluster"),
 			WaitForControlPlaneIntervals: input.E2EConfig.GetIntervals(specName, "wait-control-plane"),
 			WaitForMachineDeployments:    input.E2EConfig.GetIntervals(specName, "wait-worker-nodes"),
@@ -98,6 +96,6 @@ func QuickStartSpec(ctx context.Context, inputGetter func() QuickStartSpecInput)
 
 	AfterEach(func() {
 		// Dumps all the resources in the spec namespace, then cleanups the cluster object and the spec namespace itself.
-		dumpSpecResourcesAndCleanup(ctx, specName, input.BootstrapClusterProxy, input.ArtifactFolder, namespace, cancelWatches, cluster, input.E2EConfig.GetIntervals, input.SkipCleanup)
+		dumpSpecResourcesAndCleanup(ctx, specName, input.BootstrapClusterProxy, input.ArtifactFolder, namespace, cancelWatches, clusterResources.Cluster, input.E2EConfig.GetIntervals, input.SkipCleanup)
 	})
 }

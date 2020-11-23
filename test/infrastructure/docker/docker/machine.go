@@ -44,8 +44,8 @@ const (
 )
 
 type nodeCreator interface {
-	CreateControlPlaneNode(name, image, clusterLabel, listenAddress string, port int32, mounts []v1alpha4.Mount, portMappings []v1alpha4.PortMapping) (node *types.Node, err error)
-	CreateWorkerNode(name, image, clusterLabel string, mounts []v1alpha4.Mount, portMappings []v1alpha4.PortMapping) (node *types.Node, err error)
+	CreateControlPlaneNode(name, image, clusterLabel, listenAddress string, port int32, mounts []v1alpha4.Mount, portMappings []v1alpha4.PortMapping, labels map[string]string) (node *types.Node, err error)
+	CreateWorkerNode(name, image, clusterLabel string, mounts []v1alpha4.Mount, portMappings []v1alpha4.PortMapping, labels map[string]string) (node *types.Node, err error)
 }
 
 // Machine implement a service for managing the docker containers hosting a kubernetes nodes.
@@ -54,13 +54,14 @@ type Machine struct {
 	cluster   string
 	machine   string
 	image     string
+	labels    map[string]string
 	container *types.Node
 
 	nodeCreator nodeCreator
 }
 
 // NewMachine returns a new Machine service for the given Cluster/DockerCluster pair.
-func NewMachine(cluster, machine, image string, logger logr.Logger) (*Machine, error) {
+func NewMachine(cluster, machine, image string, labels map[string]string, logger logr.Logger) (*Machine, error) {
 	if cluster == "" {
 		return nil, errors.New("cluster is required when creating a docker.Machine")
 	}
@@ -71,10 +72,15 @@ func NewMachine(cluster, machine, image string, logger logr.Logger) (*Machine, e
 		return nil, errors.New("logger is required when creating a docker.Machine")
 	}
 
-	container, err := getContainer(
+	filters := []string{
 		withLabel(clusterLabel(cluster)),
 		withName(machineContainerName(cluster, machine)),
-	)
+	}
+	for key, val := range labels {
+		filters = append(filters, withLabel(toLabel(key, val)))
+	}
+
+	container, err := getContainer(filters...)
 	if err != nil {
 		return nil, err
 	}
@@ -84,14 +90,74 @@ func NewMachine(cluster, machine, image string, logger logr.Logger) (*Machine, e
 		machine:     machine,
 		image:       image,
 		container:   container,
+		labels:      labels,
 		log:         logger,
 		nodeCreator: &Manager{},
 	}, nil
 }
 
+func ListMachinesByCluster(cluster string, labels map[string]string, logger logr.Logger) ([]*Machine, error) {
+	if cluster == "" {
+		return nil, errors.New("cluster is required when listing machines in the cluster")
+	}
+
+	if logger == nil {
+		return nil, errors.New("logger is required when listing machines in the cluster")
+	}
+
+	filters := []string{
+		withLabel(clusterLabel(cluster)),
+	}
+	for key, val := range labels {
+		filters = append(filters, withLabel(toLabel(key, val)))
+	}
+
+	containers, err := listContainers(filters...)
+	if err != nil {
+		return nil, err
+	}
+
+	machines := make([]*Machine, len(containers))
+	for i, container := range containers {
+		machines[i] = &Machine{
+			cluster:     cluster,
+			machine:     machineFromContainerName(cluster, container.Name),
+			image:       container.Image,
+			labels:      labels,
+			container:   container,
+			log:         logger,
+			nodeCreator: &Manager{},
+		}
+	}
+
+	return machines, nil
+}
+
+// IsControlPlane returns true if the container for this machine is a control plane node
+func (m *Machine) IsControlPlane() bool {
+	if !m.Exists() {
+		return false
+	}
+	return m.container.ClusterRole == constants.ControlPlaneNodeRoleValue
+}
+
+// ImageVersion returns the version of the image used or nil if not specified
+func (m *Machine) ImageVersion() string {
+	if m.image == "" {
+		return defaultImageTag
+	}
+
+	return m.image[strings.LastIndex(m.image, ":")+1 : len(m.image)]
+}
+
 // Exists returns true if the container for this machine exists.
 func (m *Machine) Exists() bool {
 	return m.container != nil
+}
+
+// Name returns the name of the machine
+func (m *Machine) Name() string {
+	return m.machine
 }
 
 // ContainerName return the name of the container for this machine
@@ -135,6 +201,7 @@ func (m *Machine) Create(ctx context.Context, role string, version *string, moun
 				0,
 				kindMounts(mounts),
 				nil,
+				m.labels,
 			)
 			if err != nil {
 				return errors.WithStack(err)
@@ -147,6 +214,7 @@ func (m *Machine) Create(ctx context.Context, role string, version *string, moun
 				clusterLabel(m.cluster),
 				kindMounts(mounts),
 				nil,
+				m.labels,
 			)
 			if err != nil {
 				return errors.WithStack(err)
@@ -229,22 +297,23 @@ func (m *Machine) ExecBootstrap(ctx context.Context, data string) error {
 
 	commands, err := cloudinit.Commands(cloudConfig)
 	if err != nil {
-		m.log.Info("cloud config failed to parse", "cloud-config", string(cloudConfig))
+		m.log.Info("cloud config failed to parse", "bootstrap data", data)
 		return errors.Wrap(err, "failed to join a control plane node with kubeadm")
 	}
 
-	m.log.Info("Running machine bootstrap scripts")
-	var out bytes.Buffer
+	var outErr bytes.Buffer
+	var outStd bytes.Buffer
 	for _, command := range commands {
 		cmd := m.container.Commander.Command(command.Cmd, command.Args...)
-		cmd.SetStderr(&out)
+		cmd.SetStderr(&outErr)
+		cmd.SetStdout(&outStd)
 		if command.Stdin != "" {
 			cmd.SetStdin(strings.NewReader(command.Stdin))
 		}
 		err := cmd.Run(ctx)
 		if err != nil {
-			m.log.Info("Failed running command", "command", command, "stderr", out.String())
-			return errors.Wrap(err, "failed to run cloud conifg")
+			m.log.Info("Failed running command", "command", command, "stdout", outStd.String(), "stderr", outErr.String(), "bootstrap data", data)
+			return errors.Wrap(errors.WithStack(err), "failed to run cloud config")
 		}
 	}
 

@@ -19,7 +19,6 @@ package e2e
 import (
 	"context"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"strings"
@@ -27,6 +26,7 @@ import (
 
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
+	controlplanev1 "sigs.k8s.io/cluster-api/controlplane/kubeadm/api/v1alpha3"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/labels"
@@ -76,6 +76,7 @@ func KCPAdoptionSpec(ctx context.Context, inputGetter func() KCPAdoptionSpecInpu
 		Expect(input.ClusterctlConfigPath).To(BeAnExistingFile(), "Invalid argument. input.ClusterctlConfigPath must be an existing file when calling %s spec", specName)
 		Expect(input.BootstrapClusterProxy).ToNot(BeNil(), "Invalid argument. input.BootstrapClusterProxy can't be nil when calling %s spec", specName)
 		Expect(os.MkdirAll(input.ArtifactFolder, 0755)).To(Succeed(), "Invalid argument. input.ArtifactFolder can't be created for %s spec", specName)
+		Expect(input.E2EConfig.Variables).To(HaveKey(KubernetesVersion))
 
 		// Setup a Namespace where to host objects for this spec and create a watcher for the namespace events.
 		namespace, cancelWatches = setupSpecNamespace(ctx, specName, input.BootstrapClusterProxy, input.ArtifactFolder)
@@ -84,12 +85,9 @@ func KCPAdoptionSpec(ctx context.Context, inputGetter func() KCPAdoptionSpecInpu
 	It("Should adopt up-to-date control plane Machines without modification", func() {
 
 		By("Creating a workload cluster")
-		Expect(input.E2EConfig.Variables).To(HaveKey(KubernetesVersion))
-		Expect(input.E2EConfig.Variables).To(HaveKey(CNIPath))
 
-		clusterName := fmt.Sprintf("cluster-%s", util.RandomString(6))
+		clusterName := fmt.Sprintf("%s-%s", specName, util.RandomString(6))
 		client := input.BootstrapClusterProxy.GetClient()
-		CNIManifestPath := input.E2EConfig.GetVariable(CNIPath)
 		WaitForClusterIntervals := input.E2EConfig.GetIntervals(specName, "wait-cluster")
 		WaitForControlPlaneIntervals := input.E2EConfig.GetIntervals(specName, "wait-control-plane")
 
@@ -113,7 +111,7 @@ func KCPAdoptionSpec(ctx context.Context, inputGetter func() KCPAdoptionSpecInpu
 		Expect(workloadClusterTemplate).ToNot(BeNil(), "Failed to get the cluster template")
 
 		By("Applying the cluster template yaml to the cluster with the 'initial' selector")
-		Expect(input.BootstrapClusterProxy.ApplyWithArgs(ctx, workloadClusterTemplate, "--selector", "initial")).ShouldNot(HaveOccurred())
+		Expect(input.BootstrapClusterProxy.ApplyWithArgs(ctx, workloadClusterTemplate, "--selector", "kcp-adoption.step1")).ShouldNot(HaveOccurred())
 
 		cluster = framework.DiscoveryAndWaitForCluster(ctx, framework.DiscoveryAndWaitForClusterInput{
 			Getter:    client,
@@ -126,14 +124,7 @@ func KCPAdoptionSpec(ctx context.Context, inputGetter func() KCPAdoptionSpecInpu
 			Cluster:   cluster,
 		}, WaitForControlPlaneIntervals...)
 
-		By("Installing a CNI plugin to the workload cluster")
 		workloadCluster := input.BootstrapClusterProxy.GetWorkloadCluster(context.TODO(), cluster.Namespace, cluster.Name)
-
-		cniYaml, err := ioutil.ReadFile(CNIManifestPath)
-		Expect(err).ShouldNot(HaveOccurred())
-
-		Expect(workloadCluster.Apply(context.TODO(), cniYaml)).ShouldNot(HaveOccurred())
-
 		framework.WaitForClusterMachinesReady(ctx, framework.WaitForClusterMachinesReadyInput{
 			GetLister:  input.BootstrapClusterProxy.GetClient(),
 			NodeGetter: workloadCluster.GetClient(),
@@ -141,21 +132,24 @@ func KCPAdoptionSpec(ctx context.Context, inputGetter func() KCPAdoptionSpecInpu
 		}, WaitForControlPlaneIntervals...)
 
 		By("Applying the cluster template yaml to the cluster with the 'kcp' selector")
-		Expect(input.BootstrapClusterProxy.ApplyWithArgs(ctx, workloadClusterTemplate, "--selector", "kcp")).ShouldNot(HaveOccurred())
+		Expect(input.BootstrapClusterProxy.ApplyWithArgs(ctx, workloadClusterTemplate, "--selector", "kcp-adoption.step2")).ShouldNot(HaveOccurred())
 
-		controlPlane := framework.GetKubeadmControlPlaneByCluster(ctx, framework.GetKubeadmControlPlaneByClusterInput{
-			Lister:      client,
-			ClusterName: clusterName,
-			Namespace:   namespace.Name,
-		})
-		Expect(controlPlane).ToNot(BeNil())
+		var controlPlane *controlplanev1.KubeadmControlPlane
+		Eventually(func() *controlplanev1.KubeadmControlPlane {
+			controlPlane = framework.GetKubeadmControlPlaneByCluster(ctx, framework.GetKubeadmControlPlaneByClusterInput{
+				Lister:      client,
+				ClusterName: clusterName,
+				Namespace:   namespace.Name,
+			})
+			return controlPlane
+		}, "5s", "100ms").ShouldNot(BeNil())
 
 		framework.WaitForControlPlaneToBeUpToDate(ctx, framework.WaitForControlPlaneToBeUpToDateInput{
 			Getter:       client,
 			ControlPlane: controlPlane,
 		})
 
-		By("taking stable ownership of the Machines")
+		By("Taking stable ownership of the Machines")
 		must := func(r *labels.Requirement, err error) labels.Requirement {
 			if err != nil {
 				panic(err)
@@ -194,7 +188,7 @@ func KCPAdoptionSpec(ctx context.Context, inputGetter func() KCPAdoptionSpecInpu
 				clusterv1.ClusterLabelName: clusterName,
 			})).To(Succeed())
 
-		By("taking ownership of the cluster's PKI material")
+		By("Taking ownership of the cluster's PKI material")
 		secrets := corev1.SecretList{}
 		Expect(client.List(ctx, &secrets, ctrlclient.InNamespace(namespace.Name), ctrlclient.MatchingLabels{
 			clusterv1.ClusterLabelName: cluster.Name,

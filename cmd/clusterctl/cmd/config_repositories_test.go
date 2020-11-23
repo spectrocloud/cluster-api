@@ -44,6 +44,7 @@ func Test_runGetRepositories(t *testing.T) {
 			g.Expect(runGetRepositories(path, buf)).To(Succeed())
 			out, err := ioutil.ReadAll(buf)
 			g.Expect(err).ToNot(HaveOccurred())
+
 			if val == RepositoriesOutputText {
 				g.Expect(string(out)).To(Equal(expectedOutputText))
 			} else if val == RepositoriesOutputYaml {
@@ -101,16 +102,21 @@ providers:
 var expectedOutputText = `NAME                TYPE                     URL                                                                                          FILE
 cluster-api         CoreProvider             https://github.com/myorg/myforkofclusterapi/releases/latest/                                 core_components.yaml
 another-provider    BootstrapProvider        ./                                                                                           bootstrap-components.yaml
+aws-eks             BootstrapProvider        https://github.com/kubernetes-sigs/cluster-api-provider-aws/releases/latest/                 eks-bootstrap-components.yaml
 kubeadm             BootstrapProvider        https://github.com/kubernetes-sigs/cluster-api/releases/latest/                              bootstrap-components.yaml
 talos               BootstrapProvider        https://github.com/talos-systems/cluster-api-bootstrap-provider-talos/releases/latest/       bootstrap-components.yaml
+aws-eks             ControlPlaneProvider     https://github.com/kubernetes-sigs/cluster-api-provider-aws/releases/latest/                 eks-controlplane-components.yaml
 kubeadm             ControlPlaneProvider     https://github.com/kubernetes-sigs/cluster-api/releases/latest/                              control-plane-components.yaml
 talos               ControlPlaneProvider     https://github.com/talos-systems/cluster-api-control-plane-provider-talos/releases/latest/   control-plane-components.yaml
 aws                 InfrastructureProvider                                                                                                my-aws-infrastructure-components.yaml
 azure               InfrastructureProvider   https://github.com/kubernetes-sigs/cluster-api-provider-azure/releases/latest/               infrastructure-components.yaml
+digitalocean        InfrastructureProvider   https://github.com/kubernetes-sigs/cluster-api-provider-digitalocean/releases/latest/        infrastructure-components.yaml
+docker              InfrastructureProvider   https://github.com/kubernetes-sigs/cluster-api/releases/latest/                              infrastructure-components-development.yaml
 metal3              InfrastructureProvider   https://github.com/metal3-io/cluster-api-provider-metal3/releases/latest/                    infrastructure-components.yaml
 my-infra-provider   InfrastructureProvider   /home/.cluster-api/overrides/infrastructure-docker/latest/                                   infrastructure-components.yaml
 openstack           InfrastructureProvider   https://github.com/kubernetes-sigs/cluster-api-provider-openstack/releases/latest/           infrastructure-components.yaml
 packet              InfrastructureProvider   https://github.com/kubernetes-sigs/cluster-api-provider-packet/releases/latest/              infrastructure-components.yaml
+sidero              InfrastructureProvider   https://github.com/talos-systems/sidero/releases/latest/                                     infrastructure-components.yaml
 vsphere             InfrastructureProvider   https://github.com/kubernetes-sigs/cluster-api-provider-vsphere/releases/latest/             infrastructure-components.yaml
 `
 
@@ -122,6 +128,10 @@ var expectedOutputYaml = `- File: core_components.yaml
   Name: another-provider
   ProviderType: BootstrapProvider
   URL: ./
+- File: eks-bootstrap-components.yaml
+  Name: aws-eks
+  ProviderType: BootstrapProvider
+  URL: https://github.com/kubernetes-sigs/cluster-api-provider-aws/releases/latest/
 - File: bootstrap-components.yaml
   Name: kubeadm
   ProviderType: BootstrapProvider
@@ -130,6 +140,10 @@ var expectedOutputYaml = `- File: core_components.yaml
   Name: talos
   ProviderType: BootstrapProvider
   URL: https://github.com/talos-systems/cluster-api-bootstrap-provider-talos/releases/latest/
+- File: eks-controlplane-components.yaml
+  Name: aws-eks
+  ProviderType: ControlPlaneProvider
+  URL: https://github.com/kubernetes-sigs/cluster-api-provider-aws/releases/latest/
 - File: control-plane-components.yaml
   Name: kubeadm
   ProviderType: ControlPlaneProvider
@@ -147,6 +161,14 @@ var expectedOutputYaml = `- File: core_components.yaml
   ProviderType: InfrastructureProvider
   URL: https://github.com/kubernetes-sigs/cluster-api-provider-azure/releases/latest/
 - File: infrastructure-components.yaml
+  Name: digitalocean
+  ProviderType: InfrastructureProvider
+  URL: https://github.com/kubernetes-sigs/cluster-api-provider-digitalocean/releases/latest/
+- File: infrastructure-components-development.yaml
+  Name: docker
+  ProviderType: InfrastructureProvider
+  URL: https://github.com/kubernetes-sigs/cluster-api/releases/latest/
+- File: infrastructure-components.yaml
   Name: metal3
   ProviderType: InfrastructureProvider
   URL: https://github.com/metal3-io/cluster-api-provider-metal3/releases/latest/
@@ -162,6 +184,10 @@ var expectedOutputYaml = `- File: core_components.yaml
   Name: packet
   ProviderType: InfrastructureProvider
   URL: https://github.com/kubernetes-sigs/cluster-api-provider-packet/releases/latest/
+- File: infrastructure-components.yaml
+  Name: sidero
+  ProviderType: InfrastructureProvider
+  URL: https://github.com/talos-systems/sidero/releases/latest/
 - File: infrastructure-components.yaml
   Name: vsphere
   ProviderType: InfrastructureProvider

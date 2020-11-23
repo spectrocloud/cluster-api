@@ -27,8 +27,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/utils/pointer"
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha3"
-	controlplanev1 "sigs.k8s.io/cluster-api/controlplane/kubeadm/api/v1alpha3"
+
 	"sigs.k8s.io/cluster-api/test/framework"
 	"sigs.k8s.io/cluster-api/test/framework/clusterctl"
 	"sigs.k8s.io/cluster-api/util"
@@ -46,12 +45,11 @@ type KCPUpgradeSpecInput struct {
 // KCPUpgradeSpec implements a test that verifies KCP to properly upgrade a control plane with 3 machines.
 func KCPUpgradeSpec(ctx context.Context, inputGetter func() KCPUpgradeSpecInput) {
 	var (
-		specName      = "kcp-upgrade"
-		input         KCPUpgradeSpecInput
-		namespace     *corev1.Namespace
-		cancelWatches context.CancelFunc
-		cluster       *clusterv1.Cluster
-		controlPlane  *controlplanev1.KubeadmControlPlane
+		specName         = "kcp-upgrade"
+		input            KCPUpgradeSpecInput
+		namespace        *corev1.Namespace
+		cancelWatches    context.CancelFunc
+		clusterResources *clusterctl.ApplyClusterTemplateAndWaitResult
 	)
 
 	BeforeEach(func() {
@@ -62,7 +60,6 @@ func KCPUpgradeSpec(ctx context.Context, inputGetter func() KCPUpgradeSpecInput)
 		Expect(input.BootstrapClusterProxy).ToNot(BeNil(), "Invalid argument. input.BootstrapClusterProxy can't be nil when calling %s spec", specName)
 		Expect(os.MkdirAll(input.ArtifactFolder, 0755)).To(Succeed(), "Invalid argument. input.ArtifactFolder can't be created for %s spec", specName)
 		Expect(input.E2EConfig.Variables).To(HaveKey(KubernetesVersionUpgradeTo))
-		Expect(input.E2EConfig.Variables).To(HaveKey(CNIPath))
 		Expect(input.E2EConfig.Variables).To(HaveKey(KubernetesVersionUpgradeFrom))
 		Expect(input.E2EConfig.Variables).To(HaveKey(EtcdVersionUpgradeTo))
 		Expect(input.E2EConfig.Variables).To(HaveKey(CoreDNSVersionUpgradeTo))
@@ -74,7 +71,7 @@ func KCPUpgradeSpec(ctx context.Context, inputGetter func() KCPUpgradeSpecInput)
 	It("Should successfully upgrade Kubernetes, DNS, kube-proxy, and etcd in a single control plane cluster", func() {
 
 		By("Creating a workload cluster")
-		cluster, controlPlane, _ = clusterctl.ApplyClusterTemplateAndWait(ctx, clusterctl.ApplyClusterTemplateAndWaitInput{
+		clusterResources = clusterctl.ApplyClusterTemplateAndWait(ctx, clusterctl.ApplyClusterTemplateAndWaitInput{
 			ClusterProxy: input.BootstrapClusterProxy,
 			ConfigCluster: clusterctl.ConfigClusterInput{
 				LogFolder:                filepath.Join(input.ArtifactFolder, "clusters", input.BootstrapClusterProxy.GetName()),
@@ -83,12 +80,11 @@ func KCPUpgradeSpec(ctx context.Context, inputGetter func() KCPUpgradeSpecInput)
 				InfrastructureProvider:   clusterctl.DefaultInfrastructureProvider,
 				Flavor:                   clusterctl.DefaultFlavor,
 				Namespace:                namespace.Name,
-				ClusterName:              fmt.Sprintf("cluster-%s", util.RandomString(6)),
+				ClusterName:              fmt.Sprintf("%s-%s", specName, util.RandomString(6)),
 				KubernetesVersion:        input.E2EConfig.GetVariable(KubernetesVersionUpgradeFrom),
 				ControlPlaneMachineCount: pointer.Int64Ptr(1),
 				WorkerMachineCount:       pointer.Int64Ptr(1),
 			},
-			CNIManifestPath:              input.E2EConfig.GetVariable(CNIPath),
 			WaitForClusterIntervals:      input.E2EConfig.GetIntervals(specName, "wait-cluster"),
 			WaitForControlPlaneIntervals: input.E2EConfig.GetIntervals(specName, "wait-control-plane"),
 			WaitForMachineDeployments:    input.E2EConfig.GetIntervals(specName, "wait-worker-nodes"),
@@ -97,8 +93,8 @@ func KCPUpgradeSpec(ctx context.Context, inputGetter func() KCPUpgradeSpecInput)
 		By("Upgrading Kubernetes, DNS, kube-proxy, and etcd versions")
 		framework.UpgradeControlPlaneAndWaitForUpgrade(ctx, framework.UpgradeControlPlaneAndWaitForUpgradeInput{
 			ClusterProxy:                input.BootstrapClusterProxy,
-			Cluster:                     cluster,
-			ControlPlane:                controlPlane,
+			Cluster:                     clusterResources.Cluster,
+			ControlPlane:                clusterResources.ControlPlane,
 			EtcdImageTag:                input.E2EConfig.GetVariable(EtcdVersionUpgradeTo),
 			DNSImageTag:                 input.E2EConfig.GetVariable(CoreDNSVersionUpgradeTo),
 			KubernetesUpgradeVersion:    input.E2EConfig.GetVariable(KubernetesVersionUpgradeTo),
@@ -114,7 +110,7 @@ func KCPUpgradeSpec(ctx context.Context, inputGetter func() KCPUpgradeSpecInput)
 
 		By("Creating a workload cluster")
 
-		cluster, controlPlane, _ = clusterctl.ApplyClusterTemplateAndWait(ctx, clusterctl.ApplyClusterTemplateAndWaitInput{
+		clusterResources = clusterctl.ApplyClusterTemplateAndWait(ctx, clusterctl.ApplyClusterTemplateAndWaitInput{
 			ClusterProxy: input.BootstrapClusterProxy,
 			ConfigCluster: clusterctl.ConfigClusterInput{
 				LogFolder:                filepath.Join(input.ArtifactFolder, "clusters", input.BootstrapClusterProxy.GetName()),
@@ -123,12 +119,11 @@ func KCPUpgradeSpec(ctx context.Context, inputGetter func() KCPUpgradeSpecInput)
 				InfrastructureProvider:   clusterctl.DefaultInfrastructureProvider,
 				Flavor:                   clusterctl.DefaultFlavor,
 				Namespace:                namespace.Name,
-				ClusterName:              fmt.Sprintf("cluster-%s", util.RandomString(6)),
+				ClusterName:              fmt.Sprintf("%s-%s", specName, util.RandomString(6)),
 				KubernetesVersion:        input.E2EConfig.GetVariable(KubernetesVersionUpgradeFrom),
 				ControlPlaneMachineCount: pointer.Int64Ptr(3),
 				WorkerMachineCount:       pointer.Int64Ptr(1),
 			},
-			CNIManifestPath:              input.E2EConfig.GetVariable(CNIPath),
 			WaitForClusterIntervals:      input.E2EConfig.GetIntervals(specName, "wait-cluster"),
 			WaitForControlPlaneIntervals: input.E2EConfig.GetIntervals(specName, "wait-control-plane"),
 			WaitForMachineDeployments:    input.E2EConfig.GetIntervals(specName, "wait-worker-nodes"),
@@ -137,8 +132,8 @@ func KCPUpgradeSpec(ctx context.Context, inputGetter func() KCPUpgradeSpecInput)
 		By("Upgrading Kubernetes, DNS, kube-proxy, and etcd versions")
 		framework.UpgradeControlPlaneAndWaitForUpgrade(ctx, framework.UpgradeControlPlaneAndWaitForUpgradeInput{
 			ClusterProxy:                input.BootstrapClusterProxy,
-			Cluster:                     cluster,
-			ControlPlane:                controlPlane,
+			Cluster:                     clusterResources.Cluster,
+			ControlPlane:                clusterResources.ControlPlane,
 			EtcdImageTag:                input.E2EConfig.GetVariable(EtcdVersionUpgradeTo),
 			DNSImageTag:                 input.E2EConfig.GetVariable(CoreDNSVersionUpgradeTo),
 			KubernetesUpgradeVersion:    input.E2EConfig.GetVariable(KubernetesVersionUpgradeTo),
@@ -152,6 +147,6 @@ func KCPUpgradeSpec(ctx context.Context, inputGetter func() KCPUpgradeSpecInput)
 
 	AfterEach(func() {
 		// Dumps all the resources in the spec namespace, then cleanups the cluster object and the spec namespace itself.
-		dumpSpecResourcesAndCleanup(ctx, specName, input.BootstrapClusterProxy, input.ArtifactFolder, namespace, cancelWatches, cluster, input.E2EConfig.GetIntervals, input.SkipCleanup)
+		dumpSpecResourcesAndCleanup(ctx, specName, input.BootstrapClusterProxy, input.ArtifactFolder, namespace, cancelWatches, clusterResources.Cluster, input.E2EConfig.GetIntervals, input.SkipCleanup)
 	})
 }

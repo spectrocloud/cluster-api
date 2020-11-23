@@ -7,6 +7,7 @@ The Control Plane controller's main responsibilities are:
 * Managing a set of machines that represent a Kubernetes control plane.
 * Provide information about the state of the control plane to downstream
   consumers.
+* Create/manage a secret with the kubeconfig file for accessing the workload cluster.
 
 A reference implementation is managed within the core Cluster API project as the
 Kubeadm control plane controller (`KubeadmControlPlane`). In this document,
@@ -173,10 +174,13 @@ following fields defined:
 
 #### Optional `status` fields
 
-The `status` object **may** define several fields that do not affect functionality if missing:
+The `status` object **may** define several fields:
 
 * `failureReason` - is a string that explains why an error has occurred, if possible.
 * `failureMessage` - is a string that holds the message contained by the error.
+* `externalManagedControlPlane` - is a bool that should be set to true if the Node objects do not
+  exist in the cluster. For example, managed control plane providers for AKS, EKS, GKE, etc, should
+  set this to `true`. Leaving the field undefined is equivalent to setting the value to `false`.
 
 ## Example usage
 

@@ -26,15 +26,13 @@ import (
 	"github.com/pkg/errors"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	kerrors "k8s.io/apimachinery/pkg/util/errors"
 	"k8s.io/client-go/kubernetes/scheme"
-	"sigs.k8s.io/controller-runtime/pkg/client"
-	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
-
 	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha3"
 	"sigs.k8s.io/cluster-api/controllers/remote"
 	"sigs.k8s.io/cluster-api/controlplane/kubeadm/internal/machinefilters"
 	"sigs.k8s.io/cluster-api/util/secret"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 // ManagementCluster defines all behaviors necessary for something to function as a management cluster.
@@ -42,8 +40,6 @@ type ManagementCluster interface {
 	ctrlclient.Reader
 
 	GetMachinesForCluster(ctx context.Context, cluster client.ObjectKey, filters ...machinefilters.Func) (FilterableMachineCollection, error)
-	TargetClusterEtcdIsHealthy(ctx context.Context, clusterKey client.ObjectKey) error
-	TargetClusterControlPlaneIsHealthy(ctx context.Context, clusterKey client.ObjectKey) error
 	GetWorkloadCluster(ctx context.Context, clusterKey client.ObjectKey) (WorkloadCluster, error)
 }
 
@@ -102,27 +98,30 @@ func (m *Management) GetWorkloadCluster(ctx context.Context, clusterKey client.O
 		return nil, &RemoteClusterConnectionError{Name: clusterKey.String(), Err: err}
 	}
 
-	etcdCASecret := &corev1.Secret{}
-	etcdCAObjectKey := ctrlclient.ObjectKey{
-		Namespace: clusterKey.Namespace,
-		Name:      fmt.Sprintf("%s-etcd", clusterKey.Name),
-	}
-	if err := m.Client.Get(ctx, etcdCAObjectKey, etcdCASecret); err != nil {
-		return nil, errors.Wrapf(err, "failed to get secret; etcd CA bundle %s/%s", etcdCAObjectKey.Namespace, etcdCAObjectKey.Name)
-	}
-	crtData, ok := etcdCASecret.Data[secret.TLSCrtDataName]
-	if !ok {
-		return nil, errors.Errorf("etcd tls crt does not exist for cluster %s/%s", clusterKey.Namespace, clusterKey.Name)
-	}
-	keyData, ok := etcdCASecret.Data[secret.TLSKeyDataName]
-	if !ok {
-		return nil, errors.Errorf("etcd tls key does not exist for cluster %s/%s", clusterKey.Namespace, clusterKey.Name)
-	}
-
-	clientCert, err := generateClientCert(crtData, keyData)
+	// Retrieves the etcd CA key Pair
+	crtData, keyData, err := m.getEtcdCAKeyPair(ctx, clusterKey)
 	if err != nil {
 		return nil, err
 	}
+
+	// If the CA key is defined, the cluster is using a managed etcd, and so we can generate a new
+	// etcd client certificate for the controllers.
+	// Otherwise the cluster is using an external etcd; in this case the only option to connect to etcd is to re-use
+	// the apiserver-etcd-client certificate.
+	// TODO: consider if we can detect if we are using external etcd in a more explicit way (e.g. looking at the config instead of deriving from the existing certificates)
+	var clientCert tls.Certificate
+	if keyData != nil {
+		clientCert, err = generateClientCert(crtData, keyData)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		clientCert, err = m.getApiServerEtcdClientCert(ctx, clusterKey)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	caPool := x509.NewCertPool()
 	caPool.AppendCertsFromPEM(crtData)
 	cfg := &tls.Config{
@@ -140,63 +139,39 @@ func (m *Management) GetWorkloadCluster(ctx context.Context, clusterKey client.O
 	}, nil
 }
 
-type healthCheck func(context.Context) (HealthCheckResult, error)
-
-// HealthCheck will run a generic health check function and report any errors discovered.
-// In addition to the health check, it also ensures there is a 1;1 match between nodes and machines.
-func (m *Management) healthCheck(ctx context.Context, check healthCheck, clusterKey client.ObjectKey) error {
-	var errorList []error
-	nodeChecks, err := check(ctx)
-	if err != nil {
-		errorList = append(errorList, err)
+func (m *Management) getEtcdCAKeyPair(ctx context.Context, clusterKey ctrlclient.ObjectKey) ([]byte, []byte, error) {
+	etcdCASecret := &corev1.Secret{}
+	etcdCAObjectKey := ctrlclient.ObjectKey{
+		Namespace: clusterKey.Namespace,
+		Name:      fmt.Sprintf("%s-etcd", clusterKey.Name),
 	}
-	for nodeName, err := range nodeChecks {
-		if err != nil {
-			errorList = append(errorList, fmt.Errorf("node %q: %v", nodeName, err))
-		}
+	if err := m.Client.Get(ctx, etcdCAObjectKey, etcdCASecret); err != nil {
+		return nil, nil, errors.Wrapf(err, "failed to get secret; etcd CA bundle %s/%s", etcdCAObjectKey.Namespace, etcdCAObjectKey.Name)
 	}
-	if len(errorList) != 0 {
-		return kerrors.NewAggregate(errorList)
+	crtData, ok := etcdCASecret.Data[secret.TLSCrtDataName]
+	if !ok {
+		return nil, nil, errors.Errorf("etcd tls crt does not exist for cluster %s/%s", clusterKey.Namespace, clusterKey.Name)
 	}
-
-	// Make sure Cluster API is aware of all the nodes.
-	machines, err := m.GetMachinesForCluster(ctx, clusterKey, machinefilters.ControlPlaneMachines(clusterKey.Name))
-	if err != nil {
-		return err
-	}
-
-	// This check ensures there is a 1 to 1 correspondence of nodes and machines.
-	// If a machine was not checked this is considered an error.
-	for _, machine := range machines {
-		if machine.Status.NodeRef == nil {
-			return errors.Errorf("control plane machine %s/%s has no status.nodeRef", machine.Namespace, machine.Name)
-		}
-		if _, ok := nodeChecks[machine.Status.NodeRef.Name]; !ok {
-			return errors.Errorf("machine's (%s/%s) node (%s) was not checked", machine.Namespace, machine.Name, machine.Status.NodeRef.Name)
-		}
-	}
-	if len(nodeChecks) != len(machines) {
-		return errors.Errorf("number of nodes and machines in namespace %s did not match: %d nodes %d machines", clusterKey.Namespace, len(nodeChecks), len(machines))
-	}
-	return nil
+	keyData := etcdCASecret.Data[secret.TLSKeyDataName]
+	return crtData, keyData, nil
 }
 
-// TargetClusterControlPlaneIsHealthy checks every node for control plane health.
-func (m *Management) TargetClusterControlPlaneIsHealthy(ctx context.Context, clusterKey client.ObjectKey) error {
-	// TODO: add checks for expected taints/labels
-	cluster, err := m.GetWorkloadCluster(ctx, clusterKey)
-	if err != nil {
-		return err
+func (m *Management) getApiServerEtcdClientCert(ctx context.Context, clusterKey ctrlclient.ObjectKey) (tls.Certificate, error) {
+	apiServerEtcdClientCertificateSecret := &corev1.Secret{}
+	apiServerEtcdClientCertificateObjectKey := ctrlclient.ObjectKey{
+		Namespace: clusterKey.Namespace,
+		Name:      fmt.Sprintf("%s-apiserver-etcd-client", clusterKey.Name),
 	}
-	return m.healthCheck(ctx, cluster.ControlPlaneIsHealthy, clusterKey)
-}
-
-// TargetClusterEtcdIsHealthy runs a series of checks over a target cluster's etcd cluster.
-// In addition, it verifies that there are the same number of etcd members as control plane Machines.
-func (m *Management) TargetClusterEtcdIsHealthy(ctx context.Context, clusterKey client.ObjectKey) error {
-	cluster, err := m.GetWorkloadCluster(ctx, clusterKey)
-	if err != nil {
-		return err
+	if err := m.Client.Get(ctx, apiServerEtcdClientCertificateObjectKey, apiServerEtcdClientCertificateSecret); err != nil {
+		return tls.Certificate{}, errors.Wrapf(err, "failed to get secret; etcd apiserver-etcd-client %s/%s", apiServerEtcdClientCertificateObjectKey.Namespace, apiServerEtcdClientCertificateObjectKey.Name)
 	}
-	return m.healthCheck(ctx, cluster.EtcdIsHealthy, clusterKey)
+	crtData, ok := apiServerEtcdClientCertificateSecret.Data[secret.TLSCrtDataName]
+	if !ok {
+		return tls.Certificate{}, errors.Errorf("etcd tls crt does not exist for cluster %s/%s", clusterKey.Namespace, clusterKey.Name)
+	}
+	keyData, ok := apiServerEtcdClientCertificateSecret.Data[secret.TLSKeyDataName]
+	if !ok {
+		return tls.Certificate{}, errors.Errorf("etcd tls key does not exist for cluster %s/%s", clusterKey.Namespace, clusterKey.Name)
+	}
+	return tls.X509KeyPair(crtData, keyData)
 }

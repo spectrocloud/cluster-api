@@ -15,7 +15,7 @@
 # limitations under the License.
 
 # Build the manager binary
-FROM golang:1.13.12 as builder
+FROM golang:1.13.15 as builder
 WORKDIR /workspace
 
 # Run this with docker build --build_arg goproxy=$(go env GOPROXY) to override the goproxy
@@ -41,11 +41,12 @@ RUN --mount=type=cache,target=/root/.cache/go-build \
 # Build
 ARG package=.
 ARG ARCH
+ARG ldflags
 
 # Do not force rebuild of up-to-date packages (do not use -a) and use the compiler cache folder
 RUN --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 GOOS=linux GOARCH=${ARCH} \
-    go build -ldflags '-extldflags "-static"' \
+    go build -ldflags "${ldflags} -extldflags '-static'" \
     -o manager ${package}
 
 # Production image

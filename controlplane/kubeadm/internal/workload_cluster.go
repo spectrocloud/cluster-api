@@ -57,8 +57,9 @@ var (
 type WorkloadCluster interface {
 	// Basic health and status checks.
 	ClusterStatus(ctx context.Context) (ClusterStatus, error)
-	ControlPlaneIsHealthy(ctx context.Context) (HealthCheckResult, error)
-	EtcdIsHealthy(ctx context.Context) (HealthCheckResult, error)
+	UpdateStaticPodConditions(ctx context.Context, controlPlane *ControlPlane)
+	UpdateEtcdConditions(ctx context.Context, controlPlane *ControlPlane)
+	EtcdMembers(ctx context.Context) ([]string, error)
 
 	// Upgrade related tasks.
 	ReconcileKubeletRBACBinding(ctx context.Context, version semver.Version) error
@@ -76,7 +77,7 @@ type WorkloadCluster interface {
 	AllowBootstrapTokensToGetNodes(ctx context.Context) error
 
 	// State recovery tasks.
-	ReconcileEtcdMembers(ctx context.Context) error
+	ReconcileEtcdMembers(ctx context.Context) ([]string, error)
 }
 
 // Workload defines operations on workload clusters.
@@ -104,54 +105,6 @@ func (w *Workload) getConfigMap(ctx context.Context, configMap ctrlclient.Object
 		return nil, errors.Wrapf(err, "error getting %s/%s configmap from target cluster", configMap.Namespace, configMap.Name)
 	}
 	return original.DeepCopy(), nil
-}
-
-// HealthCheckResult maps nodes that are checked to any errors the node has related to the check.
-type HealthCheckResult map[string]error
-
-// controlPlaneIsHealthy does a best effort check of the control plane components the kubeadm control plane cares about.
-// The return map is a map of node names as keys to error that that node encountered.
-// All nodes will exist in the map with nil errors if there were no errors for that node.
-func (w *Workload) ControlPlaneIsHealthy(ctx context.Context) (HealthCheckResult, error) {
-	controlPlaneNodes, err := w.getControlPlaneNodes(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	response := make(map[string]error)
-	for _, node := range controlPlaneNodes.Items {
-		name := node.Name
-		response[name] = nil
-
-		if err := checkNodeNoExecuteCondition(node); err != nil {
-			response[name] = err
-			continue
-		}
-
-		apiServerPodKey := ctrlclient.ObjectKey{
-			Namespace: metav1.NamespaceSystem,
-			Name:      staticPodName("kube-apiserver", name),
-		}
-		apiServerPod := corev1.Pod{}
-		if err := w.Client.Get(ctx, apiServerPodKey, &apiServerPod); err != nil {
-			response[name] = err
-			continue
-		}
-		response[name] = checkStaticPodReadyCondition(apiServerPod)
-
-		controllerManagerPodKey := ctrlclient.ObjectKey{
-			Namespace: metav1.NamespaceSystem,
-			Name:      staticPodName("kube-controller-manager", name),
-		}
-		controllerManagerPod := corev1.Pod{}
-		if err := w.Client.Get(ctx, controllerManagerPodKey, &controllerManagerPod); err != nil {
-			response[name] = err
-			continue
-		}
-		response[name] = checkStaticPodReadyCondition(controllerManagerPod)
-	}
-
-	return response, nil
 }
 
 // UpdateKubernetesVersionInKubeadmConfigMap updates the kubernetes version in the kubeadm config map.
@@ -237,19 +190,23 @@ func (w *Workload) RemoveMachineFromKubeadmConfigMap(ctx context.Context, machin
 
 // RemoveNodeFromKubeadmConfigMap removes the entry for the node from the kubeadm configmap.
 func (w *Workload) RemoveNodeFromKubeadmConfigMap(ctx context.Context, name string) error {
-	configMapKey := ctrlclient.ObjectKey{Name: kubeadmConfigKey, Namespace: metav1.NamespaceSystem}
-	kubeadmConfigMap, err := w.getConfigMap(ctx, configMapKey)
-	if err != nil {
-		return err
-	}
-	config := &kubeadmConfig{ConfigMap: kubeadmConfigMap}
-	if err := config.RemoveAPIEndpoint(name); err != nil {
-		return err
-	}
-	if err := w.Client.Update(ctx, config.ConfigMap); err != nil {
-		return errors.Wrap(err, "error updating kubeadm ConfigMap")
-	}
-	return nil
+	return util.Retry(func() (bool, error) {
+		configMapKey := ctrlclient.ObjectKey{Name: kubeadmConfigKey, Namespace: metav1.NamespaceSystem}
+		kubeadmConfigMap, err := w.getConfigMap(ctx, configMapKey)
+		if err != nil {
+			Log.Error(err, "unable to get kubeadmConfigMap")
+			return false, nil
+		}
+		config := &kubeadmConfig{ConfigMap: kubeadmConfigMap}
+		if err := config.RemoveAPIEndpoint(name); err != nil {
+			return false, err
+		}
+		if err := w.Client.Update(ctx, config.ConfigMap); err != nil {
+			Log.Error(err, "error updating kubeadm ConfigMap")
+			return false, nil
+		}
+		return true, nil
+	}, 5)
 }
 
 // ClusterStatus holds stats information about the cluster.
@@ -342,31 +299,6 @@ func newClientCert(caCert *x509.Certificate, key *rsa.PrivateKey, caKey crypto.S
 
 func staticPodName(component, nodeName string) string {
 	return fmt.Sprintf("%s-%s", component, nodeName)
-}
-
-func checkStaticPodReadyCondition(pod corev1.Pod) error {
-	found := false
-	for _, condition := range pod.Status.Conditions {
-		if condition.Type == corev1.PodReady {
-			found = true
-		}
-		if condition.Type == corev1.PodReady && condition.Status != corev1.ConditionTrue {
-			return errors.Errorf("static pod %s/%s is not ready", pod.Namespace, pod.Name)
-		}
-	}
-	if !found {
-		return errors.Errorf("pod does not have ready condition: %v", pod.Name)
-	}
-	return nil
-}
-
-func checkNodeNoExecuteCondition(node corev1.Node) error {
-	for _, taint := range node.Spec.Taints {
-		if taint.Key == corev1.TaintNodeUnreachable && taint.Effect == corev1.TaintEffectNoExecute {
-			return errors.Errorf("node has NoExecute taint: %v", node.Name)
-		}
-	}
-	return nil
 }
 
 // UpdateKubeProxyImageInfo updates kube-proxy image in the kube-proxy DaemonSet.

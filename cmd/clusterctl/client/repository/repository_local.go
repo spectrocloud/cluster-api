@@ -97,7 +97,7 @@ func (r *localRepository) GetFile(version, fileName string) ([]byte, error) {
 
 	f, err := os.Stat(absolutePath)
 	if err != nil {
-		return nil, errors.Errorf("failed to read file %q from local release %s", absolutePath, version)
+		return nil, errors.Wrapf(err, "failed to read file %q from local release %s", absolutePath, version)
 	}
 	if f.IsDir() {
 		return nil, errors.Errorf("invalid path: file %q is actually a directory %q", fileName, absolutePath)
@@ -142,10 +142,12 @@ func newLocalRepository(providerConfig config.Provider, configVariablesClient co
 	}
 
 	// gets the path part of the url and check it is an absolute path
-	// in case of windows, we should take care of removing the additional / which is required by the URI standard
-	// for windows local paths. see https://blogs.msdn.microsoft.com/ie/2006/12/06/file-uris-in-windows/ for more details
-	path := url.EscapedPath()
+	path := url.Path
 	if runtime.GOOS == "windows" {
+		// in case of windows, we should take care of removing the additional / which is required by the URI standard
+		// for windows local paths. see https://blogs.msdn.microsoft.com/ie/2006/12/06/file-uris-in-windows/ for more details.
+		// Encoded file paths are not required in Windows 10 versions <1803 and are unsupported in Windows 10 >=1803
+		// https://support.microsoft.com/en-us/help/4467268/url-encoded-unc-paths-not-url-decoded-in-windows-10-version-1803-later
 		path = strings.TrimPrefix(path, "/")
 		path = filepath.FromSlash(path)
 	}
@@ -202,20 +204,41 @@ func (r *localRepository) getLatestRelease() (string, error) {
 	if err != nil {
 		return "", errors.Wrapf(err, "failed to get local repository versions")
 	}
+
 	var latestTag string
+	var latestPrereleaseTag string
+
 	var latestReleaseVersion *version.Version
+	var latestPrereleaseVersion *version.Version
+
 	for _, v := range versions {
 		sv, err := version.ParseSemantic(v)
 		if err != nil {
 			continue
 		}
+
+		// track prereleases separately
+		if sv.PreRelease() != "" {
+			if latestPrereleaseVersion == nil || latestPrereleaseVersion.LessThan(sv) {
+				latestPrereleaseTag = v
+				latestPrereleaseVersion = sv
+			}
+			continue
+		}
+
 		if latestReleaseVersion == nil || latestReleaseVersion.LessThan(sv) {
 			latestTag = v
 			latestReleaseVersion = sv
 		}
 	}
+
+	// Fall back to returning latest prereleases if no release has been cut or bail if it's also empty
 	if latestTag == "" {
-		return "", errors.New("failed to find releases tagged with a valid semantic version number")
+		if latestPrereleaseTag == "" {
+			return "", errors.New("failed to find releases tagged with a valid semantic version number")
+		}
+
+		return latestPrereleaseTag, nil
 	}
 	return latestTag, nil
 }

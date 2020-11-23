@@ -18,9 +18,14 @@ package internal
 
 import (
 	"context"
-	"errors"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"fmt"
+	"math/big"
 	"testing"
+	"time"
 
 	. "github.com/onsi/gomega"
 
@@ -33,122 +38,11 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha3"
 	"sigs.k8s.io/cluster-api/controlplane/kubeadm/internal/machinefilters"
+	"sigs.k8s.io/cluster-api/util/certs"
+	"sigs.k8s.io/cluster-api/util/kubeconfig"
+	"sigs.k8s.io/cluster-api/util/secret"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
-
-func podReady(isReady corev1.ConditionStatus) corev1.PodCondition {
-	return corev1.PodCondition{
-		Type:   corev1.PodReady,
-		Status: isReady,
-	}
-}
-
-type checkStaticPodReadyConditionTest struct {
-	name       string
-	conditions []corev1.PodCondition
-}
-
-func TestCheckStaticPodReadyCondition(t *testing.T) {
-	table := []checkStaticPodReadyConditionTest{
-		{
-			name:       "pod is ready",
-			conditions: []corev1.PodCondition{podReady(corev1.ConditionTrue)},
-		},
-	}
-	for _, test := range table {
-		t.Run(test.name, func(t *testing.T) {
-			g := NewWithT(t)
-
-			pod := corev1.Pod{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: "test-pod",
-				},
-				Spec:   corev1.PodSpec{},
-				Status: corev1.PodStatus{Conditions: test.conditions},
-			}
-			g.Expect(checkStaticPodReadyCondition(pod)).To(Succeed())
-		})
-	}
-}
-
-func TestCheckStaticPodNotReadyCondition(t *testing.T) {
-	table := []checkStaticPodReadyConditionTest{
-		{
-			name: "no pod status",
-		},
-		{
-			name:       "not ready pod status",
-			conditions: []corev1.PodCondition{podReady(corev1.ConditionFalse)},
-		},
-	}
-	for _, test := range table {
-		t.Run(test.name, func(t *testing.T) {
-			g := NewWithT(t)
-
-			pod := corev1.Pod{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: "test-pod",
-				},
-				Spec:   corev1.PodSpec{},
-				Status: corev1.PodStatus{Conditions: test.conditions},
-			}
-			g.Expect(checkStaticPodReadyCondition(pod)).NotTo(Succeed())
-		})
-	}
-}
-
-func TestControlPlaneIsHealthy(t *testing.T) {
-	g := NewWithT(t)
-
-	readyStatus := corev1.PodStatus{
-		Conditions: []corev1.PodCondition{
-			{
-				Type:   corev1.PodReady,
-				Status: corev1.ConditionTrue,
-			},
-		},
-	}
-	workloadCluster := &Workload{
-		Client: &fakeClient{
-			list: nodeListForTestControlPlaneIsHealthy(),
-			get: map[string]interface{}{
-				"kube-system/kube-apiserver-first-control-plane":           &corev1.Pod{Status: readyStatus},
-				"kube-system/kube-apiserver-second-control-plane":          &corev1.Pod{Status: readyStatus},
-				"kube-system/kube-apiserver-third-control-plane":           &corev1.Pod{Status: readyStatus},
-				"kube-system/kube-controller-manager-first-control-plane":  &corev1.Pod{Status: readyStatus},
-				"kube-system/kube-controller-manager-second-control-plane": &corev1.Pod{Status: readyStatus},
-				"kube-system/kube-controller-manager-third-control-plane":  &corev1.Pod{Status: readyStatus},
-			},
-		},
-	}
-
-	health, err := workloadCluster.ControlPlaneIsHealthy(context.Background())
-	g.Expect(err).NotTo(HaveOccurred())
-	g.Expect(health).NotTo(HaveLen(0))
-	g.Expect(health).To(HaveLen(len(nodeListForTestControlPlaneIsHealthy().Items)))
-}
-
-func nodeNamed(name string, options ...func(n corev1.Node) corev1.Node) corev1.Node {
-	node := corev1.Node{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: name,
-		},
-	}
-	for _, opt := range options {
-		node = opt(node)
-	}
-	return node
-}
-
-func nodeListForTestControlPlaneIsHealthy() *corev1.NodeList {
-	return &corev1.NodeList{
-		Items: []corev1.Node{
-			nodeNamed("first-control-plane"),
-			nodeNamed("second-control-plane"),
-			nodeNamed("third-control-plane"),
-		},
-	}
-}
 
 func TestGetMachinesForCluster(t *testing.T) {
 	g := NewWithT(t)
@@ -176,6 +70,164 @@ func TestGetMachinesForCluster(t *testing.T) {
 	machines, err = m.GetMachinesForCluster(context.Background(), clusterKey, machinefilters.ControlPlaneMachines("my-cluster"), nameFilter)
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(machines).To(HaveLen(1))
+}
+
+func TestGetWorkloadCluster(t *testing.T) {
+	g := NewWithT(t)
+
+	ns, err := testEnv.CreateNamespace(ctx, "workload-cluster2")
+	g.Expect(err).ToNot(HaveOccurred())
+	defer func() {
+		g.Expect(testEnv.Cleanup(ctx, ns)).To(Succeed())
+	}()
+
+	// Create an etcd secret with valid certs
+	key, err := certs.NewPrivateKey()
+	g.Expect(err).ToNot(HaveOccurred())
+	cert, err := getTestCACert(key)
+	g.Expect(err).ToNot(HaveOccurred())
+	etcdSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "my-cluster-etcd",
+			Namespace: ns.Name,
+		},
+		Data: map[string][]byte{
+			secret.TLSCrtDataName: certs.EncodeCertPEM(cert),
+			secret.TLSKeyDataName: certs.EncodePrivateKeyPEM(key),
+		},
+	}
+	emptyCrtEtcdSecret := etcdSecret.DeepCopy()
+	delete(emptyCrtEtcdSecret.Data, secret.TLSCrtDataName)
+	emptyKeyEtcdSecret := etcdSecret.DeepCopy()
+	delete(emptyKeyEtcdSecret.Data, secret.TLSKeyDataName)
+	badCrtEtcdSecret := etcdSecret.DeepCopy()
+	badCrtEtcdSecret.Data[secret.TLSCrtDataName] = []byte("bad cert")
+
+	// Create kubeconfig secret
+	// Store the envtest config as the contents of the kubeconfig secret.
+	// This way we are using the envtest environment as both the
+	// management and the workload cluster.
+	testEnvKubeconfig := kubeconfig.FromEnvTestConfig(testEnv.GetConfig(), &clusterv1.Cluster{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "my-cluster",
+			Namespace: ns.Name,
+		},
+	})
+	kubeconfigSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "my-cluster-kubeconfig",
+			Namespace: ns.Name,
+		},
+		Data: map[string][]byte{
+			secret.KubeconfigDataName: testEnvKubeconfig,
+		},
+	}
+	clusterKey := client.ObjectKey{
+		Name:      "my-cluster",
+		Namespace: ns.Name,
+	}
+
+	tests := []struct {
+		name       string
+		clusterKey client.ObjectKey
+		objs       []runtime.Object
+		expectErr  bool
+	}{
+		{
+			name:       "returns a workload cluster",
+			clusterKey: clusterKey,
+			objs:       []runtime.Object{etcdSecret.DeepCopy(), kubeconfigSecret.DeepCopy()},
+			expectErr:  false,
+		},
+		{
+			name:       "returns error if cannot get rest.Config from kubeconfigSecret",
+			clusterKey: clusterKey,
+			objs:       []runtime.Object{etcdSecret.DeepCopy()},
+			expectErr:  true,
+		},
+		{
+			name:       "returns error if unable to find the etcd secret",
+			clusterKey: clusterKey,
+			objs:       []runtime.Object{kubeconfigSecret.DeepCopy()},
+			expectErr:  true,
+		},
+		{
+			name:       "returns error if unable to find the certificate in the etcd secret",
+			clusterKey: clusterKey,
+			objs:       []runtime.Object{emptyCrtEtcdSecret.DeepCopy(), kubeconfigSecret.DeepCopy()},
+			expectErr:  true,
+		},
+		{
+			name:       "returns error if unable to find the key in the etcd secret",
+			clusterKey: clusterKey,
+			objs:       []runtime.Object{emptyKeyEtcdSecret.DeepCopy(), kubeconfigSecret.DeepCopy()},
+			expectErr:  true,
+		},
+		{
+			name:       "returns error if unable to generate client cert",
+			clusterKey: clusterKey,
+			objs:       []runtime.Object{badCrtEtcdSecret.DeepCopy(), kubeconfigSecret.DeepCopy()},
+			expectErr:  true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			g := NewWithT(t)
+
+			for _, o := range tt.objs {
+				g.Expect(testEnv.CreateObj(ctx, o)).To(Succeed())
+				defer func(do runtime.Object) {
+					g.Expect(testEnv.Cleanup(ctx, do)).To(Succeed())
+				}(o)
+			}
+
+			m := Management{
+				Client: testEnv,
+			}
+
+			workloadCluster, err := m.GetWorkloadCluster(context.Background(), tt.clusterKey)
+			if tt.expectErr {
+				g.Expect(err).To(HaveOccurred())
+				g.Expect(workloadCluster).To(BeNil())
+				return
+			}
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(workloadCluster).ToNot(BeNil())
+		})
+	}
+
+}
+
+func getTestCACert(key *rsa.PrivateKey) (*x509.Certificate, error) {
+	cfg := certs.Config{
+		CommonName: "kubernetes",
+	}
+
+	now := time.Now().UTC()
+
+	tmpl := x509.Certificate{
+		SerialNumber: new(big.Int).SetInt64(0),
+		Subject: pkix.Name{
+			CommonName:   cfg.CommonName,
+			Organization: cfg.Organization,
+		},
+		NotBefore:             now.Add(time.Minute * -5),
+		NotAfter:              now.Add(time.Hour * 24), // 1 day
+		KeyUsage:              x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
+		MaxPathLenZero:        true,
+		BasicConstraintsValid: true,
+		MaxPathLen:            0,
+		IsCA:                  true,
+	}
+
+	b, err := x509.CreateCertificate(rand.Reader, &tmpl, &tmpl, key.Public(), key)
+	if err != nil {
+		return nil, err
+	}
+
+	c, err := x509.ParseCertificate(b)
+	return c, err
 }
 
 func machineListForTestGetMachinesForCluster() *clusterv1.MachineList {
@@ -243,6 +295,8 @@ func (f *fakeClient) Get(_ context.Context, key client.ObjectKey, obj runtime.Ob
 		l.DeepCopyInto(obj.(*appsv1.DaemonSet))
 	case *corev1.ConfigMap:
 		l.DeepCopyInto(obj.(*corev1.ConfigMap))
+	case *corev1.Secret:
+		l.DeepCopyInto(obj.(*corev1.Secret))
 	case nil:
 		return apierrors.NewNotFound(schema.GroupResource{}, key.Name)
 	default:
@@ -288,187 +342,4 @@ func (f *fakeClient) Update(_ context.Context, _ runtime.Object, _ ...client.Upd
 		return f.updateErr
 	}
 	return nil
-}
-
-func TestManagementCluster_healthCheck_NoError(t *testing.T) {
-	tests := []struct {
-		name             string
-		machineList      *clusterv1.MachineList
-		check            healthCheck
-		clusterKey       client.ObjectKey
-		controlPlaneName string
-	}{
-		{
-			name: "simple",
-			machineList: &clusterv1.MachineList{
-				Items: []clusterv1.Machine{
-					controlPlaneMachine("one"),
-					controlPlaneMachine("two"),
-					controlPlaneMachine("three"),
-				},
-			},
-			check: func(ctx context.Context) (HealthCheckResult, error) {
-				return HealthCheckResult{
-					"one":   nil,
-					"two":   nil,
-					"three": nil,
-				}, nil
-			},
-			clusterKey: client.ObjectKey{Namespace: "default", Name: "cluster-name"},
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			g := NewWithT(t)
-
-			ctx := context.Background()
-			m := &Management{
-				Client: &fakeClient{list: tt.machineList},
-			}
-			g.Expect(m.healthCheck(ctx, tt.check, tt.clusterKey)).To(Succeed())
-		})
-	}
-}
-
-func TestManagementCluster_healthCheck_Errors(t *testing.T) {
-	tests := []struct {
-		name             string
-		machineList      *clusterv1.MachineList
-		check            healthCheck
-		clusterKey       client.ObjectKey
-		controlPlaneName string
-		// expected errors will ensure the error contains this list of strings.
-		// If not supplied, no check on the error's value will occur.
-		expectedErrors []string
-	}{
-		{
-			name: "machine's node was not checked for health",
-			machineList: &clusterv1.MachineList{
-				Items: []clusterv1.Machine{
-					controlPlaneMachine("one"),
-					controlPlaneMachine("two"),
-					controlPlaneMachine("three"),
-				},
-			},
-			check: func(ctx context.Context) (HealthCheckResult, error) {
-				return HealthCheckResult{
-					"one": nil,
-				}, nil
-			},
-		},
-		{
-			name: "health check returns an error not related to the nodes health",
-			machineList: &clusterv1.MachineList{
-				Items: []clusterv1.Machine{
-					controlPlaneMachine("one"),
-					controlPlaneMachine("two"),
-					controlPlaneMachine("three"),
-				},
-			},
-			check: func(ctx context.Context) (HealthCheckResult, error) {
-				return HealthCheckResult{
-					"one":   nil,
-					"two":   errors.New("two"),
-					"three": errors.New("three"),
-				}, errors.New("meta")
-			},
-			expectedErrors: []string{"two", "three", "meta"},
-		},
-		{
-			name: "two nodes error on the check but no overall error occurred",
-			machineList: &clusterv1.MachineList{
-				Items: []clusterv1.Machine{
-					controlPlaneMachine("one"),
-					controlPlaneMachine("two"),
-					controlPlaneMachine("three"),
-				},
-			},
-			check: func(ctx context.Context) (HealthCheckResult, error) {
-				return HealthCheckResult{
-					"one":   nil,
-					"two":   errors.New("two"),
-					"three": errors.New("three"),
-				}, nil
-			},
-			expectedErrors: []string{"two", "three"},
-		},
-		{
-			name: "more nodes than machines were checked (out of band control plane nodes)",
-			machineList: &clusterv1.MachineList{
-				Items: []clusterv1.Machine{
-					controlPlaneMachine("one"),
-				},
-			},
-			check: func(ctx context.Context) (HealthCheckResult, error) {
-				return HealthCheckResult{
-					"one":   nil,
-					"two":   nil,
-					"three": nil,
-				}, nil
-			},
-		},
-		{
-			name: "a machine that has a nil node reference",
-			machineList: &clusterv1.MachineList{
-				Items: []clusterv1.Machine{
-					controlPlaneMachine("one"),
-					controlPlaneMachine("two"),
-					nilNodeRef(controlPlaneMachine("three")),
-				},
-			},
-			check: func(ctx context.Context) (HealthCheckResult, error) {
-				return HealthCheckResult{
-					"one":   nil,
-					"two":   nil,
-					"three": nil,
-				}, nil
-			},
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			g := NewWithT(t)
-
-			ctx := context.Background()
-			clusterKey := client.ObjectKey{Namespace: "default", Name: "cluster-name"}
-
-			m := &Management{
-				Client: &fakeClient{list: tt.machineList},
-			}
-			err := m.healthCheck(ctx, tt.check, clusterKey)
-			g.Expect(err).To(HaveOccurred())
-
-			for _, expectedError := range tt.expectedErrors {
-				g.Expect(err).To(MatchError(ContainSubstring(expectedError)))
-			}
-		})
-	}
-}
-
-func controlPlaneMachine(name string) clusterv1.Machine {
-	t := true
-	return clusterv1.Machine{
-		ObjectMeta: metav1.ObjectMeta{
-			Namespace: "default",
-			Name:      name,
-			Labels:    ControlPlaneLabelsForCluster("cluster-name"),
-			OwnerReferences: []metav1.OwnerReference{
-				{
-					Kind:       "KubeadmControlPlane",
-					Name:       "control-plane-name",
-					Controller: &t,
-				},
-			},
-		},
-		Status: clusterv1.MachineStatus{
-			NodeRef: &corev1.ObjectReference{
-				Name: name,
-			},
-		},
-	}
-}
-
-func nilNodeRef(machine clusterv1.Machine) clusterv1.Machine {
-	machine.Status.NodeRef = nil
-	return machine
 }

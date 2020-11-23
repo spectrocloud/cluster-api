@@ -56,14 +56,21 @@ func NewFilterableMachineCollectionFromMachineList(machineList *clusterv1.Machin
 }
 
 // Insert adds items to the set.
-func (s FilterableMachineCollection) Insert(machines ...*clusterv1.Machine) FilterableMachineCollection {
+func (s FilterableMachineCollection) Insert(machines ...*clusterv1.Machine) {
 	for i := range machines {
 		if machines[i] != nil {
 			m := machines[i]
 			s[m.Name] = m
 		}
 	}
-	return s
+}
+
+// Difference returns a copy without machines that are in the given collection
+func (s FilterableMachineCollection) Difference(machines FilterableMachineCollection) FilterableMachineCollection {
+	return s.Filter(func(m *clusterv1.Machine) bool {
+		_, found := machines[m.Name]
+		return !found
+	})
 }
 
 // SortedByCreationTimestamp returns the machines sorted by creation timestamp
@@ -76,8 +83,8 @@ func (s FilterableMachineCollection) SortedByCreationTimestamp() []*clusterv1.Ma
 	return res
 }
 
-// unsortedList returns the slice with contents in random order.
-func (s FilterableMachineCollection) unsortedList() []*clusterv1.Machine {
+// UnsortedList returns the slice with contents in random order.
+func (s FilterableMachineCollection) UnsortedList() []*clusterv1.Machine {
 	res := make([]*clusterv1.Machine, 0, len(s))
 	for _, value := range s {
 		res = append(res, value)
@@ -103,12 +110,12 @@ func newFilteredMachineCollection(filter machinefilters.Func, machines ...*clust
 
 // Filter returns a FilterableMachineCollection containing only the Machines that match all of the given MachineFilters
 func (s FilterableMachineCollection) Filter(filters ...machinefilters.Func) FilterableMachineCollection {
-	return newFilteredMachineCollection(machinefilters.And(filters...), s.unsortedList()...)
+	return newFilteredMachineCollection(machinefilters.And(filters...), s.UnsortedList()...)
 }
 
 // AnyFilter returns a FilterableMachineCollection containing only the Machines that match any of the given MachineFilters
 func (s FilterableMachineCollection) AnyFilter(filters ...machinefilters.Func) FilterableMachineCollection {
-	return newFilteredMachineCollection(machinefilters.Or(filters...), s.unsortedList()...)
+	return newFilteredMachineCollection(machinefilters.Or(filters...), s.UnsortedList()...)
 }
 
 // Oldest returns the Machine with the oldest CreationTimestamp
@@ -144,4 +151,14 @@ func (s FilterableMachineCollection) ConditionGetters() []conditions.Getter {
 		res = append(res, &value)
 	}
 	return res
+}
+
+// Names returns a slice of the names of each machine in the collection.
+// Useful for logging and test assertions.
+func (s FilterableMachineCollection) Names() []string {
+	names := make([]string, 0, s.Len())
+	for _, m := range s {
+		names = append(names, m.Name)
+	}
+	return names
 }

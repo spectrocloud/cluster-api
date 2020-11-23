@@ -26,7 +26,7 @@ Read the following guide if you're interested in contributing to cluster-api.
 We'd love to accept your patches! Before we can take them, we have to jump a couple of legal hurdles.
 
 Please fill out either the individual or corporate Contributor License Agreement (CLA). More information about the CLA
-and instructions for signing it [can be found here](https://github.com/kubernetes/community/blob/master/CLA.md).
+and instructions for signing it [can be found here](https://git.k8s.io/community/CLA.md).
 
 ***NOTE***: Only original source code from you and other people that have signed the CLA can be accepted into the
 *repository.
@@ -36,12 +36,14 @@ and instructions for signing it [can be found here](https://github.com/kubernete
 If you're new to the project and want to help, but don't know where to start, we have a semi-curated list of issues that
 should not need deep knowledge of the system. [Have a look and see if anything sounds
 interesting](https://github.com/kubernetes-sigs/cluster-api/issues?q=is%3Aopen+is%3Aissue+label%3A%22good+first+issue%22).
+Before starting to work on the issue, make sure that it doesn't have a [lifecycle/active](https://github.com/kubernetes-sigs/cluster-api/labels/lifecycle%2Factive) label. If the issue has been assigned, reach out to the assignee. 
 Alternatively, read some of the docs on other controllers and try to write your own, file and fix any/all issues that
 come up, including gaps in documentation!
 
 ## Contributing a Patch
 
 1. If you haven't already done so, sign a Contributor License Agreement (see details above).
+1. If working on an issue, signal other contributors that you are actively working on it using `/lifecycle active`.  
 1. Fork the desired repo, develop and test your code changes.
 1. Submit a pull request.
     1. All code PR must be labeled with one of
@@ -52,21 +54,31 @@ come up, including gaps in documentation!
         - 🌱 (:seedling:, minor or other)
 
 All changes must be code reviewed. Coding conventions and standards are explained in the official [developer
-docs](https://github.com/kubernetes/community/tree/master/contributors/devel). Expect reviewers to request that you
+docs](https://git.k8s.io/community/contributors/devel). Expect reviewers to request that you
 avoid common [go style mistakes](https://github.com/golang/go/wiki/CodeReviewComments) in your PRs.
 
+## Triaging E2E test failures
+
+When you submit a change to the Cluster API repository as set of validation jobs is automatically executed by 
+prow and the results report is added to a comment at the end of your PR.
+
+Some jobs run linters or unit test, and in case of failures, you can repeat the same operation locally using `make test lint-full [etc..]` 
+in order to investigate and potential issues. Prow logs usually provide hints about the make target you should use  
+(there might be more than one command that needs to be run).  
+
+End-to-end (E2E) jobs create real Kubernetes clusters by building Cluster API artifacts with the latest changes.
+In case of E2E test failures, usually it's required to access the "Artifacts" link on the top of the prow logs page to triage the problem.
+
+The artifact folder contains:
+- A folder with the clusterctl local repository used for the test, where you can find components yaml and cluster templates.
+- A folder with logs for all the clusters created during the test. Following logs/info are available: 
+    - Controller logs (only if the cluster is a management cluster).
+    - Dump of the Cluster API resources (only if the cluster is a management cluster).
+    - Machine logs (only if the cluster is a workload cluster)
+    
+In case you want to run E2E test locally, please refer to the [Testing](https://cluster-api.sigs.k8s.io/developer/testing.html#running-the-end-to-end-tests) guide.
+
 ## Reviewing a Patch
-
-See [Code Review in Cluster API](REVIEWING.md). 
-
-### Approvals
-
-Please see the [Kubernetes community document on pull
-requests](https://git.k8s.io/community/contributors/guide/pull-requests.md) for more information about the merge
-process.
-
-- A PR is approved by one of the project maintainers and owners after reviews.
-- Approvals should be the very last action a maintainer takes on a pull request.
 
 ## Reviews
 
@@ -83,6 +95,17 @@ Code reviews should generally look at:
 - **Naming**: Did the developer choose clear names for variable, types, methods, functions, etc.?
 - **Comments**: Are the comments clear and useful? Do they explain the why rather than what?
 - **Documentation**: Did the developer also update relevant documentation?
+
+See [Code Review in Cluster API](REVIEWING.md) for a more focused list of review items. 
+
+### Approvals
+
+Please see the [Kubernetes community document on pull
+requests](https://git.k8s.io/community/contributors/guide/pull-requests.md) for more information about the merge
+process.
+
+- A PR is approved by one of the project maintainers and owners after reviews.
+- Approvals should be the very last action a maintainer takes on a pull request.
 
 ## Backporting a Patch
 
@@ -190,7 +213,7 @@ against the kubernetes/org repo.
 
 However, if you are a member of any of the related Kubernetes GitHub organizations but not of the Kubernetes org, you
 will need explicit sponsorship for your membership request. You can read more about Kubernetes membership and
-sponsorship [here](https://github.com/kubernetes/community/blob/master/community-membership.md).
+sponsorship [here](https://git.k8s.io/community/community-membership.md).
 
 Cluster API maintainers can assign you an issue or pull request by leaving a `/assign <your Github ID>` comment on the
 issue or pull request.

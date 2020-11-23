@@ -30,7 +30,7 @@ var (
 			Kind:       "CustomResourceDefinition",
 		},
 		ObjectMeta: metav1.ObjectMeta{
-			Name: "genericmachines.bootstrap.cluster.x-k8s.io",
+			Name: "bootstrapmachines.bootstrap.cluster.x-k8s.io",
 			Labels: map[string]string{
 				clusterv1.GroupVersion.String(): "v1alpha3",
 			},
@@ -40,7 +40,7 @@ var (
 			Scope: apiextensionsv1.NamespaceScoped,
 			Names: apiextensionsv1.CustomResourceDefinitionNames{
 				Kind:   "BootstrapMachine",
-				Plural: "genericmachines",
+				Plural: "bootstrapmachines",
 			},
 			Versions: []apiextensionsv1.CustomResourceDefinitionVersion{
 				{
@@ -76,7 +76,7 @@ var (
 			Kind:       "CustomResourceDefinition",
 		},
 		ObjectMeta: metav1.ObjectMeta{
-			Name: "genericmachinetemplates.bootstrap.cluster.x-k8s.io",
+			Name: "bootstrapmachinetemplates.bootstrap.cluster.x-k8s.io",
 			Labels: map[string]string{
 				clusterv1.GroupVersion.String(): "v1alpha3",
 			},
@@ -86,7 +86,7 @@ var (
 			Scope: apiextensionsv1.NamespaceScoped,
 			Names: apiextensionsv1.CustomResourceDefinitionNames{
 				Kind:   "BootstrapMachineTemplate",
-				Plural: "genericmachinetemplates",
+				Plural: "bootstrapmachinetemplates",
 			},
 			Versions: []apiextensionsv1.CustomResourceDefinitionVersion{
 				{
@@ -122,7 +122,7 @@ var (
 			Kind:       "CustomResourceDefinition",
 		},
 		ObjectMeta: metav1.ObjectMeta{
-			Name: "genericmachines.infrastructure.cluster.x-k8s.io",
+			Name: "infrastructuremachines.infrastructure.cluster.x-k8s.io",
 			Labels: map[string]string{
 				clusterv1.GroupVersion.String(): "v1alpha3",
 			},
@@ -132,7 +132,7 @@ var (
 			Scope: apiextensionsv1.NamespaceScoped,
 			Names: apiextensionsv1.CustomResourceDefinitionNames{
 				Kind:   "InfrastructureMachine",
-				Plural: "genericmachines",
+				Plural: "infrastructuremachines",
 			},
 			Versions: []apiextensionsv1.CustomResourceDefinitionVersion{
 				{
@@ -168,7 +168,7 @@ var (
 			Kind:       "CustomResourceDefinition",
 		},
 		ObjectMeta: metav1.ObjectMeta{
-			Name: "genericmachinetemplates.infrastructure.cluster.x-k8s.io",
+			Name: "infrastructuremachinetemplates.infrastructure.cluster.x-k8s.io",
 			Labels: map[string]string{
 				clusterv1.GroupVersion.String(): "v1alpha3",
 			},
@@ -178,7 +178,99 @@ var (
 			Scope: apiextensionsv1.NamespaceScoped,
 			Names: apiextensionsv1.CustomResourceDefinitionNames{
 				Kind:   "InfrastructureMachineTemplate",
-				Plural: "genericmachinetemplates",
+				Plural: "infrastructuremachinetemplates",
+			},
+			Versions: []apiextensionsv1.CustomResourceDefinitionVersion{
+				{
+					Name:    "v1alpha3",
+					Served:  true,
+					Storage: true,
+					Subresources: &apiextensionsv1.CustomResourceSubresources{
+						Status: &apiextensionsv1.CustomResourceSubresourceStatus{},
+					},
+					Schema: &apiextensionsv1.CustomResourceValidation{
+						OpenAPIV3Schema: &apiextensionsv1.JSONSchemaProps{
+							Type: "object",
+							Properties: map[string]apiextensionsv1.JSONSchemaProps{
+								"spec": {
+									Type:                   "object",
+									XPreserveUnknownFields: pointer.BoolPtr(true),
+								},
+								"status": {
+									Type:                   "object",
+									XPreserveUnknownFields: pointer.BoolPtr(true),
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	TestGenericInfrastructureRemediationCRD = &apiextensionsv1.CustomResourceDefinition{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: apiextensionsv1.SchemeGroupVersion.String(),
+			Kind:       "CustomResourceDefinition",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "infrastructureremediations.infrastructure.cluster.x-k8s.io",
+			Labels: map[string]string{
+				clusterv1.GroupVersion.String(): "v1alpha3",
+			},
+		},
+		Spec: apiextensionsv1.CustomResourceDefinitionSpec{
+			Group: "infrastructure.cluster.x-k8s.io",
+			Scope: apiextensionsv1.NamespaceScoped,
+			Names: apiextensionsv1.CustomResourceDefinitionNames{
+				Kind:   "InfrastructureRemediation",
+				Plural: "infrastructureremediations",
+			},
+			Versions: []apiextensionsv1.CustomResourceDefinitionVersion{
+				{
+					Name:    "v1alpha3",
+					Served:  true,
+					Storage: true,
+					Subresources: &apiextensionsv1.CustomResourceSubresources{
+						Status: &apiextensionsv1.CustomResourceSubresourceStatus{},
+					},
+					Schema: &apiextensionsv1.CustomResourceValidation{
+						OpenAPIV3Schema: &apiextensionsv1.JSONSchemaProps{
+							Type: "object",
+							Properties: map[string]apiextensionsv1.JSONSchemaProps{
+								"spec": {
+									Type:                   "object",
+									XPreserveUnknownFields: pointer.BoolPtr(true),
+								},
+								"status": {
+									Type:                   "object",
+									XPreserveUnknownFields: pointer.BoolPtr(true),
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	TestGenericInfrastructureRemediationTemplateCRD = &apiextensionsv1.CustomResourceDefinition{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: apiextensionsv1.SchemeGroupVersion.String(),
+			Kind:       "CustomResourceDefinition",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "infrastructureremediationtemplates.infrastructure.cluster.x-k8s.io",
+			Labels: map[string]string{
+				clusterv1.GroupVersion.String(): "v1alpha3",
+			},
+		},
+		Spec: apiextensionsv1.CustomResourceDefinitionSpec{
+			Group: "infrastructure.cluster.x-k8s.io",
+			Scope: apiextensionsv1.NamespaceScoped,
+			Names: apiextensionsv1.CustomResourceDefinitionNames{
+				Kind:   "InfrastructureRemediationTemplate",
+				Plural: "infrastructureremediationtemplates",
 			},
 			Versions: []apiextensionsv1.CustomResourceDefinitionVersion{
 				{

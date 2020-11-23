@@ -156,6 +156,17 @@ func (f *metadataClient) getEmbeddedMetadata() *clusterctlv1.Metadata {
 					// older version are not supported by clusterctl
 				},
 			}
+		case config.AWSEKSBootstrapProviderName:
+			return &clusterctlv1.Metadata{
+				TypeMeta: metav1.TypeMeta{
+					APIVersion: clusterctlv1.GroupVersion.String(),
+					Kind:       "Metadata",
+				},
+				ReleaseSeries: []clusterctlv1.ReleaseSeries{
+					// v1alpha3 release series
+					{Major: 0, Minor: 6, Contract: "v1alpha3"},
+				},
+			}
 		default:
 			return nil
 		}
@@ -183,6 +194,16 @@ func (f *metadataClient) getEmbeddedMetadata() *clusterctlv1.Metadata {
 					// v1alpha3 release series
 					{Major: 0, Minor: 1, Contract: "v1alpha3"},
 					// there are no older version for Talos controlplane
+				},
+			}
+		case config.AWSEKSControlPlaneProviderName:
+			return &clusterctlv1.Metadata{
+				TypeMeta: metav1.TypeMeta{
+					APIVersion: clusterctlv1.GroupVersion.String(),
+					Kind:       "Metadata",
+				},
+				ReleaseSeries: []clusterctlv1.ReleaseSeries{
+					{Major: 0, Minor: 6, Contract: "v1alpha3"},
 				},
 			}
 		default:
@@ -215,6 +236,33 @@ func (f *metadataClient) getEmbeddedMetadata() *clusterctlv1.Metadata {
 					{Major: 0, Minor: 4, Contract: "v1alpha3"},
 					// v1alpha2 release series are supported only for upgrades
 					{Major: 0, Minor: 3, Contract: "v1alpha2"},
+					// older version are not supported by clusterctl
+				},
+			}
+		case config.DOProviderName:
+			return &clusterctlv1.Metadata{
+				TypeMeta: metav1.TypeMeta{
+					APIVersion: clusterctlv1.GroupVersion.String(),
+					Kind:       "Metadata",
+				},
+				ReleaseSeries: []clusterctlv1.ReleaseSeries{
+					// v1alpha3 release series
+					{Major: 0, Minor: 3, Contract: "v1alpha3"},
+					// older version are not supported by clusterctl
+				},
+			}
+		case config.DockerProviderName:
+			// NB. The Docker provider is not designed for production use and is intended for development environments only.
+			return &clusterctlv1.Metadata{
+				TypeMeta: metav1.TypeMeta{
+					APIVersion: clusterctlv1.GroupVersion.String(),
+					Kind:       "Metadata",
+				},
+				ReleaseSeries: []clusterctlv1.ReleaseSeries{
+					// v1alpha3 release series
+					{Major: 0, Minor: 3, Contract: "v1alpha3"},
+					// v1alpha2 release series are supported only for upgrades
+					{Major: 0, Minor: 2, Contract: "v1alpha2"},
 					// older version are not supported by clusterctl
 				},
 			}
@@ -255,6 +303,18 @@ func (f *metadataClient) getEmbeddedMetadata() *clusterctlv1.Metadata {
 					{Major: 0, Minor: 3, Contract: "v1alpha3"},
 				},
 			}
+		case config.SideroProviderName:
+			return &clusterctlv1.Metadata{
+				TypeMeta: metav1.TypeMeta{
+					APIVersion: clusterctlv1.GroupVersion.String(),
+					Kind:       "Metadata",
+				},
+				ReleaseSeries: []clusterctlv1.ReleaseSeries{
+					// v1alpha3 release series
+					{Major: 0, Minor: 1, Contract: "v1alpha3"},
+					// there are no older versions for Sidero
+				},
+			}
 		case config.VSphereProviderName:
 			return &clusterctlv1.Metadata{
 				TypeMeta: metav1.TypeMeta{
@@ -263,6 +323,7 @@ func (f *metadataClient) getEmbeddedMetadata() *clusterctlv1.Metadata {
 				},
 				ReleaseSeries: []clusterctlv1.ReleaseSeries{
 					// v1alpha3 release series
+					{Major: 0, Minor: 7, Contract: "v1alpha3"},
 					{Major: 0, Minor: 6, Contract: "v1alpha3"},
 					// v1alpha2 release series are supported only for upgrades
 					{Major: 0, Minor: 5, Contract: "v1alpha2"},
