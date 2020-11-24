@@ -472,16 +472,17 @@ func GetActualReplicaCountForMachineSets(machineSets []*clusterv1.MachineSet) in
 	return totalActualReplicas
 }
 
-// GetTotalReplicaCountForMachineSets returns sum of max(ms.Spec.Replicas, ms.Status.Replicas) across all the machine sets.
-// This is used to guarantee that the total number of machines will not exceed md.Spec.Replicas + maxSurge
+// TotalMachineSetsReplicaSum returns sum of max(ms.Spec.Replicas, ms.Status.Replicas) across all the machine sets.
+//
+// This is used to guarantee that the total number of machines will not exceed md.Spec.Replicas + maxSurge.
 // Use max(spec.Replicas,status.Replicas) to cover the cases that:
 // 1. Scale up, where spec.Replicas increased but no machine created yet, so spec.Replicas > status.Replicas
 // 2. Scale down, where spec.Replicas decreased but machine not deleted yet, so spec.Replicas < status.Replicas
-func GetTotalReplicaCountForMachineSets(machineSets []*clusterv1.MachineSet) int32 {
+func TotalMachineSetsReplicaSum(machineSets []*clusterv1.MachineSet) int32 {
 	totalReplicas := int32(0)
 	for _, ms := range machineSets {
 		if ms != nil {
-			totalReplicas += max(*(ms.Spec.Replicas), ms.Status.Replicas)
+			totalReplicas += integer.Int32Max(*(ms.Spec.Replicas), ms.Status.Replicas)
 		}
 	}
 	return totalReplicas
@@ -536,7 +537,7 @@ func NewMSNewReplicas(deployment *clusterv1.MachineDeployment, allMSs []*cluster
 			return 0, err
 		}
 		// Find the total number of machines
-		currentMachineCount := GetTotalReplicaCountForMachineSets(allMSs)
+		currentMachineCount := TotalMachineSetsReplicaSum(allMSs)
 		maxTotalMachines := *(deployment.Spec.Replicas) + int32(maxSurge)
 		if currentMachineCount >= maxTotalMachines {
 			// Cannot scale up.
@@ -695,11 +696,4 @@ func ComputeHash(template *clusterv1.MachineTemplateSpec) uint32 {
 	machineTemplateSpecHasher := fnv.New32a()
 	DeepHashObject(machineTemplateSpecHasher, *template)
 	return machineTemplateSpecHasher.Sum32()
-}
-
-func max(a, b int32) int32 {
-	if a > b {
-		return a
-	}
-	return b
 }

@@ -443,7 +443,7 @@ func TestGetReplicaCountForMachineSets(t *testing.T) {
 
 			g.Expect(GetReplicaCountForMachineSets(test.Sets)).To(Equal(test.ExpectedCount))
 			g.Expect(GetActualReplicaCountForMachineSets(test.Sets)).To(Equal(test.ExpectedActual))
-			g.Expect(GetTotalReplicaCountForMachineSets(test.Sets)).To(Equal(test.ExpectedTotal))
+			g.Expect(TotalMachineSetsReplicaSum(test.Sets)).To(Equal(test.ExpectedTotal))
 		})
 	}
 }

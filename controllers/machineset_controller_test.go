@@ -606,11 +606,10 @@ func TestShouldExcludeMachine(t *testing.T) {
 		},
 	}
 
-	logger := klogr.New()
 	for _, tc := range testCases {
 		g := NewWithT(t)
 
-		got := shouldExcludeMachine(&tc.machineSet, &tc.machine, logger)
+		got := shouldExcludeMachine(&tc.machineSet, &tc.machine)
 
 		g.Expect(got).To(Equal(tc.expected))
 	}

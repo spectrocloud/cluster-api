@@ -30,7 +30,6 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	kerrors "k8s.io/apimachinery/pkg/util/errors"
-	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/record"
 	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha3"
 	"sigs.k8s.io/cluster-api/controllers/external"
@@ -73,9 +72,8 @@ type MachineSetReconciler struct {
 	Log     logr.Logger
 	Tracker *remote.ClusterCacheTracker
 
-	recorder   record.EventRecorder
-	scheme     *runtime.Scheme
-	restConfig *rest.Config
+	recorder record.EventRecorder
+	scheme   *runtime.Scheme
 }
 
 func (r *MachineSetReconciler) SetupWithManager(mgr ctrl.Manager, options controller.Options) error {
@@ -110,7 +108,6 @@ func (r *MachineSetReconciler) SetupWithManager(mgr ctrl.Manager, options contro
 
 	r.recorder = mgr.GetEventRecorderFor("machineset-controller")
 	r.scheme = mgr.GetScheme()
-	r.restConfig = mgr.GetConfig()
 	return nil
 }
 
@@ -179,12 +176,12 @@ func (r *MachineSetReconciler) reconcile(ctx context.Context, cluster *clusterv1
 	}
 
 	// Make sure to reconcile the external infrastructure reference.
-	if err := reconcileExternalTemplateReference(ctx, logger, r.Client, r.restConfig, cluster, &machineSet.Spec.Template.Spec.InfrastructureRef); err != nil {
+	if err := reconcileExternalTemplateReference(ctx, r.Client, cluster, &machineSet.Spec.Template.Spec.InfrastructureRef); err != nil {
 		return ctrl.Result{}, err
 	}
 	// Make sure to reconcile the external bootstrap reference, if any.
 	if machineSet.Spec.Template.Spec.Bootstrap.ConfigRef != nil {
-		if err := reconcileExternalTemplateReference(ctx, logger, r.Client, r.restConfig, cluster, machineSet.Spec.Template.Spec.Bootstrap.ConfigRef); err != nil {
+		if err := reconcileExternalTemplateReference(ctx, r.Client, cluster, machineSet.Spec.Template.Spec.Bootstrap.ConfigRef); err != nil {
 			return ctrl.Result{}, err
 		}
 	}
@@ -213,7 +210,7 @@ func (r *MachineSetReconciler) reconcile(ctx context.Context, cluster *clusterv1
 	filteredMachines := make([]*clusterv1.Machine, 0, len(allMachines.Items))
 	for idx := range allMachines.Items {
 		machine := &allMachines.Items[idx]
-		if shouldExcludeMachine(machineSet, machine, logger) {
+		if shouldExcludeMachine(machineSet, machine) {
 			continue
 		}
 
@@ -233,7 +230,12 @@ func (r *MachineSetReconciler) reconcile(ctx context.Context, cluster *clusterv1
 
 	var errs []error
 	for _, machine := range filteredMachines {
-		if machine.DeletionTimestamp.IsZero() && conditions.IsFalse(machine, clusterv1.MachineOwnerRemediatedCondition) {
+		// filteredMachines contains machines in deleting status to calculate correct status
+		// skip remidiation for those in deleting status
+		if !machine.DeletionTimestamp.IsZero() {
+			continue
+		}
+		if conditions.IsFalse(machine, clusterv1.MachineOwnerRemediatedCondition) {
 			logger.Info("Deleting unhealthy machine", "machine", machine.GetName())
 			patch := client.MergeFrom(machine.DeepCopy())
 			if err := r.Client.Delete(ctx, machine); err != nil {
@@ -441,9 +443,8 @@ func (r *MachineSetReconciler) getNewMachine(machineSet *clusterv1.MachineSet) *
 }
 
 // shouldExcludeMachine returns true if the machine should be filtered out, false otherwise.
-func shouldExcludeMachine(machineSet *clusterv1.MachineSet, machine *clusterv1.Machine, logger logr.Logger) bool {
+func shouldExcludeMachine(machineSet *clusterv1.MachineSet, machine *clusterv1.Machine) bool {
 	if metav1.GetControllerOf(machine) != nil && !metav1.IsControlledBy(machine, machineSet) {
-		logger.V(4).Info("Machine is not controlled by machineset", "machine", machine.Name)
 		return true
 	}
 
@@ -694,12 +695,12 @@ func (r *MachineSetReconciler) getMachineNode(ctx context.Context, cluster *clus
 	return node, nil
 }
 
-func reconcileExternalTemplateReference(ctx context.Context, logger logr.Logger, c client.Client, restConfig *rest.Config, cluster *clusterv1.Cluster, ref *corev1.ObjectReference) error {
+func reconcileExternalTemplateReference(ctx context.Context, c client.Client, cluster *clusterv1.Cluster, ref *corev1.ObjectReference) error {
 	if !strings.HasSuffix(ref.Kind, external.TemplateSuffix) {
 		return nil
 	}
 
-	if err := utilconversion.ConvertReferenceAPIContract(ctx, logger, c, restConfig, ref); err != nil {
+	if err := utilconversion.ConvertReferenceAPIContract(ctx, c, ref); err != nil {
 		return err
 	}
 

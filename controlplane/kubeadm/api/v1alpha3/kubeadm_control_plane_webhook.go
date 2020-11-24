@@ -87,7 +87,6 @@ const (
 	preKubeadmCommands   = "preKubeadmCommands"
 	postKubeadmCommands  = "postKubeadmCommands"
 	files                = "files"
-	users                = "users"
 )
 
 // ValidateUpdate implements webhook.Validator so a webhook will be registered for the type
@@ -96,33 +95,22 @@ func (in *KubeadmControlPlane) ValidateUpdate(old runtime.Object) error {
 	// For example, {"spec", "*"} will allow any path under "spec" to change, such as spec.infrastructureTemplate.name
 	allowedPaths := [][]string{
 		{"metadata", "*"},
-		{spec, kubeadmConfigSpec, clusterConfiguration, "clusterConfiguration"},
-		{spec, kubeadmConfigSpec, clusterConfiguration, "initConfiguration"},
-		{spec, kubeadmConfigSpec, clusterConfiguration, "joinConfiguration"},
-		{spec, kubeadmConfigSpec, clusterConfiguration, "files"},
-		{spec, kubeadmConfigSpec, clusterConfiguration, "users"},
-		{spec, kubeadmConfigSpec, clusterConfiguration, "ntp"},
-		{spec, kubeadmConfigSpec, clusterConfiguration, "format"},
-		{spec, kubeadmConfigSpec, clusterConfiguration, "verbosity"},
-		{spec, kubeadmConfigSpec, clusterConfiguration, "postKubeadmCommands"},
-		{spec, kubeadmConfigSpec, clusterConfiguration, "postKubeadmCommands"},
-		{spec, kubeadmConfigSpec, clusterConfiguration, "etcd", "local", "imageRepository"},
-		{spec, kubeadmConfigSpec, clusterConfiguration, "etcd", "local", "imageTag"},
-		{spec, kubeadmConfigSpec, clusterConfiguration, "dns", "imageRepository"},
-		{spec, kubeadmConfigSpec, clusterConfiguration, "dns", "imageTag"},
-		{spec, kubeadmConfigSpec, clusterConfiguration, "imageRepository"},
-		{spec, kubeadmConfigSpec, initConfiguration, nodeRegistration, "*"},
-		{spec, kubeadmConfigSpec, joinConfiguration, nodeRegistration, "*"},
-		{spec, kubeadmConfigSpec, preKubeadmCommands},
-		{spec, kubeadmConfigSpec, postKubeadmCommands},
-		{spec, kubeadmConfigSpec, files},
-		{spec, kubeadmConfigSpec, "verbosity"},
-		{spec, kubeadmConfigSpec, users},
+		//{spec, kubeadmConfigSpec, clusterConfiguration, "etcd", "local", "imageRepository"},
+		//{spec, kubeadmConfigSpec, clusterConfiguration, "etcd", "local", "imageTag"},
+		//{spec, kubeadmConfigSpec, clusterConfiguration, "dns", "imageRepository"},
+		//{spec, kubeadmConfigSpec, clusterConfiguration, "dns", "imageTag"},
+		//{spec, kubeadmConfigSpec, clusterConfiguration, "imageRepository"},
+		//{spec, kubeadmConfigSpec, initConfiguration, nodeRegistration, "*"},
+		//{spec, kubeadmConfigSpec, joinConfiguration, nodeRegistration, "*"},
+		//{spec, kubeadmConfigSpec, preKubeadmCommands},
+		//{spec, kubeadmConfigSpec, postKubeadmCommands},
+		//{spec, kubeadmConfigSpec, files},
+		// allow all fields to be modified
+		{spec, kubeadmConfigSpec, "*"},
 		{spec, "infrastructureTemplate", "name"},
 		{spec, "replicas"},
 		{spec, "version"},
 		{spec, "upgradeAfter"},
-		{spec, "nodeDrainTimeout"},
 	}
 
 	allErrs := in.validateCommon()
