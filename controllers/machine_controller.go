@@ -594,7 +594,7 @@ func (r *MachineReconciler) waitForVolumeDetach(ctx context.Context, cluster *cl
 		return errors.Wrapf(waitErr, "failed to wait for volume detach from node %s", nodeName)
 	}
 
-	logger.Info("Node volumes all detached", "")
+	logger.Info("Node volumes all detached")
 	return nil
 }
 
