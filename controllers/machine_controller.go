@@ -344,6 +344,12 @@ func (r *MachineReconciler) reconcileDelete(ctx context.Context, cluster *cluste
 
 			conditions.MarkTrue(m, clusterv1.DrainingSucceededCondition)
 			r.recorder.Eventf(m, corev1.EventTypeNormal, "SuccessfulDrainNode", "success draining Machine's node %q", m.Status.NodeRef.Name)
+
+			// after draining, wait for volumes to be detached from the node
+			if err := r.waitForVolumeDetach(ctx, cluster, m.Status.NodeRef.Name, m.Name); err != nil {
+				r.recorder.Eventf(m, corev1.EventTypeWarning, "FailedWaitForVolumeDetach", "error wait for volume detach, node %q: %v", m.Status.NodeRef.Name, err)
+				return ctrl.Result{}, err
+			}
 		}
 	}
 
@@ -550,6 +556,45 @@ func (r *MachineReconciler) drainNode(ctx context.Context, cluster *clusterv1.Cl
 	}
 
 	logger.Info("Drain successful", "")
+	return nil
+}
+
+// pod deletion and volume detach happen asynchronously, so pod could be deleted before volume detached from the node
+// for volume provisioner like vsphere-volume this could be problematic because if the node deleted before detach success
+// then the under line vmdk will be deleted together with the Machine
+// so after drain we wait here for volume detach from the node
+func (r *MachineReconciler) waitForVolumeDetach(ctx context.Context, cluster *clusterv1.Cluster, nodeName string, machineName string) error {
+	logger := r.Log.WithValues("machine", machineName, "node", nodeName, "cluster", cluster.Name, "namespace", cluster.Namespace)
+
+	restConfig, err := remote.RESTConfig(ctx, r.Client, util.ObjectKey(cluster))
+	if err != nil {
+		logger.Error(err, "Error creating a remote client while deleting Machine, won't retry")
+		return nil
+	}
+	kubeClient, err := kubernetes.NewForConfig(restConfig)
+	if err != nil {
+		logger.Error(err, "Error creating a remote client while deleting Machine, won't retry")
+		return nil
+	}
+
+	waitErr := wait.PollImmediate(2*time.Second, 20*time.Second, func() (bool, error) {
+		node, getErr := kubeClient.CoreV1().Nodes().Get(nodeName, metav1.GetOptions{})
+		if getErr != nil {
+			if apierrors.IsNotFound(getErr) {
+				logger.Error(getErr, "Could not find node from noderef, it may have already been deleted")
+				return true, nil
+			} else {
+				return false, getErr
+			}
+		}
+
+		return len(node.Status.VolumesAttached) == 0, nil
+	})
+	if waitErr != nil {
+		return errors.Wrapf(waitErr, "failed to wait for volume detach from node %s", nodeName)
+	}
+
+	logger.Info("Node volumes all detached", "")
 	return nil
 }
 
