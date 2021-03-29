@@ -23,13 +23,17 @@ import (
 )
 
 // Format specifies the output format of the bootstrap data
-// +kubebuilder:validation:Enum=cloud-config
+// +kubebuilder:validation:Enum=cloud-config;ignition
 type Format string
 
 const (
 	// CloudConfig make the bootstrap data to be of cloud-config format
 	CloudConfig Format = "cloud-config"
+
+	// Ignition make the bootstrap data to be of Ignition format.
+	Ignition Format = "ignition"
 )
+
 
 // KubeadmConfigSpec defines the desired state of KubeadmConfig.
 // Either ClusterConfiguration and InitConfiguration should be defined or the JoinConfiguration should be defined.
@@ -95,6 +99,34 @@ type KubeadmConfigSpec struct {
 	// For more information, refer to https://github.com/kubernetes-sigs/cluster-api/pull/2763#discussion_r397306055.
 	// +optional
 	UseExperimentalRetryJoin bool `json:"useExperimentalRetryJoin,omitempty"`
+
+	// Ignition contains Ignition specific configuration.
+	//
+	// If set, bootstrap data will be generated in Ignition format instead of cloud-init.
+	//
+	// +optional
+	Ignition *IgnitionSpec `json:"ignitionConfig,omitempty"`
+}
+
+// IgnitionSpec contains Ignition specific configuration.
+type IgnitionSpec struct {
+	// ContainerLinuxConfig contains CLC specific configuration.
+	//
+	// +optional
+	ContainerLinuxConfig *ContainerLinuxConfig `json:"containerLinuxConfig,omitempty"`
+}
+
+// ContainerLinuxConfig contains CLC specific configuration.
+//
+// We use structured type here to keep space for adding additional fields, for example 'version'.
+type ContainerLinuxConfig struct {
+	// AdditionalConfig contains additional configuration which will be added bootstrap data in CLC format.
+	//
+	// +optional
+	AdditionalConfig string `json:"additionalConfig,omitempty"`
+
+	// Strict controls if AdditionalConfig should be strictly parsed. If so, warnings are treated as errors.
+	Strict bool `json:"strict,omitempty"`
 }
 
 // KubeadmConfigStatus defines the observed state of KubeadmConfig
