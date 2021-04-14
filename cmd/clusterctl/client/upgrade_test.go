@@ -22,12 +22,12 @@ import (
 	"testing"
 
 	. "github.com/onsi/gomega"
-
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha3"
 	clusterctlv1 "sigs.k8s.io/cluster-api/cmd/clusterctl/api/v1alpha3"
 	"sigs.k8s.io/cluster-api/cmd/clusterctl/client/cluster"
 	"sigs.k8s.io/cluster-api/cmd/clusterctl/client/config"
+	"sigs.k8s.io/cluster-api/cmd/clusterctl/internal/test"
 )
 
 func Test_clusterctlClient_PlanCertUpgrade(t *testing.T) {
@@ -46,8 +46,8 @@ func Test_clusterctlClient_PlanCertUpgrade(t *testing.T) {
 		WithFile("v1.0", "components.yaml", []byte("content"))
 
 	certManagerPlan := CertManagerUpgradePlan{
-		From:          "v0.16.0",
-		To:            "v0.16.1",
+		From:          "v0.16.1",
+		To:            "v1.1.0",
 		ShouldUpgrade: true,
 	}
 	// create a fake cluster, with a cert manager client that has an upgrade
@@ -166,7 +166,7 @@ func Test_clusterctlClient_ApplyUpgrade(t *testing.T) {
 				options: ApplyUpgradeOptions{
 					Kubeconfig:              Kubeconfig{Path: "kubeconfig", Context: "mgmt-context"},
 					ManagementGroup:         "cluster-api-system/cluster-api",
-					Contract:                "v1alpha3",
+					Contract:                test.CurrentCAPIContract,
 					CoreProvider:            "",
 					BootstrapProviders:      nil,
 					ControlPlaneProviders:   nil,
@@ -324,7 +324,7 @@ func fakeClientForUpgrade() *fakeClient {
 		WithVersions("v1.0.0", "v1.0.1").
 		WithMetadata("v1.0.1", &clusterctlv1.Metadata{
 			ReleaseSeries: []clusterctlv1.ReleaseSeries{
-				{Major: 1, Minor: 0, Contract: "v1alpha3"},
+				{Major: 1, Minor: 0, Contract: test.CurrentCAPIContract},
 			},
 		})
 	repository2 := newFakeRepository(infra, config1).
@@ -334,7 +334,7 @@ func fakeClientForUpgrade() *fakeClient {
 		WithVersions("v2.0.0", "v2.0.1").
 		WithMetadata("v2.0.1", &clusterctlv1.Metadata{
 			ReleaseSeries: []clusterctlv1.ReleaseSeries{
-				{Major: 2, Minor: 0, Contract: "v1alpha3"},
+				{Major: 2, Minor: 0, Contract: test.CurrentCAPIContract},
 			},
 		})
 
@@ -342,7 +342,8 @@ func fakeClientForUpgrade() *fakeClient {
 		WithRepository(repository1).
 		WithRepository(repository2).
 		WithProviderInventory(core.Name(), core.Type(), "v1.0.0", "cluster-api-system", "watchingNS").
-		WithProviderInventory(infra.Name(), infra.Type(), "v2.0.0", "infra-system", "watchingNS")
+		WithProviderInventory(infra.Name(), infra.Type(), "v2.0.0", "infra-system", "watchingNS").
+		WithObjs(test.FakeCAPISetupObjects()...)
 
 	client := newFakeClient(config1).
 		WithRepository(repository1).

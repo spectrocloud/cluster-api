@@ -233,8 +233,6 @@ func (r *ClusterResourceSetReconciler) getClustersByClusterResourceSetSelector(c
 func (r *ClusterResourceSetReconciler) ApplyClusterResourceSet(ctx context.Context, cluster *clusterv1.Cluster, clusterResourceSet *addonsv1.ClusterResourceSet) error {
 	logger := r.Log.WithValues("clusterresourceset", clusterResourceSet.Name, "namespace", clusterResourceSet.Namespace, "cluster-name", cluster.Name)
 
-	logger.Info("Applying ClusterResourceSet to cluster")
-
 	remoteClient, err := r.Tracker.GetClient(ctx, util.ObjectKey(cluster))
 	if err != nil {
 		conditions.MarkFalse(clusterResourceSet, addonsv1.ResourcesAppliedCondition, addonsv1.RemoteClusterClientFailedReason, clusterv1.ConditionSeverityError, err.Error())
@@ -386,16 +384,15 @@ func (r *ClusterResourceSetReconciler) getResource(resourceRef addonsv1.Resource
 		if resourceSecret.Type != addonsv1.ClusterResourceSetSecretType {
 			return nil, ErrSecretTypeNotSupported
 		}
-
 		resourceInterface = resourceSecret.DeepCopyObject()
 	}
 
-	raw, err := runtime.DefaultUnstructuredConverter.ToUnstructured(resourceInterface)
-	if err != nil {
+	raw := &unstructured.Unstructured{}
+	if err := r.scheme.Convert(resourceInterface, raw, nil); err != nil {
 		return nil, err
 	}
 
-	return &unstructured.Unstructured{Object: raw}, nil
+	return raw, nil
 }
 
 // patchOwnerRefToResource adds the ClusterResourceSet as a OwnerReference to the resource.

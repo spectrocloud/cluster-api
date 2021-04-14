@@ -36,18 +36,18 @@ export KUBECONFIG=<...>
 
 [kind] is not designed for production use.
 
-**Minimum [kind] supported version**: v0.7.0
+**Minimum [kind] supported version**: v0.9.0
 
 </aside>
 
 [kind] can be used for creating a local Kubernetes cluster for development environments or for
 the creation of a temporary [bootstrap cluster] used to provision a target [management cluster] on the selected infrastructure provider.
 
-The installation procedure depends on the version of kind; if you are planning to user the docker infrastructure provider,
+The installation procedure depends on the version of kind; if you are planning to user the docker infrastructure provider (CAPD),
 please follow the additional instructions in the dedicated tab:
 
-{{#tabs name:"install-kind" tabs:"v0.7.x,v0.8.x,Docker"}}
-{{#tab v0.7.x}}
+{{#tabs name:"install-kind" tabs:">=v0.9.x, Docker infrastructure provider - CAPD"}}
+{{#tab >=v0.9.x}}
 
 Create the kind cluster:
 ```bash
@@ -59,23 +59,7 @@ kubectl cluster-info
 ```
 
 {{#/tab }}
-{{#tab v0.8.x}}
-
-Export the variable **KIND_EXPERIMENTAL_DOCKER_NETWORK=bridge** to let kind run in the default **bridge** network:
-```bash
-export KIND_EXPERIMENTAL_DOCKER_NETWORK=bridge
-```
-Create the kind cluster:
-```bash
-kind create cluster
-```
-Test to ensure the local kind cluster is ready:
-```
-kubectl cluster-info
-```
-
-{{#/tab }}
-{{#tab Docker}}
+{{#tab Docker infrastructure provider - CAPD}}
 
 Run the following command to create a kind config file for allowing the Docker provider to access Docker on the host:
 
@@ -89,6 +73,14 @@ nodes:
     - hostPath: /var/run/docker.sock
       containerPath: /var/run/docker.sock
 EOF
+```
+
+If you are planning to use a CAPD version v0.3.15 or older, export the variable 
+**KIND_EXPERIMENTAL_DOCKER_NETWORK=bridge** to let kind run in the **bridge** network, the same used
+by older versions of the Docker infrastructure provider:
+
+```bash
+export KIND_EXPERIMENTAL_DOCKER_NETWORK=bridge
 ```
 
 Then follow the instruction for your kind version using  `kind create cluster --config kind-cluster-with-extramounts.yaml` 
@@ -108,7 +100,7 @@ Download the latest release; for example, to download version v0.3.0 on linux, t
 ```
 curl -L {{#releaselink gomodule:"sigs.k8s.io/cluster-api" asset:"clusterctl-linux-amd64" version:"0.3.x"}} -o clusterctl
 ```
-Make the kubectl binary executable.
+Make the clusterctl binary executable.
 ```
 chmod +x ./clusterctl
 ```
@@ -129,7 +121,7 @@ Download the latest release; for example, to download version v0.3.0 on macOS, t
 ```
 curl -L {{#releaselink gomodule:"sigs.k8s.io/cluster-api" asset:"clusterctl-darwin-amd64" version:"0.3.x"}} -o clusterctl
 ```
-Make the kubectl binary executable.
+Make the clusterctl binary executable.
 ```
 chmod +x ./clusterctl
 ```
@@ -378,9 +370,17 @@ See the [AWS provider prerequisites] document for more details.
 {{#/tab }}
 {{#tab Azure}}
 
+<aside class="note warning">
+
+<h1>Warning</h1>
+
+Make sure you choose a VM size which is available in the desired location for your subscription. To see available SKUs, use `az vm list-skus -l <your_location> -r virtualMachines -o table` 
+
+</aside>
+
 ```bash
-# Name of the Azure datacenter location.
-export AZURE_LOCATION="centralus"
+# Name of the Azure datacenter location. Change this value to your desired location.
+export AZURE_LOCATION="centralus" 
 
 # Select VM types.
 export AZURE_CONTROL_PLANE_MACHINE_TYPE="Standard_D2s_v3"
@@ -546,7 +546,7 @@ For the purpose of this tutorial, we'll name our cluster capi-quickstart.
 
 ```bash
 clusterctl config cluster capi-quickstart \
-  --kubernetes-version v1.18.2 \
+  --kubernetes-version v1.18.16 \
   --control-plane-machine-count=3 \
   --worker-machine-count=3 \
   > capi-quickstart.yaml
@@ -565,7 +565,7 @@ The Docker provider is not designed for production use and is intended for devel
 
 ```bash
 clusterctl config cluster capi-quickstart --flavor development \
-  --kubernetes-version v1.18.2 \
+  --kubernetes-version v1.18.16 \
   --control-plane-machine-count=3 \
   --worker-machine-count=3 \
   > capi-quickstart.yaml
@@ -609,6 +609,12 @@ The cluster will now start provisioning. You can check status with:
 kubectl get cluster --all-namespaces
 ```
 
+You can also get an "at glance" view of the cluster and its resources by running:
+
+```bash
+clusterctl describe cluster capi-quickstart
+```
+
 To verify the first control plane is up:
 
 ```bash
@@ -618,8 +624,8 @@ kubectl get kubeadmcontrolplane --all-namespaces
 You should see an output is similar to this:
 
 ```bash
-NAME                              READY   INITIALIZED   REPLICAS   READY REPLICAS   UPDATED REPLICAS   UNAVAILABLE REPLICAS
-capi-quickstart-control-plane             true          3                           3                  3
+NAME                            INITIALIZED   API SERVER AVAILABLE   VERSION    REPLICAS   READY   UPDATED   UNAVAILABLE
+capi-quickstart-control-plane   true                                 v1.18.16   3                  3         3
 ```
 
 <aside class="note warning">
