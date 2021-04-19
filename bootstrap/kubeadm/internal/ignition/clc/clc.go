@@ -29,7 +29,7 @@ import (
 	clct "github.com/flatcar-linux/container-linux-config-transpiler/config"
 	"github.com/pkg/errors"
 
-	bootstrapv1 "sigs.k8s.io/cluster-api/bootstrap/kubeadm/api/v1alpha4"
+	bootstrapv1 "sigs.k8s.io/cluster-api/bootstrap/kubeadm/api/v1alpha3"
 	"sigs.k8s.io/cluster-api/bootstrap/kubeadm/internal/cloudinit"
 )
 
@@ -82,6 +82,8 @@ systemd:
         # To not restart the unit when it exits, as it is expected.
         Type=oneshot
         ExecStart=/etc/kubeadm.sh
+        StandardOutput=append:/var/log/kubeadm.log
+        StandardError=append:/var/log/kubeadm.err.log
         [Install]
         WantedBy=multi-user.target
     {{- if .NTP }}{{ if .NTP.Enabled }}
@@ -108,6 +110,10 @@ systemd:
         WantedBy=multi-user.target
     {{- end }}
 storage:
+  links:
+  - filesystem: "root"
+    path: "/etc/systemd/system/multi-user.target.wants/kubeadm.service"
+    target: "/etc/systemd/system/kubeadm.service"
   {{- if .DiskSetup }}{{- if .DiskSetup.Partitions }}
   disks:
     {{- range .DiskSetup.Partitions }}
@@ -187,6 +193,9 @@ storage:
         inline: |
           #!/bin/bash
           set -e
+          export PATH="$PATH:/opt/bin"
+          echo "New path now is"
+          echo $PATH
           {{ range .PreKubeadmCommands }}
           {{ . }}
           {{- end }}

@@ -21,7 +21,7 @@ package ignition
 import (
 	"fmt"
 
-	bootstrapv1 "sigs.k8s.io/cluster-api/bootstrap/kubeadm/api/v1alpha4"
+	bootstrapv1 "sigs.k8s.io/cluster-api/bootstrap/kubeadm/api/v1alpha3"
 	"sigs.k8s.io/cluster-api/bootstrap/kubeadm/internal/cloudinit"
 	"sigs.k8s.io/cluster-api/bootstrap/kubeadm/internal/ignition/clc"
 )
@@ -29,7 +29,7 @@ import (
 const (
 	joinSubcommand         = "join"
 	initSubcommand         = "init"
-	kubeadmCommandTemplate = "kubeadm %s --config /etc/kubeadm.yml %s"
+	kubeadmCommandTemplate = "kubeadm %s --config /etc/kubeadm.yml %s --cri-socket /run/docker/libcontainerd/docker-containerd.sock"
 )
 
 // NodeInput defines the context to generate a node user data.
