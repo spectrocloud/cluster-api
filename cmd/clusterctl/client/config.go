@@ -397,8 +397,8 @@ func (c *clusterctlClient) templateOptionsToVariables(options GetClusterTemplate
 			options.ControlPlaneMachineCount = &i
 		}
 	}
-	if *options.ControlPlaneMachineCount < 1 {
-		return errors.Errorf("invalid ControlPlaneMachineCount. Please use a number greater or equal than 1")
+	if *options.ControlPlaneMachineCount < 0 {
+		return errors.Errorf("invalid ControlPlaneMachineCount. Please use a number greater or equal than 0")
 	}
 	c.configClient.Variables().Set("CONTROL_PLANE_MACHINE_COUNT", strconv.FormatInt(*options.ControlPlaneMachineCount, 10))
 
