@@ -24,9 +24,11 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/utils/pointer"
 	bootstrapv1 "sigs.k8s.io/cluster-api/bootstrap/kubeadm/api/v1alpha3"
 	kubeadmv1beta1 "sigs.k8s.io/cluster-api/bootstrap/kubeadm/types/v1beta1"
+	utildefaulting "sigs.k8s.io/cluster-api/util/defaulting"
 )
 
 func TestKubeadmControlPlaneDefault(t *testing.T) {
@@ -39,12 +41,21 @@ func TestKubeadmControlPlaneDefault(t *testing.T) {
 		Spec: KubeadmControlPlaneSpec{
 			InfrastructureTemplate: corev1.ObjectReference{},
 			Version:                "1.18.3",
+			RolloutStrategy:        &RolloutStrategy{},
 		},
 	}
+	updateDefaultingValidationKCP := kcp.DeepCopy()
+	updateDefaultingValidationKCP.Spec.Version = "v1.18.3"
+	updateDefaultingValidationKCP.Spec.InfrastructureTemplate = corev1.ObjectReference{
+		Namespace: "foo",
+	}
+	t.Run("for KubeadmControlPLane", utildefaulting.DefaultValidateTest(updateDefaultingValidationKCP))
 	kcp.Default()
 
 	g.Expect(kcp.Spec.InfrastructureTemplate.Namespace).To(Equal(kcp.Namespace))
 	g.Expect(kcp.Spec.Version).To(Equal("v1.18.3"))
+	g.Expect(kcp.Spec.RolloutStrategy.Type).To(Equal(RollingUpdateStrategyType))
+	g.Expect(kcp.Spec.RolloutStrategy.RollingUpdate.MaxSurge.IntVal).To(Equal(int32(1)))
 }
 
 func TestKubeadmControlPlaneValidateCreate(t *testing.T) {
@@ -60,10 +71,21 @@ func TestKubeadmControlPlaneValidateCreate(t *testing.T) {
 			},
 			Replicas: pointer.Int32Ptr(1),
 			Version:  "v1.19.0",
+			RolloutStrategy: &RolloutStrategy{
+				Type: RollingUpdateStrategyType,
+				RollingUpdate: &RollingUpdate{
+					MaxSurge: &intstr.IntOrString{
+						IntVal: 1,
+					},
+				},
+			},
 		},
 	}
 	invalidNamespace := valid.DeepCopy()
 	invalidNamespace.Spec.InfrastructureTemplate.Namespace = "bar"
+
+	invalidMaxSurge := valid.DeepCopy()
+	invalidMaxSurge.Spec.RolloutStrategy.RollingUpdate.MaxSurge.IntVal = int32(3)
 
 	missingReplicas := valid.DeepCopy()
 	missingReplicas.Spec.Replicas = nil
@@ -142,6 +164,11 @@ func TestKubeadmControlPlaneValidateCreate(t *testing.T) {
 			expectErr: true,
 			kcp:       invalidVersion1,
 		},
+		{
+			name:      "should return error when maxSurge is not 1",
+			expectErr: true,
+			kcp:       invalidMaxSurge,
+		},
 	}
 
 	for _, tt := range tests {
@@ -169,6 +196,14 @@ func TestKubeadmControlPlaneValidateUpdate(t *testing.T) {
 				Name:      "infraTemplate",
 			},
 			Replicas: pointer.Int32Ptr(1),
+			RolloutStrategy: &RolloutStrategy{
+				Type: RollingUpdateStrategyType,
+				RollingUpdate: &RollingUpdate{
+					MaxSurge: &intstr.IntOrString{
+						IntVal: 1,
+					},
+				},
+			},
 			KubeadmConfigSpec: bootstrapv1.KubeadmConfigSpec{
 				InitConfiguration: &kubeadmv1beta1.InitConfiguration{
 					LocalAPIEndpoint: kubeadmv1beta1.APIEndpoint{
@@ -221,6 +256,13 @@ func TestKubeadmControlPlaneValidateUpdate(t *testing.T) {
 			Version: "v1.16.6",
 		},
 	}
+
+	updateMaxSurgeVal := before.DeepCopy()
+	updateMaxSurgeVal.Spec.RolloutStrategy.RollingUpdate.MaxSurge.IntVal = int32(0)
+	updateMaxSurgeVal.Spec.Replicas = pointer.Int32Ptr(3)
+
+	wrongReplicaCountForScaleIn := before.DeepCopy()
+	wrongReplicaCountForScaleIn.Spec.RolloutStrategy.RollingUpdate.MaxSurge.IntVal = int32(0)
 
 	invalidUpdateKubeadmConfigInit := before.DeepCopy()
 	invalidUpdateKubeadmConfigInit.Spec.KubeadmConfigSpec.InitConfiguration = &kubeadmv1beta1.InitConfiguration{}
@@ -319,17 +361,24 @@ func TestKubeadmControlPlaneValidateUpdate(t *testing.T) {
 
 	apiServer := before.DeepCopy()
 	apiServer.Spec.KubeadmConfigSpec.ClusterConfiguration.APIServer = kubeadmv1beta1.APIServer{
+		ControlPlaneComponent: kubeadmv1beta1.ControlPlaneComponent{
+			ExtraArgs:    map[string]string{"foo": "bar"},
+			ExtraVolumes: []kubeadmv1beta1.HostPathMount{{Name: "mount1"}},
+		},
 		TimeoutForControlPlane: &metav1.Duration{Duration: 5 * time.Minute},
+		CertSANs:               []string{"foo", "bar"},
 	}
 
 	controllerManager := before.DeepCopy()
 	controllerManager.Spec.KubeadmConfigSpec.ClusterConfiguration.ControllerManager = kubeadmv1beta1.ControlPlaneComponent{
-		ExtraArgs: map[string]string{"controller manager field": "controller manager value"},
+		ExtraArgs:    map[string]string{"controller manager field": "controller manager value"},
+		ExtraVolumes: []kubeadmv1beta1.HostPathMount{{Name: "mount", HostPath: "/foo", MountPath: "bar", ReadOnly: true, PathType: "File"}},
 	}
 
 	scheduler := before.DeepCopy()
 	scheduler.Spec.KubeadmConfigSpec.ClusterConfiguration.Scheduler = kubeadmv1beta1.ControlPlaneComponent{
-		ExtraArgs: map[string]string{"scheduler field": "scheduler value"},
+		ExtraArgs:    map[string]string{"scheduler field": "scheduler value"},
+		ExtraVolumes: []kubeadmv1beta1.HostPathMount{{Name: "mount", HostPath: "/foo", MountPath: "bar", ReadOnly: true, PathType: "File"}},
 	}
 
 	dns := before.DeepCopy()
@@ -467,8 +516,8 @@ func TestKubeadmControlPlaneValidateUpdate(t *testing.T) {
 			kcp:       validUpdate,
 		},
 		{
-			name:      "should not return error when trying to mutate the kubeadmconfigspec initconfiguration",
-			expectErr: false,
+			name:      "should return error when trying to mutate the kubeadmconfigspec initconfiguration",
+			expectErr: true,
 			before:    before,
 			kcp:       invalidUpdateKubeadmConfigInit,
 		},
@@ -479,14 +528,14 @@ func TestKubeadmControlPlaneValidateUpdate(t *testing.T) {
 			kcp:       validUpdateKubeadmConfigInit,
 		},
 		{
-			name:      "should not return error when trying to mutate the kubeadmconfigspec clusterconfiguration",
-			expectErr: false,
+			name:      "should return error when trying to mutate the kubeadmconfigspec clusterconfiguration",
+			expectErr: true,
 			before:    before,
 			kcp:       invalidUpdateKubeadmConfigCluster,
 		},
 		{
-			name:      "should not return error when trying to mutate the kubeadmconfigspec joinconfiguration",
-			expectErr: false,
+			name:      "should return error when trying to mutate the kubeadmconfigspec joinconfiguration",
+			expectErr: true,
 			before:    before,
 			kcp:       invalidUpdateKubeadmConfigJoin,
 		},
@@ -545,37 +594,37 @@ func TestKubeadmControlPlaneValidateUpdate(t *testing.T) {
 			kcp:       etcdLocalImageInvalidTag,
 		},
 		{
-			name:      "should not fail when making a change to the cluster config's networking struct",
-			expectErr: false,
+			name:      "should fail when making a change to the cluster config's networking struct",
+			expectErr: true,
 			before:    before,
 			kcp:       networking,
 		},
 		{
-			name:      "should not fail when making a change to the cluster config's kubernetes version",
-			expectErr: false,
+			name:      "should fail when making a change to the cluster config's kubernetes version",
+			expectErr: true,
 			before:    before,
 			kcp:       kubernetesVersion,
 		},
 		{
-			name:      "should not fail when making a change to the cluster config's controlPlaneEndpoint",
-			expectErr: false,
+			name:      "should fail when making a change to the cluster config's controlPlaneEndpoint",
+			expectErr: true,
 			before:    before,
 			kcp:       controlPlaneEndpoint,
 		},
 		{
-			name:      "should not fail when making a change to the cluster config's apiServer",
+			name:      "should allow changes to the cluster config's apiServer",
 			expectErr: false,
 			before:    before,
 			kcp:       apiServer,
 		},
 		{
-			name:      "should not fail when making a change to the cluster config's controllerManager",
+			name:      "should allow changes to the cluster config's controllerManager",
 			expectErr: false,
 			before:    before,
 			kcp:       controllerManager,
 		},
 		{
-			name:      "should not fail when making a change to the cluster config's scheduler",
+			name:      "should allow changes to the cluster config's scheduler",
 			expectErr: false,
 			before:    before,
 			kcp:       scheduler,
@@ -617,8 +666,8 @@ func TestKubeadmControlPlaneValidateUpdate(t *testing.T) {
 			kcp:       dnsInvalidCoreDNSToVersion,
 		},
 		{
-			name:      "should not fail when making a change to the cluster config's certificatesDir",
-			expectErr: false,
+			name:      "should fail when making a change to the cluster config's certificatesDir",
+			expectErr: true,
 			before:    before,
 			kcp:       certificatesDir,
 		},
@@ -629,56 +678,56 @@ func TestKubeadmControlPlaneValidateUpdate(t *testing.T) {
 			kcp:       imageRepository,
 		},
 		{
-			name:      "should not fail when making a change to the cluster config's useHyperKubeImage field",
-			expectErr: false,
+			name:      "should fail when making a change to the cluster config's useHyperKubeImage field",
+			expectErr: true,
 			before:    before,
 			kcp:       useHyperKubeImage,
 		},
 		{
-			name:      "should not fail when making a change to the cluster config's featureGates",
-			expectErr: false,
+			name:      "should fail when making a change to the cluster config's featureGates",
+			expectErr: true,
 			before:    before,
 			kcp:       featureGates,
 		},
 		{
-			name:      "should not fail when making a change to the cluster config's local etcd's configuration localDataDir field",
-			expectErr: false,
+			name:      "should fail when making a change to the cluster config's local etcd's configuration localDataDir field",
+			expectErr: true,
 			before:    before,
 			kcp:       localDataDir,
 		},
 		{
-			name:      "should not fail when making a change to the cluster config's local etcd's configuration localPeerCertSANs field",
-			expectErr: false,
+			name:      "should fail when making a change to the cluster config's local etcd's configuration localPeerCertSANs field",
+			expectErr: true,
 			before:    before,
 			kcp:       localPeerCertSANs,
 		},
 		{
-			name:      "should not fail when making a change to the cluster config's local etcd's configuration localServerCertSANs field",
-			expectErr: false,
+			name:      "should fail when making a change to the cluster config's local etcd's configuration localServerCertSANs field",
+			expectErr: true,
 			before:    before,
 			kcp:       localServerCertSANs,
 		},
 		{
-			name:      "should not fail when making a change to the cluster config's local etcd's configuration localExtraArgs field",
-			expectErr: false,
+			name:      "should fail when making a change to the cluster config's local etcd's configuration localExtraArgs field",
+			expectErr: true,
 			before:    before,
 			kcp:       localExtraArgs,
 		},
 		{
-			name:      "should not fail when making a change to the cluster config's external etcd's configuration",
-			expectErr: false,
+			name:      "should fail when making a change to the cluster config's external etcd's configuration",
+			expectErr: true,
 			before:    before,
 			kcp:       externalEtcd,
 		},
 		{
-			name:      "should not fail when attempting to unset the etcd local object",
-			expectErr: false,
+			name:      "should fail when attempting to unset the etcd local object",
+			expectErr: true,
 			before:    etcdLocalImageTag,
 			kcp:       unsetEtcd,
 		},
 		{
-			name:      "should not fail when modifying a field that is not the local etcd image metadata",
-			expectErr: false,
+			name:      "should fail when modifying a field that is not the local etcd image metadata",
+			expectErr: true,
 			before:    localDataDir,
 			kcp:       modifyLocalDataDir,
 		},
@@ -718,6 +767,18 @@ func TestKubeadmControlPlaneValidateUpdate(t *testing.T) {
 			before:    disallowedUpgrade118Prev,
 			kcp:       disallowedUpgrade119Version,
 		},
+		{
+			name:      "should not return an error when maxSurge value is updated to 0",
+			expectErr: false,
+			before:    before,
+			kcp:       updateMaxSurgeVal,
+		},
+		{
+			name:      "should return an error when maxSurge value is updated to 0, but replica count is < 3",
+			expectErr: true,
+			before:    before,
+			kcp:       wrongReplicaCountForScaleIn,
+		},
 	}
 
 	for _, tt := range tests {
@@ -729,6 +790,56 @@ func TestKubeadmControlPlaneValidateUpdate(t *testing.T) {
 				g.Expect(err).To(HaveOccurred())
 			} else {
 				g.Expect(err).To(Succeed())
+			}
+		})
+	}
+}
+
+func TestKubeadmControlPlaneValidateUpdateAfterDefaulting(t *testing.T) {
+	before := &KubeadmControlPlane{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test",
+			Namespace: "foo",
+		},
+		Spec: KubeadmControlPlaneSpec{
+			Version: "v1.19.0",
+			InfrastructureTemplate: corev1.ObjectReference{
+				Namespace: "foo",
+				Name:      "infraTemplate",
+			},
+		},
+	}
+
+	afterDefault := before.DeepCopy()
+	afterDefault.Default()
+
+	tests := []struct {
+		name      string
+		expectErr bool
+		before    *KubeadmControlPlane
+		kcp       *KubeadmControlPlane
+	}{
+		{
+			name:      "update should succeed after defaulting",
+			expectErr: false,
+			before:    before,
+			kcp:       afterDefault,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			g := NewWithT(t)
+			err := tt.kcp.ValidateUpdate(tt.before.DeepCopy())
+			if tt.expectErr {
+				g.Expect(err).To(HaveOccurred())
+			} else {
+				g.Expect(err).To(Succeed())
+				g.Expect(tt.kcp.Spec.InfrastructureTemplate.Namespace).To(Equal(tt.before.Namespace))
+				g.Expect(tt.kcp.Spec.Version).To(Equal("v1.19.0"))
+				g.Expect(tt.kcp.Spec.RolloutStrategy.Type).To(Equal(RollingUpdateStrategyType))
+				g.Expect(tt.kcp.Spec.RolloutStrategy.RollingUpdate.MaxSurge.IntVal).To(Equal(int32(1)))
+				g.Expect(tt.kcp.Spec.Replicas).To(Equal(pointer.Int32Ptr(1)))
 			}
 		})
 	}

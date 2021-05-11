@@ -123,6 +123,39 @@ func Test_certManagerClient_getManifestObjects(t *testing.T) {
 				}
 			},
 		},
+		{
+			name:      "every Deployments should have a toleration for the node-role.kubernetes.io/master:NoSchedule taint ",
+			expectErr: false,
+			assert: func(t *testing.T, objs []unstructured.Unstructured) {
+				masterNoScheduleToleration := corev1.Toleration{
+					Key:    "node-role.kubernetes.io/master",
+					Effect: corev1.TaintEffectNoSchedule,
+				}
+				for i := range objs {
+					o := objs[i]
+					gvk := o.GroupVersionKind()
+					// As of Kubernetes 1.16, only apps/v1.Deployment are
+					// served, and CAPI >= v1alpha3 only supports >= 1.16.
+					if gvk.Group == "apps" && gvk.Kind == "Deployment" && gvk.Version == "v1" {
+						d := &appsv1.Deployment{}
+						err := scheme.Scheme.Convert(&o, d, nil)
+						if err != nil {
+							t.Errorf("did not expect err, got %s", err)
+						}
+						found := false
+						for _, t := range d.Spec.Template.Spec.Tolerations {
+							if t.MatchToleration(&masterNoScheduleToleration) {
+								found = true
+								break
+							}
+						}
+						if !found {
+							t.Errorf("Expected to find Deployment %s with Toleration %#v", d.Name, masterNoScheduleToleration)
+						}
+					}
+				}
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -261,14 +294,14 @@ func Test_shouldUpgrade(t *testing.T) {
 						Object: map[string]interface{}{
 							"metadata": map[string]interface{}{
 								"annotations": map[string]interface{}{
-									certmanagerVersionAnnotation: "v0.11.0",
+									certmanagerVersionAnnotation: "v0.16.1",
 								},
 							},
 						},
 					},
 				},
 			},
-			wantVersion: "v0.11.0",
+			wantVersion: "v0.16.1",
 			want:        true,
 			wantErr:     false,
 		},
@@ -300,7 +333,7 @@ func Test_shouldUpgrade(t *testing.T) {
 							"kind": "Endpoints",
 							"metadata": map[string]interface{}{
 								"annotations": map[string]interface{}{
-									certmanagerVersionAnnotation: "v0.11.0",
+									certmanagerVersionAnnotation: "foo",
 								},
 							},
 						},
@@ -536,13 +569,13 @@ func Test_certManagerClient_PlanUpgrade(t *testing.T) {
 					ObjectMeta: metav1.ObjectMeta{
 						Name:        "cert-manager",
 						Labels:      map[string]string{clusterctlv1.ClusterctlCoreLabelName: "cert-manager"},
-						Annotations: map[string]string{certmanagerVersionAnnotation: "v0.16.0", certmanagerHashAnnotation: "some-hash"},
+						Annotations: map[string]string{certmanagerVersionAnnotation: "v0.16.1", certmanagerHashAnnotation: "some-hash"},
 					},
 				},
 			},
 			expectErr: false,
 			expectedPlan: CertManagerUpgradePlan{
-				From:          "v0.16.0",
+				From:          "v0.16.1",
 				To:            embeddedCertManagerManifestVersion,
 				ShouldUpgrade: true,
 			},
@@ -564,7 +597,7 @@ func Test_certManagerClient_PlanUpgrade(t *testing.T) {
 			},
 			expectErr: false,
 			expectedPlan: CertManagerUpgradePlan{
-				From:          "v0.16.1 (some-other-hash)",
+				From:          "v1.1.0 (some-other-hash)",
 				To:            embeddedCertManagerManifestVersion,
 				ShouldUpgrade: true,
 			},
