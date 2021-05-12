@@ -71,6 +71,8 @@ passwd:
 {{- end }}
 systemd:
   units:
+    - name: locksmithd.service
+      mask: true
     - name: kubeadm.service
       enabled: true
       contents: |
