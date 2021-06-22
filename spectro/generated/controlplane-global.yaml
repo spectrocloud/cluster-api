@@ -362,7 +362,7 @@ spec:
                         description: ImageRepository sets the container registry to
                           pull images from. If empty, `k8s.gcr.io` will be used by
                           default; in case of kubernetes version is a CI build (kubernetes
-                          version starts with `ci/` or `ci-cross/`) `gcr.io/kubernetes-ci-images`
+                          version starts with `ci/` or `ci-cross/`) `gcr.io/k8s-staging-ci-images`
                           will be used as a default for control plane components and
                           for kube-proxy, while `k8s.gcr.io` will be used for all
                           the other images.
@@ -1059,6 +1059,30 @@ spec:
                   This is a pointer to distinguish between explicit zero and not specified.
                 format: int32
                 type: integer
+              rolloutStrategy:
+                description: The RolloutStrategy to use to replace control plane machines
+                  with new ones.
+                properties:
+                  rollingUpdate:
+                    description: Rolling update config params. Present only if RolloutStrategyType
+                      = RollingUpdate.
+                    properties:
+                      maxSurge:
+                        anyOf:
+                        - type: integer
+                        - type: string
+                        description: 'The maximum number of control planes that can
+                          be scheduled above or under the desired number of control
+                          planes. Value can be an absolute number 1 or 0. Defaults
+                          to 1. Example: when this is set to 1, the control plane
+                          can be scaled up immediately when the rolling update starts.'
+                        x-kubernetes-int-or-string: true
+                    type: object
+                  type:
+                    description: Type of rollout. Currently the only supported strategy
+                      is "RollingUpdate". Default is RollingUpdate.
+                    type: string
+                type: object
               upgradeAfter:
                 description: UpgradeAfter is a field to indicate an upgrade should
                   be performed after the specified time even if no changes have been
@@ -1260,7 +1284,7 @@ spec:
         - --upstream=http://127.0.0.1:8080/
         - --logtostderr=true
         - --v=10
-        image: gcr.io/kubebuilder/kube-rbac-proxy:v0.4.1
+        image: gcr.io/kubebuilder/kube-rbac-proxy:v0.8.0
         name: kube-rbac-proxy
         ports:
         - containerPort: 8443

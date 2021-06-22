@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/blang/semver"
 	"github.com/pkg/errors"
 	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha3"
 	controlplanev1 "sigs.k8s.io/cluster-api/controlplane/kubeadm/api/v1alpha3"
@@ -79,10 +80,10 @@ func (r *KubeadmControlPlaneReconciler) reconcileUnhealthyMachines(ctx context.C
 
 	desiredReplicas := int(*controlPlane.KCP.Spec.Replicas)
 
-	// The cluster MUST have spec.replicas >= 3, because this is the smallest cluster size that allows any etcd failure tolerance.
-	if desiredReplicas < 3 {
-		logger.Info("A control plane machine needs remediation, but the number of desired replicas is less than 3. Skipping remediation", "UnhealthyMachine", machineToBeRemediated.Name, "Replicas", desiredReplicas)
-		conditions.MarkFalse(machineToBeRemediated, clusterv1.MachineOwnerRemediatedCondition, clusterv1.WaitingForRemediationReason, clusterv1.ConditionSeverityWarning, "KCP can't remediate if there are less than 3 desired replicas")
+	// The cluster MUST have more than one replica, because this is the smallest cluster size that allows any etcd failure tolerance.
+	if controlPlane.Machines.Len() <= 1 {
+		logger.Info("A control plane machine needs remediation, but the number of current replicas is less or equal to 1. Skipping remediation", "UnhealthyMachine", machineToBeRemediated.Name, "Replicas", controlPlane.Machines.Len())
+		conditions.MarkFalse(machineToBeRemediated, clusterv1.MachineOwnerRemediatedCondition, clusterv1.WaitingForRemediationReason, clusterv1.ConditionSeverityWarning, "KCP can't remediate if current replicas are less or equal then 1")
 		return ctrl.Result{}, nil
 	}
 
@@ -135,7 +136,12 @@ func (r *KubeadmControlPlaneReconciler) reconcileUnhealthyMachines(ctx context.C
 		}
 	}
 
-	if err := workloadCluster.RemoveMachineFromKubeadmConfigMap(ctx, machineToBeRemediated); err != nil {
+	kubernetesVersion := controlPlane.KCP.Spec.Version
+	parsedVersion, err := semver.ParseTolerant(kubernetesVersion)
+	if err != nil {
+		return ctrl.Result{}, errors.Wrapf(err, "failed to parse kubernetes version %q", kubernetesVersion)
+	}
+	if err := workloadCluster.RemoveMachineFromKubeadmConfigMap(ctx, machineToBeRemediated, parsedVersion); err != nil {
 		logger.Error(err, "Failed to remove machine from kubeadm ConfigMap")
 		return ctrl.Result{}, err
 	}
@@ -154,7 +160,7 @@ func (r *KubeadmControlPlaneReconciler) reconcileUnhealthyMachines(ctx context.C
 // without loosing etcd quorum.
 //
 // The answer mostly depend on the existence of other failing members on top of the one being deleted, and according
-// to the etcd fault tolerance specification (see https://github.com/etcd-io/etcd/blob/master/Documentation/faq.md#what-is-failure-tolerance):
+// to the etcd fault tolerance specification (see https://etcd.io/docs/v3.3/faq/#what-is-failure-tolerance):
 // - 3 CP cluster does not tolerate additional failing members on top of the one being deleted (the target
 //   cluster size after deletion is 2, fault tolerance 0)
 // - 5 CP cluster tolerates 1 additional failing members on top of the one being deleted (the target
@@ -164,7 +170,7 @@ func (r *KubeadmControlPlaneReconciler) reconcileUnhealthyMachines(ctx context.C
 // - etc.
 //
 // NOTE: this func assumes the list of members in sync with the list of machines/nodes, it is required to call reconcileEtcdMembers
-// ans well as reconcileControlPlaneConditions before this.
+// and well as reconcileControlPlaneConditions before this.
 func (r *KubeadmControlPlaneReconciler) canSafelyRemoveEtcdMember(ctx context.Context, controlPlane *internal.ControlPlane, machineToBeRemediated *clusterv1.Machine) (bool, error) {
 	logger := r.Log.WithValues("namespace", controlPlane.KCP.Namespace, "kubeadmControlPlane", controlPlane.KCP.Name, "cluster", controlPlane.Cluster.Name)
 
@@ -190,17 +196,8 @@ func (r *KubeadmControlPlaneReconciler) canSafelyRemoveEtcdMember(ctx context.Co
 		"currentTotalMembers", currentTotalMembers,
 		"currentMembers", etcdMembers)
 
-	// The cluster MUST have at least 3 members, because this is the smallest cluster size that allows any etcd failure tolerance.
-	//
-	// NOTE: This should not happen given that we are checking the number of replicas before calling this method, however
-	// given that this could be destructive, this is an additional safeguard.
-	if currentTotalMembers < 3 {
-		logger.Info("etcd cluster with less of 3 members can't be safely remediated")
-		return false, nil
-	}
-
-	targetTotalMembers := currentTotalMembers - 1
-	targetQuorum := targetTotalMembers/2.0 + 1
+	// Projects the target etcd cluster after remediation, considering all the etcd members except the one being remediated.
+	targetTotalMembers := 0
 	targetUnhealthyMembers := 0
 
 	healthyMembers := []string{}
@@ -210,6 +207,9 @@ func (r *KubeadmControlPlaneReconciler) canSafelyRemoveEtcdMember(ctx context.Co
 		if machineToBeRemediated.Status.NodeRef != nil && machineToBeRemediated.Status.NodeRef.Name == etcdMember {
 			continue
 		}
+
+		// Include the member in the target etcd cluster.
+		targetTotalMembers++
 
 		// Search for the machine corresponding to the etcd member.
 		var machine *clusterv1.Machine
@@ -241,15 +241,17 @@ func (r *KubeadmControlPlaneReconciler) canSafelyRemoveEtcdMember(ctx context.Co
 		healthyMembers = append(healthyMembers, fmt.Sprintf("%s (%s)", etcdMember, machine.Name))
 	}
 
+	// See https://etcd.io/docs/v3.3/faq/#what-is-failure-tolerance for fault tolerance formula explanation.
+	targetQuorum := (targetTotalMembers / 2.0) + 1
+	canSafelyRemediate := targetTotalMembers-targetUnhealthyMembers >= targetQuorum
+
 	logger.Info(fmt.Sprintf("etcd cluster projected after remediation of %s", machineToBeRemediated.Name),
 		"healthyMembers", healthyMembers,
 		"unhealthyMembers", unhealthyMembers,
 		"targetTotalMembers", targetTotalMembers,
 		"targetQuorum", targetQuorum,
 		"targetUnhealthyMembers", targetUnhealthyMembers,
-		"projectedQuorum", targetTotalMembers-targetUnhealthyMembers)
-	if targetTotalMembers-targetUnhealthyMembers >= targetQuorum {
-		return true, nil
-	}
-	return false, nil
+		"canSafelyRemediate", canSafelyRemediate)
+
+	return canSafelyRemediate, nil
 }
