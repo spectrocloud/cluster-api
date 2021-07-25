@@ -21,6 +21,7 @@ import (
 
 	"github.com/blang/semver"
 	"github.com/pkg/errors"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha3"
 	controlplanev1 "sigs.k8s.io/cluster-api/controlplane/kubeadm/api/v1alpha3"
 	"sigs.k8s.io/cluster-api/controlplane/kubeadm/internal"
@@ -98,6 +99,20 @@ func (r *KubeadmControlPlaneReconciler) upgradeControlPlane(
 
 	if err := workloadCluster.UpdateKubeletConfigMap(ctx, parsedVersion); err != nil {
 		return ctrl.Result{}, errors.Wrap(err, "failed to upgrade kubelet config map")
+	}
+
+	// this should be already handled by the defaulting webhook, but during rolling upgrade it is possible that
+	// kcp version got updated first before the webhook pod update, then the new kcp does not have the default value
+	// then later on when webhook pod updated, kcp.spec have no updates, so the value not set and controller will have nil pointer
+	// so do a quick hack here to set the default if it's empty
+	if kcp.Spec.RolloutStrategy == nil {
+		ios1 := intstr.FromInt(1)
+		kcp.Spec.RolloutStrategy = &controlplanev1.RolloutStrategy{
+			Type: controlplanev1.RollingUpdateStrategyType,
+			RollingUpdate: &controlplanev1.RollingUpdate{
+				MaxSurge: &ios1,
+			},
+		}
 	}
 
 	switch kcp.Spec.RolloutStrategy.Type {
