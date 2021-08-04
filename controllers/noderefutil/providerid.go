@@ -18,6 +18,7 @@ package noderefutil
 
 import (
 	"errors"
+	"fmt"
 	"regexp"
 	"strings"
 )
@@ -43,6 +44,11 @@ type ProviderID struct {
 */
 var providerIDRegex = regexp.MustCompile("^[^:]+://.*[^/]$")
 
+const (
+	aws   = "aws"
+	azure = "azure"
+)
+
 // NewProviderID parses the input string and returns a new ProviderID.
 func NewProviderID(id string) (*ProviderID, error) {
 	if id == "" {
@@ -56,8 +62,17 @@ func NewProviderID(id string) (*ProviderID, error) {
 	colonIndex := strings.Index(id, ":")
 	cloudProvider := id[0:colonIndex]
 
-	lastSlashIndex := strings.LastIndex(id, "/")
-	instance := id[lastSlashIndex+1:]
+	instance := ""
+
+	switch cloudProvider {
+	case azure:
+		splitProviderId := strings.Split(id, "/")
+		vmssIndex := len(splitProviderId) - 3
+		instance = fmt.Sprintf("%s-%s", splitProviderId[vmssIndex], splitProviderId[vmssIndex+2])
+	default:
+		lastSlashIndex := strings.LastIndex(id, "/")
+		instance = id[lastSlashIndex+1:]
+	}
 
 	res := &ProviderID{
 		original:      id,
