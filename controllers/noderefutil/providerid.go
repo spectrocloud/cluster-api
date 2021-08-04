@@ -18,7 +18,6 @@ package noderefutil
 
 import (
 	"errors"
-	"fmt"
 	"regexp"
 	"strings"
 )
@@ -66,9 +65,7 @@ func NewProviderID(id string) (*ProviderID, error) {
 
 	switch cloudProvider {
 	case azure:
-		splitProviderId := strings.Split(id, "/")
-		vmssIndex := len(splitProviderId) - 3
-		instance = fmt.Sprintf("%s-%s", splitProviderId[vmssIndex], splitProviderId[vmssIndex+2])
+		instance = id
 	default:
 		lastSlashIndex := strings.LastIndex(id, "/")
 		instance = id[lastSlashIndex+1:]

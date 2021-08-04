@@ -57,7 +57,7 @@ func TestNewProviderID(t *testing.T) {
 			name:          "multiple filled-in segments (aks format)",
 			input:         "azure:///subscriptions/<subscription-id>/resourceGroups/SPC_MC_-rg_capz-managed-aks_eastus/providers/Microsoft.Compute/virtualMachineScaleSets/aks-workerpool0-39475182-vmss/virtualMachines/0",
 			cloudProvider: azure,
-			expectedID:    "aks-workerpool0-39475182-vmss-0",
+			expectedID:    "azure:///subscriptions/<subscription-id>/resourceGroups/SPC_MC_-rg_capz-managed-aks_eastus/providers/Microsoft.Compute/virtualMachineScaleSets/aks-workerpool0-39475182-vmss/virtualMachines/0",
 		},
 	}
 
