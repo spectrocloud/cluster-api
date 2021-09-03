@@ -712,6 +712,7 @@ spec:
         - --metrics-addr=0
         - -v=4
         image: gcr.io/k8s-staging-cluster-api/capd-manager:dev
+        imagePullPolicy: Always
         livenessProbe:
           httpGet:
             path: /healthz

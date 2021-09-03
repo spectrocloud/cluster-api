@@ -52,6 +52,7 @@ var (
 	syncPeriod           time.Duration
 	concurrency          int
 	healthAddr           string
+	webhookPort          int
 )
 
 func init() {
@@ -81,7 +82,7 @@ func main() {
 		LeaderElectionID:       "controller-leader-election-capd",
 		SyncPeriod:             &syncPeriod,
 		HealthProbeBindAddress: healthAddr,
-		Port:                   9443,
+		Port:                   webhookPort,
 	})
 	if err != nil {
 		setupLog.Error(err, "unable to start manager")
@@ -109,6 +110,8 @@ func initFlags(fs *pflag.FlagSet) {
 		"The minimum interval at which watched resources are reconciled (e.g. 15m)")
 	fs.StringVar(&healthAddr, "health-addr", ":9440", "The address the health endpoint binds to.")
 	feature.MutableGates.AddFlag(fs)
+	fs.IntVar(&webhookPort, "webhook-port", 0,
+		"Webhook Server port, disabled by default. When enabled, the manager will only work as webhook server, no reconcilers are installed.")
 }
 
 func setupChecks(mgr ctrl.Manager) {
@@ -124,6 +127,9 @@ func setupChecks(mgr ctrl.Manager) {
 }
 
 func setupReconcilers(mgr ctrl.Manager) {
+	if webhookPort != 0 {
+		return
+	}
 	if err := (&controllers.DockerMachineReconciler{
 		Client: mgr.GetClient(),
 		Log:    ctrl.Log.WithName("controllers").WithName("DockerMachine"),
@@ -156,6 +162,9 @@ func setupReconcilers(mgr ctrl.Manager) {
 }
 
 func setupWebhooks(mgr ctrl.Manager) {
+	if webhookPort == 0 {
+		return
+	}
 	if err := (&infrav1.DockerMachineTemplate{}).SetupWebhookWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create webhook", "webhook", "DockerMachineTemplate")
 		os.Exit(1)
