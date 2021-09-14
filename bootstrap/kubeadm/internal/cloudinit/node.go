@@ -19,15 +19,19 @@ package cloudinit
 const (
 	nodeCloudInit = `{{.Header}}
 {{template "files" .WriteFiles}}
--   path: /tmp/kubeadm-join-config.yaml
+-   path: /run/kubeadm/kubeadm-join-config.yaml
     owner: root:root
     permissions: '0640'
     content: |
       ---
 {{.JoinConfiguration | Indent 6}}
+-   path: /run/cluster-api/placeholder
+    owner: root:root
+    permissions: '0640'
+    content: "This placeholder file is used to create the /run/cluster-api sub directory in a way that is compatible with both Linux and Windows (mkdir -p /run/cluster-api does not work with Windows)"
 runcmd:
 {{- template "commands" .PreKubeadmCommands }}
-  - {{ .KubeadmCommand }}
+  - {{ .KubeadmCommand }} && {{ .SentinelFileCommand }}
 {{- template "commands" .PostKubeadmCommands }}
 {{- template "ntp" .NTP }}
 {{- template "users" .Users }}
@@ -49,6 +53,5 @@ func NewNode(input *NodeInput) ([]byte, error) {
 		return nil, err
 	}
 	input.Header = cloudConfigHeader
-	input.WriteFiles = append(input.WriteFiles, input.AdditionalFiles...)
 	return generate("Node", nodeCloudInit, input)
 }

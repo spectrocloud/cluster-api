@@ -21,13 +21,13 @@ import (
 	"sort"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha3"
+	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha4"
 	"sigs.k8s.io/cluster-api/util/conditions"
-	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 // GetReadyCondition returns the ReadyCondition for an object, if defined.
-func GetReadyCondition(obj controllerutil.Object) *clusterv1.Condition {
+func GetReadyCondition(obj client.Object) *clusterv1.Condition {
 	getter := objToGetter(obj)
 	if getter == nil {
 		return nil
@@ -36,7 +36,7 @@ func GetReadyCondition(obj controllerutil.Object) *clusterv1.Condition {
 }
 
 // GetOtherConditions returns the other conditions (all the conditions except ready) for an object, if defined.
-func GetOtherConditions(obj controllerutil.Object) []*clusterv1.Condition {
+func GetOtherConditions(obj client.Object) []*clusterv1.Condition {
 	getter := objToGetter(obj)
 	if getter == nil {
 		return nil
@@ -54,7 +54,7 @@ func GetOtherConditions(obj controllerutil.Object) []*clusterv1.Condition {
 	return conditions
 }
 
-func setReadyCondition(obj controllerutil.Object, ready *clusterv1.Condition) {
+func setReadyCondition(obj client.Object, ready *clusterv1.Condition) {
 	setter := objToSetter(obj)
 	if setter == nil {
 		return
@@ -62,7 +62,7 @@ func setReadyCondition(obj controllerutil.Object, ready *clusterv1.Condition) {
 	conditions.Set(setter, ready)
 }
 
-func objToGetter(obj controllerutil.Object) conditions.Getter {
+func objToGetter(obj client.Object) conditions.Getter {
 	if getter, ok := obj.(conditions.Getter); ok {
 		return getter
 	}
@@ -75,7 +75,7 @@ func objToGetter(obj controllerutil.Object) conditions.Getter {
 	return getter
 }
 
-func objToSetter(obj controllerutil.Object) conditions.Setter {
+func objToSetter(obj client.Object) conditions.Setter {
 	if setter, ok := obj.(conditions.Setter); ok {
 		return setter
 	}
@@ -90,7 +90,7 @@ func objToSetter(obj controllerutil.Object) conditions.Setter {
 
 // VirtualObject return a new virtual object.
 func VirtualObject(namespace, kind, name string) *unstructured.Unstructured {
-	gk := "virtual.cluster.x-k8s.io/v1alpha3"
+	gk := "virtual.cluster.x-k8s.io/v1alpha4"
 	return &unstructured.Unstructured{
 		Object: map[string]interface{}{
 			"apiVersion": gk,

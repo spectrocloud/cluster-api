@@ -20,8 +20,9 @@ spec:
       - command:
         - /manager
         args:
-        - --enable-leader-election
-        - --feature-gates=MachinePool=${EXP_MACHINE_POOL:=false},ClusterResourceSet=${EXP_CLUSTER_RESOURCE_SET:=false}
+        - "--leader-elect"
+        - "--metrics-bind-addr=localhost:8080"
+        - "--feature-gates=MachinePool=${EXP_MACHINE_POOL:=false},ClusterResourceSet=${EXP_CLUSTER_RESOURCE_SET:=false},ClusterTopology=${CLUSTER_TOPOLOGY:=false}"
         image: controller:latest
         name: manager
         ports:
@@ -37,6 +38,7 @@ spec:
             path: /healthz
             port: healthz
       terminationGracePeriodSeconds: 10
+      serviceAccountName: manager
       tolerations:
         - effect: NoSchedule
           key: node-role.kubernetes.io/master

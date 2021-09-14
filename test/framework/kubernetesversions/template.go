@@ -14,20 +14,34 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// Package kubernetesversions implements kubernetes version functions.
 package kubernetesversions
 
 import (
+	"bytes"
+	_ "embed"
 	"errors"
+	"fmt"
 	"io/ioutil"
 	"os"
 	"os/exec"
 	"path"
+	"strings"
+	"text/template"
 
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	cabpkv1 "sigs.k8s.io/cluster-api/bootstrap/kubeadm/api/v1alpha3"
-	kcpv1 "sigs.k8s.io/cluster-api/controlplane/kubeadm/api/v1alpha3"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/cluster-api/test/framework"
 	"sigs.k8s.io/yaml"
+)
+
+var (
+	//go:embed data/debian_injection_script.envsubst.sh.tpl
+	debianInjectionScriptBytes string
+
+	debianInjectionScriptTemplate = template.Must(template.New("").Parse(debianInjectionScriptBytes))
+
+	//go:embed data/kustomization.yaml
+	kustomizationYAMLBytes string
 )
 
 type GenerateCIArtifactsInjectedTemplateForDebianInput struct {
@@ -46,6 +60,8 @@ type GenerateCIArtifactsInjectedTemplateForDebianInput struct {
 	// KubeadmControlPlaneName is the name of the KubeadmControlPlane resource
 	// that needs to have the Debian install script injected. Defaults to "${CLUSTER_NAME}-control-plane".
 	KubeadmControlPlaneName string
+	// KubeadmConfigName is the name of a KubeadmConfig that needs kustomizing. To be used in conjunction with MachinePools. Optional.
+	KubeadmConfigName string
 }
 
 // GenerateCIArtifactsInjectedTemplateForDebian takes a source clusterctl template
@@ -75,116 +91,134 @@ func GenerateCIArtifactsInjectedTemplateForDebian(input GenerateCIArtifactsInjec
 
 	kustomizedTemplate := path.Join(templateDir, "cluster-template-conformance-ci-artifacts.yaml")
 
-	kustomization, err := dataKustomizationYamlBytes()
+	if err := ioutil.WriteFile(path.Join(overlayDir, "kustomization.yaml"), []byte(kustomizationYAMLBytes), 0o600); err != nil {
+		return "", err
+	}
+
+	var debianInjectionScriptControlPlaneBytes bytes.Buffer
+	if err := debianInjectionScriptTemplate.Execute(&debianInjectionScriptControlPlaneBytes, map[string]bool{"IsControlPlaneMachine": true}); err != nil {
+		return "", err
+	}
+	patch, err := generateInjectScriptJSONPatch(input.SourceTemplate, "KubeadmControlPlane", input.KubeadmControlPlaneName, "/spec/kubeadmConfigSpec", "/usr/local/bin/ci-artifacts.sh", debianInjectionScriptControlPlaneBytes.String())
 	if err != nil {
 		return "", err
 	}
-
-	if err := ioutil.WriteFile(path.Join(overlayDir, "kustomization.yaml"), kustomization, 0o600); err != nil {
+	if err := os.WriteFile(path.Join(overlayDir, "kubeadmcontrolplane-patch.yaml"), patch, 0o600); err != nil {
 		return "", err
 	}
 
-	kustomizeVersions, err := generateKustomizeVersionsYaml(input.KubeadmControlPlaneName, input.KubeadmConfigTemplateName)
+	var debianInjectionScriptWorkerBytes bytes.Buffer
+	if err := debianInjectionScriptTemplate.Execute(&debianInjectionScriptWorkerBytes, map[string]bool{"IsControlPlaneMachine": false}); err != nil {
+		return "", err
+	}
+	patch, err = generateInjectScriptJSONPatch(input.SourceTemplate, "KubeadmConfigTemplate", input.KubeadmConfigTemplateName, "/spec/template/spec", "/usr/local/bin/ci-artifacts.sh", debianInjectionScriptWorkerBytes.String())
 	if err != nil {
 		return "", err
 	}
+	if err := os.WriteFile(path.Join(overlayDir, "kubeadmconfigtemplate-patch.yaml"), patch, 0o600); err != nil {
+		return "", err
+	}
 
-	if err := ioutil.WriteFile(path.Join(overlayDir, "kustomizeversions.yaml"), kustomizeVersions, 0o600); err != nil {
+	if err := os.WriteFile(path.Join(overlayDir, "ci-artifacts-source-template.yaml"), input.SourceTemplate, 0o600); err != nil {
 		return "", err
 	}
-	if err := ioutil.WriteFile(path.Join(overlayDir, "ci-artifacts-source-template.yaml"), input.SourceTemplate, 0o600); err != nil {
+	if err := os.WriteFile(path.Join(overlayDir, "platform-kustomization.yaml"), input.PlatformKustomization, 0o600); err != nil {
 		return "", err
 	}
-	if err := ioutil.WriteFile(path.Join(overlayDir, "platform-kustomization.yaml"), input.PlatformKustomization, 0o600); err != nil {
-		return "", err
-	}
-	cmd := exec.Command("kustomize", "build", overlayDir)
+	cmd := exec.Command("kustomize", "build", overlayDir) //nolint:gosec // We don't care about command injection here.
 	data, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", err
 	}
-	if err := ioutil.WriteFile(kustomizedTemplate, data, 0o600); err != nil {
+	if err := os.WriteFile(kustomizedTemplate, data, 0o600); err != nil {
 		return "", err
 	}
 	return kustomizedTemplate, nil
 }
 
-func generateKustomizeVersionsYaml(kcpName, kubeadmName string) ([]byte, error) {
-	kcp, err := generateKubeadmControlPlane(kcpName)
-	if err != nil {
-		return nil, err
-	}
-	kubeadm, err := generateKubeadmConfigTemplate(kubeadmName)
-	if err != nil {
-		return nil, err
-	}
-	kcpYaml, err := yaml.Marshal(kcp)
-	if err != nil {
-		return nil, err
-	}
-	kubeadmYaml, err := yaml.Marshal(kubeadm)
-	if err != nil {
-		return nil, err
-	}
-	fileStr := string(kcpYaml) + "\n---\n" + string(kubeadmYaml)
-	return []byte(fileStr), nil
+type jsonPatch struct {
+	Op    string      `json:"op"`
+	Path  string      `json:"path"`
+	Value interface{} `json:"value"`
 }
 
-func generateKubeadmConfigTemplate(name string) (*cabpkv1.KubeadmConfigTemplate, error) {
-	kubeadmSpec, err := generateKubeadmConfigSpec()
+// generateInjectScriptJSONPatch generates a JSON patch which injects a script
+// * objectKind: is the kind of the object we want to inject the script into
+// * objectName: is the name of the object we want to inject the script into
+// * jsonPatchPathPrefix: is the prefix of the 'files' and `preKubeadmCommands` arrays where we append the script
+// * scriptPath: is the path where the script will be stored at
+// * scriptContent: content of the script.
+func generateInjectScriptJSONPatch(sourceTemplate []byte, objectKind, objectName, jsonPatchPathPrefix, scriptPath, scriptContent string) ([]byte, error) {
+	filesPathExists, preKubeadmCommandsPathExists, err := checkIfArraysAlreadyExist(sourceTemplate, objectKind, objectName, jsonPatchPathPrefix)
 	if err != nil {
 		return nil, err
 	}
-	return &cabpkv1.KubeadmConfigTemplate{
-		TypeMeta: metav1.TypeMeta{
-			Kind:       "KubeadmConfigTemplate",
-			APIVersion: cabpkv1.GroupVersion.String(),
+
+	var patches []jsonPatch
+	if !filesPathExists {
+		patches = append(patches, jsonPatch{
+			Op:    "add",
+			Path:  fmt.Sprintf("%s/files", jsonPatchPathPrefix),
+			Value: []interface{}{},
+		})
+	}
+	patches = append(patches, jsonPatch{
+		Op:   "add",
+		Path: fmt.Sprintf("%s/files/-", jsonPatchPathPrefix),
+		Value: map[string]string{
+			"content":     scriptContent,
+			"owner":       "root:root",
+			"path":        scriptPath,
+			"permissions": "0750",
 		},
-		ObjectMeta: metav1.ObjectMeta{
-			Name: name,
-		},
-		Spec: cabpkv1.KubeadmConfigTemplateSpec{
-			Template: cabpkv1.KubeadmConfigTemplateResource{
-				Spec: *kubeadmSpec,
-			},
-		},
-	}, nil
+	})
+	if !preKubeadmCommandsPathExists {
+		patches = append(patches, jsonPatch{
+			Op:    "add",
+			Path:  fmt.Sprintf("%s/preKubeadmCommands", jsonPatchPathPrefix),
+			Value: []string{},
+		})
+	}
+	patches = append(patches, jsonPatch{
+		Op:    "add",
+		Path:  fmt.Sprintf("%s/preKubeadmCommands/-", jsonPatchPathPrefix),
+		Value: scriptPath,
+	})
+
+	return yaml.Marshal(patches)
 }
 
-func generateKubeadmControlPlane(name string) (*kcpv1.KubeadmControlPlane, error) {
-	kubeadmSpec, err := generateKubeadmConfigSpec()
-	if err != nil {
-		return nil, err
-	}
-	return &kcpv1.KubeadmControlPlane{
-		TypeMeta: metav1.TypeMeta{
-			Kind:       "KubeadmControlPlane",
-			APIVersion: kcpv1.GroupVersion.String(),
-		},
-		ObjectMeta: metav1.ObjectMeta{
-			Name: name,
-		},
-		Spec: kcpv1.KubeadmControlPlaneSpec{
-			KubeadmConfigSpec: *kubeadmSpec,
-			Version:           "${KUBERNETES_VERSION}",
-		},
-	}, nil
-}
+// checkIfArraysAlreadyExist check is the 'files' and 'preKubeadmCommands' arrays already exist below jsonPatchPathPrefix.
+func checkIfArraysAlreadyExist(sourceTemplate []byte, objectKind, objectName, jsonPatchPathPrefix string) (bool, bool, error) {
+	yamlDocs := strings.Split(string(sourceTemplate), "---")
+	for _, yamlDoc := range yamlDocs {
+		if yamlDoc == "" {
+			continue
+		}
+		var obj unstructured.Unstructured
+		if err := yaml.Unmarshal([]byte(yamlDoc), &obj); err != nil {
+			return false, false, err
+		}
 
-func generateKubeadmConfigSpec() (*cabpkv1.KubeadmConfigSpec, error) {
-	data, err := dataDebian_injection_scriptEnvsubstShBytes()
-	if err != nil {
-		return nil, err
+		if obj.GetKind() != objectKind {
+			continue
+		}
+		if obj.GetName() != objectName {
+			continue
+		}
+
+		pathSplit := strings.Split(strings.TrimPrefix(jsonPatchPathPrefix, "/"), "/")
+		filesPath := append(pathSplit, "files")
+		preKubeadmCommandsPath := append(pathSplit, "preKubeadmCommands")
+		_, filesPathExists, err := unstructured.NestedFieldCopy(obj.Object, filesPath...)
+		if err != nil {
+			return false, false, err
+		}
+		_, preKubeadmCommandsPathExists, err := unstructured.NestedFieldCopy(obj.Object, preKubeadmCommandsPath...)
+		if err != nil {
+			return false, false, err
+		}
+		return filesPathExists, preKubeadmCommandsPathExists, nil
 	}
-	return &cabpkv1.KubeadmConfigSpec{
-		Files: []cabpkv1.File{
-			{
-				Path:        "/usr/local/bin/ci-artifacts.sh",
-				Content:     string(data),
-				Owner:       "root:root",
-				Permissions: "0750",
-			},
-		},
-		PreKubeadmCommands: []string{"/usr/local/bin/ci-artifacts.sh"},
-	}, nil
+	return false, false, fmt.Errorf("could not find document with kind %q and name %q", objectKind, objectName)
 }

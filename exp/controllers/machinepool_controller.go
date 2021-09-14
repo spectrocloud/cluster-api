@@ -20,20 +20,18 @@ import (
 	"context"
 	"sync"
 
-	"github.com/go-logr/logr"
 	"github.com/pkg/errors"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/runtime"
 	kerrors "k8s.io/apimachinery/pkg/util/errors"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/record"
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha3"
+	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha4"
 	"sigs.k8s.io/cluster-api/controllers/external"
 	"sigs.k8s.io/cluster-api/controllers/remote"
-	expv1 "sigs.k8s.io/cluster-api/exp/api/v1alpha3"
+	expv1 "sigs.k8s.io/cluster-api/exp/api/v1alpha4"
 	"sigs.k8s.io/cluster-api/util"
 	"sigs.k8s.io/cluster-api/util/annotations"
 	"sigs.k8s.io/cluster-api/util/conditions"
@@ -50,22 +48,26 @@ import (
 // +kubebuilder:rbac:groups=core,resources=events,verbs=get;list;watch;create;patch
 // +kubebuilder:rbac:groups=core,resources=secrets,verbs=get;list;watch
 // +kubebuilder:rbac:groups=core,resources=nodes,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=exp.infrastructure.cluster.x-k8s.io;infrastructure.cluster.x-k8s.io;bootstrap.cluster.x-k8s.io,resources=*,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=exp.cluster.x-k8s.io,resources=machinepools;machinepools/status,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=infrastructure.cluster.x-k8s.io;bootstrap.cluster.x-k8s.io,resources=*,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=cluster.x-k8s.io,resources=machinepools;machinepools/status;machinepools/finalizers,verbs=get;list;watch;create;update;patch;delete
 
-// MachinePoolReconciler reconciles a MachinePool object
+const (
+	// MachinePoolControllerName defines the controller used when creating clients.
+	MachinePoolControllerName = "machinepool-controller"
+)
+
+// MachinePoolReconciler reconciles a MachinePool object.
 type MachinePoolReconciler struct {
-	Client client.Client
-	Log    logr.Logger
+	Client           client.Client
+	WatchFilterValue string
 
 	config           *rest.Config
 	controller       controller.Controller
 	recorder         record.EventRecorder
 	externalWatchers sync.Map
-	scheme           *runtime.Scheme
 }
 
-func (r *MachinePoolReconciler) SetupWithManager(mgr ctrl.Manager, options controller.Options) error {
+func (r *MachinePoolReconciler) SetupWithManager(ctx context.Context, mgr ctrl.Manager, options controller.Options) error {
 	clusterToMachinePools, err := util.ClusterToObjectsMapper(mgr.GetClient(), &expv1.MachinePoolList{}, mgr.GetScheme())
 	if err != nil {
 		return err
@@ -74,18 +76,16 @@ func (r *MachinePoolReconciler) SetupWithManager(mgr ctrl.Manager, options contr
 	c, err := ctrl.NewControllerManagedBy(mgr).
 		For(&expv1.MachinePool{}).
 		WithOptions(options).
-		WithEventFilter(predicates.ResourceNotPaused(r.Log)).
+		WithEventFilter(predicates.ResourceNotPausedAndHasFilterLabel(ctrl.LoggerFrom(ctx), r.WatchFilterValue)).
 		Build(r)
 	if err != nil {
 		return errors.Wrap(err, "failed setting up with a controller manager")
 	}
 	err = c.Watch(
 		&source.Kind{Type: &clusterv1.Cluster{}},
-		&handler.EnqueueRequestsFromMapFunc{
-			ToRequests: clusterToMachinePools,
-		},
+		handler.EnqueueRequestsFromMapFunc(clusterToMachinePools),
 		// TODO: should this wait for Cluster.Status.InfrastructureReady similar to Infra Machine resources?
-		predicates.ClusterUnpaused(r.Log),
+		predicates.ClusterUnpaused(ctrl.LoggerFrom(ctx)),
 	)
 	if err != nil {
 		return errors.Wrap(err, "failed adding Watch for Cluster to controller manager")
@@ -94,13 +94,11 @@ func (r *MachinePoolReconciler) SetupWithManager(mgr ctrl.Manager, options contr
 	r.controller = c
 	r.recorder = mgr.GetEventRecorderFor("machinepool-controller")
 	r.config = mgr.GetConfig()
-	r.scheme = mgr.GetScheme()
 	return nil
 }
 
-func (r *MachinePoolReconciler) Reconcile(req ctrl.Request) (_ ctrl.Result, reterr error) {
-	ctx := context.Background()
-	logger := r.Log.WithValues("machinepool", req.NamespacedName)
+func (r *MachinePoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (_ ctrl.Result, reterr error) {
+	log := ctrl.LoggerFrom(ctx)
 
 	mp := &expv1.MachinePool{}
 	if err := r.Client.Get(ctx, req.NamespacedName, mp); err != nil {
@@ -109,20 +107,20 @@ func (r *MachinePoolReconciler) Reconcile(req ctrl.Request) (_ ctrl.Result, rete
 			// For additional cleanup logic use finalizers.
 			return ctrl.Result{}, nil
 		}
-		logger.Error(err, "Error reading the object - requeue the request.")
+		log.Error(err, "Error reading the object - requeue the request.")
 		return ctrl.Result{}, err
 	}
 
 	cluster, err := util.GetClusterByName(ctx, r.Client, mp.ObjectMeta.Namespace, mp.Spec.ClusterName)
 	if err != nil {
-		logger.Error(err, "Failed to get Cluster %s for MachinePool.", mp.Spec.ClusterName)
+		log.Error(err, "Failed to get Cluster %s for MachinePool.", mp.Spec.ClusterName)
 		return ctrl.Result{}, errors.Wrapf(err, "failed to get cluster %q for machinepool %q in namespace %q",
 			mp.Spec.ClusterName, mp.Name, mp.Namespace)
 	}
 
 	// Return early if the object or Cluster is paused.
 	if annotations.IsPaused(cluster, mp) {
-		logger.Info("Reconciliation is paused for this object")
+		log.Info("Reconciliation is paused for this object")
 		return ctrl.Result{}, nil
 	}
 
@@ -238,15 +236,12 @@ func (r *MachinePoolReconciler) reconcileDeleteNodes(ctx context.Context, cluste
 		return nil
 	}
 
-	clusterClient, err := remote.NewClusterClient(ctx, r.Client, util.ObjectKey(cluster), r.scheme)
+	clusterClient, err := remote.NewClusterClient(ctx, MachinePoolControllerName, r.Client, util.ObjectKey(cluster))
 	if err != nil {
 		return err
 	}
 
-	if err := r.deleteRetiredNodes(ctx, clusterClient, machinepool.Status.NodeRefs, machinepool.Spec.ProviderIDList); err != nil {
-		return err
-	}
-	return nil
+	return r.deleteRetiredNodes(ctx, clusterClient, machinepool.Status.NodeRefs, machinepool.Spec.ProviderIDList)
 }
 
 // reconcileDeleteExternal tries to delete external references, returning true if it cannot find any.

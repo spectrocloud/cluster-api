@@ -17,14 +17,23 @@ limitations under the License.
 package cluster
 
 import (
+	"context"
+	"time"
+
 	"github.com/pkg/errors"
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/util/version"
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha3"
+	"k8s.io/apimachinery/pkg/util/wait"
+	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha4"
 	clusterctlv1 "sigs.k8s.io/cluster-api/cmd/clusterctl/api/v1alpha3"
 	"sigs.k8s.io/cluster-api/cmd/clusterctl/client/config"
 	"sigs.k8s.io/cluster-api/cmd/clusterctl/client/repository"
+	"sigs.k8s.io/cluster-api/cmd/clusterctl/internal/util"
 	logf "sigs.k8s.io/cluster-api/cmd/clusterctl/log"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 // ProviderInstaller defines methods for enforcing consistency rules for provider installation.
@@ -35,22 +44,25 @@ type ProviderInstaller interface {
 	Add(repository.Components)
 
 	// Install performs the installation of the providers ready in the install queue.
-	Install() ([]repository.Components, error)
+	Install(InstallOptions) ([]repository.Components, error)
 
 	// Validate performs steps to validate a management cluster by looking at the current state and the providers in the queue.
 	// The following checks are performed in order to ensure a fully operational cluster:
-	// - There must be only one instance of the same provider per namespace
-	// - Instances of the same provider must not be fighting for objects (no watching overlap)
-	// - Providers must combine in valid management groups
-	//   - All the providers must belong to one/only one management groups
-	//   - All the providers in a management group must support the same API Version of Cluster API (contract)
+	// - There must be only one instance of the same provider
+	// - All the providers in must support the same API Version of Cluster API (contract)
 	Validate() error
 
 	// Images returns the list of images required for installing the providers ready in the install queue.
 	Images() []string
 }
 
-// providerInstaller implements ProviderInstaller
+// InstallOptions defines the options used to configure installation.
+type InstallOptions struct {
+	WaitProviders       bool
+	WaitProviderTimeout time.Duration
+}
+
+// providerInstaller implements ProviderInstaller.
 type providerInstaller struct {
 	configClient            config.Client
 	repositoryClientFactory RepositoryClientFactory
@@ -66,7 +78,7 @@ func (i *providerInstaller) Add(components repository.Components) {
 	i.installQueue = append(i.installQueue, components)
 }
 
-func (i *providerInstaller) Install() ([]repository.Components, error) {
+func (i *providerInstaller) Install(opts InstallOptions) ([]repository.Components, error) {
 	ret := make([]repository.Components, 0, len(i.installQueue))
 	for _, components := range i.installQueue {
 		if err := installComponentsAndUpdateInventory(components, i.providerComponents, i.providerInventory); err != nil {
@@ -75,7 +87,8 @@ func (i *providerInstaller) Install() ([]repository.Components, error) {
 
 		ret = append(ret, components)
 	}
-	return ret, nil
+
+	return ret, i.waitForProvidersReady(opts)
 }
 
 func installComponentsAndUpdateInventory(components repository.Components, providerComponents ComponentsClient, providerInventory InventoryClient) error {
@@ -84,78 +97,64 @@ func installComponentsAndUpdateInventory(components repository.Components, provi
 
 	inventoryObject := components.InventoryObject()
 
-	// Check the list of providers currently in the cluster and decide if to install shared components (CRDs, web-hooks) or not.
-	// We are required to install shared components in two cases:
-	// - when this is the first instance of the provider being installed.
-	// - when the version of the provider being installed is newer than the max version already installed in the cluster.
-	// Nb. this assumes the newer version of shared components are fully retro-compatible.
-	providerList, err := providerInventory.List()
-	if err != nil {
-		return err
-	}
-
-	installSharedComponents, err := shouldInstallSharedComponents(providerList, inventoryObject)
-	if err != nil {
-		return err
-	}
-	if installSharedComponents {
-		log.V(1).Info("Creating shared objects", "Provider", components.ManifestLabel(), "Version", components.Version())
-		// TODO: currently shared components overrides existing shared components. As a future improvement we should
-		//  consider if to delete (preserving CRDs) before installing so there will be no left-overs in case the list of resources changes
-		if err := providerComponents.Create(components.SharedObjs()); err != nil {
-			return err
-		}
-	} else {
-		log.V(1).Info("Shared objects already up to date", "Provider", components.ManifestLabel())
-	}
-
-	// Then always install the instance specific objects and the then inventory item for the provider
-
-	log.V(1).Info("Creating instance objects", "Provider", components.ManifestLabel(), "Version", components.Version(), "TargetNamespace", components.TargetNamespace())
-	if err := providerComponents.Create(components.InstanceObjs()); err != nil {
+	log.V(1).Info("Creating objects", "Provider", components.ManifestLabel(), "Version", components.Version(), "TargetNamespace", components.TargetNamespace())
+	if err := providerComponents.Create(components.Objs()); err != nil {
 		return err
 	}
 
 	log.V(1).Info("Creating inventory entry", "Provider", components.ManifestLabel(), "Version", components.Version(), "TargetNamespace", components.TargetNamespace())
-	if err := providerInventory.Create(inventoryObject); err != nil {
-		return err
+	return providerInventory.Create(inventoryObject)
+}
+
+// waitForProvidersReady waits till the installed components are ready.
+func (i *providerInstaller) waitForProvidersReady(opts InstallOptions) error {
+	// If we dont have to wait for providers to be installed
+	// return early.
+	if !opts.WaitProviders {
+		return nil
 	}
 
+	log := logf.Log
+	log.Info("Waiting for providers to be available...")
+
+	return i.waitManagerDeploymentsReady(opts)
+}
+
+// waitManagerDeploymentsReady waits till the installed manager deployments are ready.
+func (i *providerInstaller) waitManagerDeploymentsReady(opts InstallOptions) error {
+	for _, components := range i.installQueue {
+		for _, obj := range components.Objs() {
+			if util.IsDeploymentWithManager(obj) {
+				if err := i.waitDeploymentReady(obj, opts.WaitProviderTimeout); err != nil {
+					return err
+				}
+			}
+		}
+	}
 	return nil
 }
 
-// shouldInstallSharedComponents checks if it is required to install shared components for a provider.
-func shouldInstallSharedComponents(providerList *clusterctlv1.ProviderList, provider clusterctlv1.Provider) (bool, error) {
-	// Get the max version of the provider already installed in the cluster.
-	var maxVersion *version.Version
-	for _, other := range providerList.FilterByProviderNameAndType(provider.ProviderName, provider.GetProviderType()) {
-		otherVersion, err := version.ParseSemantic(other.Version)
+func (i *providerInstaller) waitDeploymentReady(deployment unstructured.Unstructured, timeout time.Duration) error {
+	return wait.Poll(100*time.Millisecond, timeout, func() (bool, error) {
+		c, err := i.proxy.NewClient()
 		if err != nil {
-			return false, errors.Wrapf(err, "failed to parse version for the %s provider", other.InstanceName())
+			return false, err
 		}
-		if maxVersion == nil || otherVersion.AtLeast(maxVersion) {
-			maxVersion = otherVersion
+		key := client.ObjectKey{
+			Namespace: deployment.GetNamespace(),
+			Name:      deployment.GetName(),
 		}
-	}
-	// If there is no max version, this is the first instance of the provider being installed, so it is required
-	// to install the shared components.
-	if maxVersion == nil {
-		return true, nil
-	}
-
-	// If the installed version is newer or equal than than the version of the provider being installed,
-	// return false because we should not down grade the shared components.
-	providerVersion, err := version.ParseSemantic(provider.Version)
-	if err != nil {
-		return false, errors.Wrapf(err, "failed to parse version for the %s provider", provider.InstanceName())
-	}
-	if maxVersion.AtLeast(providerVersion) {
+		dep := &appsv1.Deployment{}
+		if err := c.Get(context.TODO(), key, dep); err != nil {
+			return false, err
+		}
+		for _, c := range dep.Status.Conditions {
+			if c.Type == appsv1.DeploymentAvailable && c.Status == corev1.ConditionTrue {
+				return true, nil
+			}
+		}
 		return false, nil
-	}
-
-	// Otherwise, the version of the provider being installed is newer that the current max version, so it is
-	// required to install also the new version of shared components.
-	return true, nil
+	})
 }
 
 func (i *providerInstaller) Validate() error {
@@ -167,43 +166,39 @@ func (i *providerInstaller) Validate() error {
 
 	// Starts simulating what will be the resulting management cluster by adding to the list the providers in the installQueue.
 	// During this operation following checks are performed:
-	// - There must be only one instance of the same provider per namespace
-	// - Instances of the same provider must not be fighting for objects (no watching overlap)
+	// - There must be only one instance of the same provider
 	for _, components := range i.installQueue {
 		if providerList, err = simulateInstall(providerList, components); err != nil {
 			return errors.Wrapf(err, "installing provider %q can lead to a non functioning management cluster", components.ManifestLabel())
 		}
 	}
 
-	// Now that the provider list contains all the providers that are scheduled for install, gets the resulting management groups.
-	// During this operation following check is performed:
-	// - Providers must combine in valid management groups
-	//   - All the providers must belong to one/only one management group
-	managementGroups, err := deriveManagementGroups(providerList)
+	// Gets the API Version of Cluster API (contract) all the providers in the management cluster must support,
+	// which is the same of the core provider.
+	providerInstanceContracts := map[string]string{}
+
+	coreProviders := providerList.FilterCore()
+	if len(coreProviders) != 1 {
+		return errors.Errorf("invalid management cluster: there should a core provider, found %d", len(coreProviders))
+	}
+	coreProvider := coreProviders[0]
+
+	managementClusterContract, err := i.getProviderContract(providerInstanceContracts, coreProvider)
 	if err != nil {
 		return err
 	}
 
-	// Checks if all the providers supports the same API Version of Cluster API (contract) of the corresponding management group.
-	providerInstanceContracts := map[string]string{}
+	// Checks if all the providers supports the same API Version of Cluster API (contract).
 	for _, components := range i.installQueue {
 		provider := components.InventoryObject()
 
-		// Gets the management group the providers belongs to, and then retrieve the API Version of Cluster API (contract)
-		// all the providers in the management group must support.
-		managementGroup := managementGroups.FindManagementGroupByProviderInstanceName(provider.InstanceName())
-		managementGroupContract, err := i.getProviderContract(providerInstanceContracts, managementGroup.CoreProvider)
-		if err != nil {
-			return err
-		}
-
-		// Gets the API Version of Cluster API (contract) the provider support and compare it with the  management group contract.
+		// Gets the API Version of Cluster API (contract) the provider support and compare it with the management cluster contract.
 		providerContract, err := i.getProviderContract(providerInstanceContracts, provider)
 		if err != nil {
 			return err
 		}
-		if providerContract != managementGroupContract {
-			return errors.Errorf("installing provider %q can lead to a non functioning management cluster: the target version for the provider supports the %s API Version of Cluster API (contract), while the management group is using %s", components.ManifestLabel(), providerContract, managementGroupContract)
+		if providerContract != managementClusterContract {
+			return errors.Errorf("installing provider %q can lead to a non functioning management cluster: the target version for the provider supports the %s API Version of Cluster API (contract), while the management cluster is using %s", components.ManifestLabel(), providerContract, managementClusterContract)
 		}
 	}
 	return nil
@@ -246,7 +241,7 @@ func (i *providerInstaller) getProviderContract(providerInstanceContracts map[st
 	}
 
 	if releaseSeries.Contract != clusterv1.GroupVersion.Version {
-		return "", errors.Errorf("current version of clusterctl could install only %s providers, detected %s for provider %s", clusterv1.GroupVersion.Version, releaseSeries.Contract, provider.ManifestLabel())
+		return "", errors.Errorf("current version of clusterctl is only compatible with %s providers, detected %s for provider %s", clusterv1.GroupVersion.Version, releaseSeries.Contract, provider.ManifestLabel())
 	}
 
 	providerInstanceContracts[provider.InstanceName()] = releaseSeries.Contract
@@ -258,26 +253,11 @@ func simulateInstall(providerList *clusterctlv1.ProviderList, components reposit
 	provider := components.InventoryObject()
 
 	existingInstances := providerList.FilterByProviderNameAndType(provider.ProviderName, provider.GetProviderType())
-
-	// Target Namespace check
-	// Installing two instances of the same provider in the same namespace won't be supported
-	for _, i := range existingInstances {
-		if i.Namespace == provider.Namespace {
-			return providerList, errors.Errorf("there is already an instance of the %q provider installed in the %q namespace", provider.ManifestLabel(), provider.Namespace)
-		}
-	}
-
-	// Watching Namespace check:
-	// If we are going to install an instance of a provider watching objects in namespaces already controlled by other providers
-	// then there will be providers fighting for objects...
-	for _, i := range existingInstances {
-		if i.HasWatchingOverlapWith(provider) {
-			return providerList, errors.Errorf("the new instance of the %q provider is going to watch for objects in the namespace %q that is already controlled by other instances of the same provider", provider.ManifestLabel(), provider.WatchedNamespace)
-		}
+	if len(existingInstances) > 0 {
+		return providerList, errors.Errorf("there is already an instance of the %q provider installed in the %q namespace", provider.ManifestLabel(), provider.Namespace)
 	}
 
 	providerList.Items = append(providerList.Items, provider)
-
 	return providerList, nil
 }
 

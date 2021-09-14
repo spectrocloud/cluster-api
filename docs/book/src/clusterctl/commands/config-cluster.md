@@ -1,5 +1,14 @@
 # clusterctl config cluster
 
+<aside class="note warning">
+
+<h1> Warning! </h1>
+
+This command has been deprecated and it will be removed in future releases.
+Use [`clusterctl generate cluster`](generate-cluster.md).
+
+</aside>
+
 The `clusterctl config cluster` command returns a YAML template for creating a workload cluster.
 
 For example
@@ -30,19 +39,19 @@ provider to use for the workload cluster:
 
 ```
 clusterctl config cluster my-cluster --kubernetes-version v1.16.3 \
-    --infrastructure:aws > my-cluster.yaml
+    --infrastructure aws > my-cluster.yaml
 ```
 
 or
 
 ```
 clusterctl config cluster my-cluster --kubernetes-version v1.16.3 \
-    --infrastructure:aws:v0.4.1 > my-cluster.yaml
+    --infrastructure aws:v0.4.1 > my-cluster.yaml
 ```
 
 ### Flavors
 
-The infrastructure provider authors can provide different type of cluster templates, or flavors; use the `--flavor` flag
+The infrastructure provider authors can provide different types of cluster templates, or flavors; use the `--flavor` flag
 to specify which flavor to use; e.g.
 
 ```
@@ -87,9 +96,9 @@ clusterctl config cluster my-cluster --kubernetes-version v1.16.3 \
 
 ### Variables
 
-If the selected cluster template expects some environment variables, user should ensure those variables are set in advance.
+If the selected cluster template expects some environment variables, the user should ensure those variables are set in advance.
 
-e.g. if the `AWS_CREDENTIALS` variable is expected for a cluster template targeting the `aws` infrastructure, you
+E.g. if the `AWS_CREDENTIALS` variable is expected for a cluster template targeting the `aws` infrastructure, you
 should ensure the corresponding environment variable to be set before executing `clusterctl config cluster`.
 
 Please refer to the providers documentation for more info about the required variables or use the

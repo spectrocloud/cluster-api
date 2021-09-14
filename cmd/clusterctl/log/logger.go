@@ -37,7 +37,7 @@ type logEntry struct {
 	Values []interface{}
 }
 
-// Option is a configuration option supplied to NewLogger
+// Option is a configuration option supplied to NewLogger.
 type Option func(*logger)
 
 // WithThreshold implements a New Option that allows to set the threshold level for a new logger.
@@ -57,7 +57,7 @@ func NewLogger(options ...Option) logr.Logger {
 	return l
 }
 
-// logger defines a clusterctl friendly logr.Logger
+// logger defines a clusterctl friendly logr.Logger.
 type logger struct {
 	threshold *int
 	level     int
@@ -94,7 +94,7 @@ func (l *logger) Error(err error, msg string, kvs ...interface{}) {
 }
 
 // V returns an InfoLogger value for a specific verbosity level.
-func (l *logger) V(level int) logr.InfoLogger {
+func (l *logger) V(level int) logr.Logger {
 	nl := l.clone()
 	nl.level = level
 	return nl

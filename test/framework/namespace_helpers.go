@@ -60,7 +60,7 @@ func CreateNamespace(ctx context.Context, input CreateNamespaceInput, intervals 
 	}
 	log.Logf("Creating namespace %s", input.Name)
 	Eventually(func() error {
-		return input.Creator.Create(context.TODO(), ns)
+		return input.Creator.Create(ctx, ns)
 	}, intervals...).Should(Succeed())
 
 	return ns
@@ -101,7 +101,7 @@ func DeleteNamespace(ctx context.Context, input DeleteNamespaceInput, intervals 
 	}
 	log.Logf("Deleting namespace %s", input.Name)
 	Eventually(func() error {
-		return input.Deleter.Delete(context.TODO(), ns)
+		return input.Deleter.Delete(ctx, ns)
 	}, intervals...).Should(Succeed())
 }
 
@@ -129,10 +129,10 @@ func WatchNamespaceEvents(ctx context.Context, input WatchNamespaceEventsInput) 
 	Expect(input.ClientSet).NotTo(BeNil(), "input.ClientSet is required for WatchNamespaceEvents")
 	Expect(input.Name).NotTo(BeEmpty(), "input.Name is required for WatchNamespaceEvents")
 
-	logFile := path.Join(input.LogFolder, "resources", input.Name, "events.log")
-	Expect(os.MkdirAll(filepath.Dir(logFile), 0755)).To(Succeed())
+	logFile := filepath.Clean(path.Join(input.LogFolder, "resources", input.Name, "events.log"))
+	Expect(os.MkdirAll(filepath.Dir(logFile), 0750)).To(Succeed())
 
-	f, err := os.OpenFile(logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	f, err := os.OpenFile(logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
 	Expect(err).NotTo(HaveOccurred())
 	defer f.Close()
 
@@ -145,12 +145,12 @@ func WatchNamespaceEvents(ctx context.Context, input WatchNamespaceEventsInput) 
 	eventInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc: func(obj interface{}) {
 			e := obj.(*corev1.Event)
-			f.WriteString(fmt.Sprintf("[New Event] %s/%s\n\tresource: %s/%s/%s\n\treason: %s\n\tmessage: %s\n\tfull: %#v\n",
+			_, _ = f.WriteString(fmt.Sprintf("[New Event] %s/%s\n\tresource: %s/%s/%s\n\treason: %s\n\tmessage: %s\n\tfull: %#v\n",
 				e.Namespace, e.Name, e.InvolvedObject.APIVersion, e.InvolvedObject.Kind, e.InvolvedObject.Name, e.Reason, e.Message, e))
 		},
 		UpdateFunc: func(_, obj interface{}) {
 			e := obj.(*corev1.Event)
-			f.WriteString(fmt.Sprintf("[Updated Event] %s/%s\n\tresource: %s/%s/%s\n\treason: %s\n\tmessage: %s\n\tfull: %#v\n",
+			_, _ = f.WriteString(fmt.Sprintf("[Updated Event] %s/%s\n\tresource: %s/%s/%s\n\treason: %s\n\tmessage: %s\n\tfull: %#v\n",
 				e.Namespace, e.Name, e.InvolvedObject.APIVersion, e.InvolvedObject.Kind, e.InvolvedObject.Name, e.Reason, e.Message, e))
 		},
 		DeleteFunc: func(obj interface{}) {},
@@ -177,7 +177,7 @@ func CreateNamespaceAndWatchEvents(ctx context.Context, input CreateNamespaceAnd
 	Expect(input.Creator).ToNot(BeNil(), "Invalid argument. input.Creator can't be nil when calling CreateNamespaceAndWatchEvents")
 	Expect(input.ClientSet).ToNot(BeNil(), "Invalid argument. input.ClientSet can't be nil when calling ClientSet")
 	Expect(input.Name).ToNot(BeEmpty(), "Invalid argument. input.Name can't be empty when calling ClientSet")
-	Expect(os.MkdirAll(input.LogFolder, 0755)).To(Succeed(), "Invalid argument. input.LogFolder can't be created in CreateNamespaceAndWatchEvents")
+	Expect(os.MkdirAll(input.LogFolder, 0750)).To(Succeed(), "Invalid argument. input.LogFolder can't be created in CreateNamespaceAndWatchEvents")
 
 	namespace := CreateNamespace(ctx, CreateNamespaceInput{Creator: input.Creator, Name: input.Name}, "40s", "10s")
 	Expect(namespace).ToNot(BeNil(), "Failed to create namespace %q", input.Name)

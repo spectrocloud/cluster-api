@@ -19,72 +19,111 @@ package docker
 import (
 	"context"
 	"fmt"
+	"net"
 
-	"github.com/go-logr/logr"
 	"github.com/pkg/errors"
+	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha4"
+	"sigs.k8s.io/cluster-api/test/infrastructure/container"
+	"sigs.k8s.io/cluster-api/test/infrastructure/docker/api/v1alpha4"
 	"sigs.k8s.io/cluster-api/test/infrastructure/docker/docker/types"
 	"sigs.k8s.io/cluster-api/test/infrastructure/docker/third_party/forked/loadbalancer"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/kind/pkg/cluster/constants"
 )
 
 type lbCreator interface {
-	CreateExternalLoadBalancerNode(name, image, network, clusterLabel, listenAddress string, port int32) (*types.Node, error)
+	CreateExternalLoadBalancerNode(ctx context.Context, name, image, clusterName, listenAddress string, port int32, ipFamily clusterv1.ClusterIPFamily) (*types.Node, error)
 }
 
 // LoadBalancer manages the load balancer for a specific docker cluster.
 type LoadBalancer struct {
-	log       logr.Logger
 	name      string
+	image     string
 	container *types.Node
-	network   string
-
+	ipFamily  clusterv1.ClusterIPFamily
 	lbCreator lbCreator
 }
 
 // NewLoadBalancer returns a new helper for managing a docker loadbalancer with a given name.
-func NewLoadBalancer(name string, clusterAnnotations map[string]string, logger logr.Logger) (*LoadBalancer, error) {
-	if name == "" {
-		return nil, errors.New("name is required when creating a docker.LoadBalancer")
-	}
-	if logger == nil {
-		return nil, errors.New("logger is required when creating a docker.LoadBalancer")
+func NewLoadBalancer(cluster *clusterv1.Cluster, dockerCluster *v1alpha4.DockerCluster) (*LoadBalancer, error) {
+	if cluster.Name == "" {
+		return nil, errors.New("create load balancer: cluster name is empty")
 	}
 
-	container, err := getContainer(
-		withLabel(clusterLabel(name)),
-		withLabel(roleLabel(constants.ExternalLoadBalancerNodeRoleValue)),
-	)
+	// Look for the container that is hosting the loadbalancer for the cluster.
+	// Filter based on the label and the roles regardless of whether or not it is running.
+	// If non-running container is chosen, then it will not have an IP address associated with it.
+	filters := container.FilterBuilder{}
+	filters.AddKeyNameValue(filterLabel, clusterLabelKey, cluster.Name)
+	filters.AddKeyNameValue(filterLabel, nodeRoleLabelKey, constants.ExternalLoadBalancerNodeRoleValue)
+
+	container, err := getContainer(filters)
 	if err != nil {
 		return nil, err
 	}
 
+	ipFamily, err := cluster.GetIPFamily()
+	if err != nil {
+		return nil, fmt.Errorf("create load balancer: %s", err)
+	}
+
+	image := getLoadBalancerImage(dockerCluster)
+
 	return &LoadBalancer{
-		name:      name,
+		name:      cluster.Name,
+		image:     image,
 		container: container,
-		network:   selectTargetNetwork(clusterAnnotations),
-		log:       logger,
+		ipFamily:  ipFamily,
 		lbCreator: &Manager{},
 	}, nil
 }
 
-// ContainerName is the name of the docker container with the load balancer
+// getLoadBalancerImage will return the image (e.g. "kindest/haproxy:2.1.1-alpine") to use for
+// the load balancer.
+func getLoadBalancerImage(dockerCluster *v1alpha4.DockerCluster) string {
+	// Check if a non-default image was provided
+	image := loadbalancer.Image
+	imageRepo := loadbalancer.DefaultImageRepository
+	imageTag := loadbalancer.DefaultImageTag
+
+	if dockerCluster != nil {
+		if dockerCluster.Spec.LoadBalancer.ImageRepository != "" {
+			imageRepo = dockerCluster.Spec.LoadBalancer.ImageRepository
+		}
+		if dockerCluster.Spec.LoadBalancer.ImageTag != "" {
+			imageTag = dockerCluster.Spec.LoadBalancer.ImageTag
+		}
+	}
+
+	return fmt.Sprintf("%s/%s:%s", imageRepo, image, imageTag)
+}
+
+// ContainerName is the name of the docker container with the load balancer.
 func (s *LoadBalancer) containerName() string {
 	return fmt.Sprintf("%s-lb", s.name)
 }
 
 // Create creates a docker container hosting a load balancer for the cluster.
-func (s *LoadBalancer) Create() error {
+func (s *LoadBalancer) Create(ctx context.Context) error {
+	log := ctrl.LoggerFrom(ctx)
+	log = log.WithValues("cluster", s.name, "ipFamily", s.ipFamily)
+
+	listenAddr := "0.0.0.0"
+	if s.ipFamily == clusterv1.IPv6IPFamily {
+		listenAddr = "::"
+	}
 	// Create if not exists.
 	if s.container == nil {
 		var err error
-		s.log.Info("Creating load balancer container")
+		log.Info("Creating load balancer container")
 		s.container, err = s.lbCreator.CreateExternalLoadBalancerNode(
+			ctx,
 			s.containerName(),
-			loadbalancer.Image,
-			s.network,
-			clusterLabel(s.name),
-			"0.0.0.0",
+			s.image,
+			s.name,
+			listenAddr,
 			0,
+			s.ipFamily,
 		)
 		if err != nil {
 			return errors.WithStack(err)
@@ -96,38 +135,45 @@ func (s *LoadBalancer) Create() error {
 
 // UpdateConfiguration updates the external load balancer configuration with new control plane nodes.
 func (s *LoadBalancer) UpdateConfiguration(ctx context.Context) error {
+	log := ctrl.LoggerFrom(ctx)
+
 	if s.container == nil {
 		return errors.New("unable to configure load balancer: load balancer container does not exists")
 	}
 
 	// collect info about the existing controlplane nodes
-	controlPlaneNodes, err := listContainers(
-		withLabel(clusterLabel(s.name)),
-		withLabel(roleLabel(constants.ControlPlaneNodeRoleValue)),
-	)
+	filters := container.FilterBuilder{}
+	filters.AddKeyNameValue(filterLabel, clusterLabelKey, s.name)
+	filters.AddKeyNameValue(filterLabel, nodeRoleLabelKey, constants.ControlPlaneNodeRoleValue)
+
+	controlPlaneNodes, err := listContainers(filters)
 	if err != nil {
 		return errors.WithStack(err)
 	}
 
 	var backendServers = map[string]string{}
 	for _, n := range controlPlaneNodes {
-		controlPlaneIPv4, _, err := n.IP(ctx)
+		controlPlaneIPv4, controlPlaneIPv6, err := n.IP(ctx)
 		if err != nil {
 			return errors.Wrapf(err, "failed to get IP for container %s", n.String())
 		}
-		backendServers[n.String()] = fmt.Sprintf("%s:%d", controlPlaneIPv4, 6443)
+		if s.ipFamily == clusterv1.IPv6IPFamily {
+			backendServers[n.String()] = net.JoinHostPort(controlPlaneIPv6, "6443")
+		} else {
+			backendServers[n.String()] = net.JoinHostPort(controlPlaneIPv4, "6443")
+		}
 	}
 
 	loadBalancerConfig, err := loadbalancer.Config(&loadbalancer.ConfigData{
 		ControlPlanePort: 6443,
 		BackendServers:   backendServers,
-		IPv6:             false,
+		IPv6:             s.ipFamily == clusterv1.IPv6IPFamily,
 	})
 	if err != nil {
 		return errors.WithStack(err)
 	}
 
-	s.log.Info("Updating load balancer configuration")
+	log.Info("Updating load balancer configuration")
 	if err := s.container.WriteFile(ctx, loadbalancer.ConfigPath, loadBalancerConfig); err != nil {
 		return errors.WithStack(err)
 	}
@@ -135,19 +181,31 @@ func (s *LoadBalancer) UpdateConfiguration(ctx context.Context) error {
 	return errors.WithStack(s.container.Kill(ctx, "SIGHUP"))
 }
 
-// IP returns the load balancer IP address
+// IP returns the load balancer IP address.
 func (s *LoadBalancer) IP(ctx context.Context) (string, error) {
-	lbip4, _, err := s.container.IP(ctx)
+	lbIPv4, lbIPv6, err := s.container.IP(ctx)
 	if err != nil {
 		return "", errors.WithStack(err)
 	}
-	return lbip4, nil
+	var lbIP string
+	if s.ipFamily == clusterv1.IPv6IPFamily {
+		lbIP = lbIPv6
+	} else {
+		lbIP = lbIPv4
+	}
+	if lbIP == "" {
+		// if there is a load balancer container with the same name exists but is stopped, it may not have IP address associated with it.
+		return "", errors.Errorf("load balancer IP cannot be empty: container %s does not have an associated IP address", s.containerName())
+	}
+	return lbIP, nil
 }
 
 // Delete the docker container hosting the cluster load balancer.
 func (s *LoadBalancer) Delete(ctx context.Context) error {
+	log := ctrl.LoggerFrom(ctx)
+
 	if s.container != nil {
-		s.log.Info("Deleting load balancer container")
+		log.Info("Deleting load balancer container")
 		if err := s.container.Delete(ctx); err != nil {
 			return err
 		}

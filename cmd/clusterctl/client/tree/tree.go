@@ -25,11 +25,12 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha3"
+	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha4"
 	"sigs.k8s.io/cluster-api/util"
-	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
+// ObjectTreeOptions defines the options for an ObjectTree.
 type ObjectTreeOptions struct {
 	// ShowOtherConditions is a list of comma separated kind or kind/name for which we should add   the ShowObjectConditionsAnnotation
 	// to signal to the presentation layer to show all the conditions for the objects.
@@ -46,23 +47,24 @@ type ObjectTreeOptions struct {
 
 // ObjectTree defines an object tree representing the status of a Cluster API cluster.
 type ObjectTree struct {
-	root      controllerutil.Object
+	root      client.Object
 	options   ObjectTreeOptions
-	items     map[types.UID]controllerutil.Object
+	items     map[types.UID]client.Object
 	ownership map[types.UID]map[types.UID]bool
 }
 
-func NewObjectTree(root controllerutil.Object, options ObjectTreeOptions) *ObjectTree {
+// NewObjectTree creates a new object tree with the given root and options.
+func NewObjectTree(root client.Object, options ObjectTreeOptions) *ObjectTree {
 	return &ObjectTree{
 		root:      root,
 		options:   options,
-		items:     make(map[types.UID]controllerutil.Object),
+		items:     make(map[types.UID]client.Object),
 		ownership: make(map[types.UID]map[types.UID]bool),
 	}
 }
 
 // Add a object to the object tree.
-func (od ObjectTree) Add(parent, obj controllerutil.Object, opts ...AddObjectOption) (added bool, visible bool) {
+func (od ObjectTree) Add(parent, obj client.Object, opts ...AddObjectOption) (added bool, visible bool) {
 	if parent == nil || obj == nil {
 		return false, false
 	}
@@ -139,7 +141,7 @@ func (od ObjectTree) Add(parent, obj controllerutil.Object, opts ...AddObjectOpt
 	return true, true
 }
 
-func (od ObjectTree) remove(parent controllerutil.Object, s controllerutil.Object) {
+func (od ObjectTree) remove(parent client.Object, s client.Object) {
 	for _, child := range od.GetObjectsByParent(s.GetUID()) {
 		od.remove(s, child)
 	}
@@ -147,7 +149,7 @@ func (od ObjectTree) remove(parent controllerutil.Object, s controllerutil.Objec
 	delete(od.ownership[parent.GetUID()], s.GetUID())
 }
 
-func (od ObjectTree) addInner(parent controllerutil.Object, obj controllerutil.Object) {
+func (od ObjectTree) addInner(parent client.Object, obj client.Object) {
 	od.items[obj.GetUID()] = obj
 	if od.ownership[parent.GetUID()] == nil {
 		od.ownership[parent.GetUID()] = make(map[types.UID]bool)
@@ -155,16 +157,20 @@ func (od ObjectTree) addInner(parent controllerutil.Object, obj controllerutil.O
 	od.ownership[parent.GetUID()][obj.GetUID()] = true
 }
 
-func (od ObjectTree) GetRoot() controllerutil.Object { return od.root }
+// GetRoot returns the root of the tree.
+func (od ObjectTree) GetRoot() client.Object { return od.root }
 
-func (od ObjectTree) GetObject(id types.UID) controllerutil.Object { return od.items[id] }
+// GetObject returns the object with the given uid.
+func (od ObjectTree) GetObject(id types.UID) client.Object { return od.items[id] }
 
+// IsObjectWithChild determines if an object has dependants.
 func (od ObjectTree) IsObjectWithChild(id types.UID) bool {
 	return len(od.ownership[id]) > 0
 }
 
-func (od ObjectTree) GetObjectsByParent(id types.UID) []controllerutil.Object {
-	out := make([]controllerutil.Object, 0, len(od.ownership[id]))
+// GetObjectsByParent returns all the dependant objects for the given uid.
+func (od ObjectTree) GetObjectsByParent(id types.UID) []client.Object {
+	out := make([]client.Object, 0, len(od.ownership[id]))
 	for k := range od.ownership[id] {
 		out = append(out, od.GetObject(k))
 	}
@@ -184,7 +190,7 @@ func hasSameReadyStatusSeverityAndReason(a, b *clusterv1.Condition) bool {
 		a.Reason == b.Reason
 }
 
-func createGroupNode(sibling controllerutil.Object, siblingReady *clusterv1.Condition, obj controllerutil.Object, objReady *clusterv1.Condition) *unstructured.Unstructured {
+func createGroupNode(sibling client.Object, siblingReady *clusterv1.Condition, obj client.Object, objReady *clusterv1.Condition) *unstructured.Unstructured {
 	kind := fmt.Sprintf("%sGroup", obj.GetObjectKind().GroupVersionKind().Kind)
 
 	// Create a new group node and add the GroupObjectAnnotation to signal
@@ -207,7 +213,7 @@ func createGroupNode(sibling controllerutil.Object, siblingReady *clusterv1.Cond
 	return groupNode
 }
 
-func readyStatusSeverityAndReasonUID(obj controllerutil.Object) string {
+func readyStatusSeverityAndReasonUID(obj client.Object) string {
 	ready := GetReadyCondition(obj)
 	if ready == nil {
 		return fmt.Sprintf("zzz_%s", util.RandomString(6))
@@ -231,7 +237,7 @@ func minLastTransitionTime(a, b *clusterv1.Condition) metav1.Time {
 	return a.LastTransitionTime
 }
 
-func updateGroupNode(groupObj controllerutil.Object, groupReady *clusterv1.Condition, obj controllerutil.Object, objReady *clusterv1.Condition) {
+func updateGroupNode(groupObj client.Object, groupReady *clusterv1.Condition, obj client.Object, objReady *clusterv1.Condition) {
 	// Update the list of items included in the group and store it in the GroupItemsAnnotation.
 	items := strings.Split(GetGroupItems(groupObj), GroupItemsSeparator)
 	items = append(items, obj.GetName())
@@ -246,7 +252,7 @@ func updateGroupNode(groupObj controllerutil.Object, groupReady *clusterv1.Condi
 	}
 }
 
-func isObjDebug(obj controllerutil.Object, debugFilter string) bool {
+func isObjDebug(obj client.Object, debugFilter string) bool {
 	if debugFilter == "" {
 		return false
 	}

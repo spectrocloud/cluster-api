@@ -21,10 +21,10 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/pkg/errors"
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha3"
+	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha4"
 )
 
-// Patch defines a list of operations to change a list of conditions into another
+// Patch defines a list of operations to change a list of conditions into another.
 type Patch []PatchOperation
 
 // PatchOperation define an operation that changes a single condition.
@@ -99,8 +99,6 @@ type ApplyOption func(*applyOptions)
 
 // WithOwnedConditions allows to define condition types owned by the controller.
 // In case of conflicts for the owned conditions, the patch helper will always use the value provided by the controller.
-//
-// DEPRECATED: Use WithForceOverwrite.
 func WithOwnedConditions(t ...clusterv1.ConditionType) ApplyOption {
 	return func(c *applyOptions) {
 		c.ownedConditions = t

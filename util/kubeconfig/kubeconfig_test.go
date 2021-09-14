@@ -17,7 +17,6 @@ limitations under the License.
 package kubeconfig
 
 import (
-	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
@@ -30,19 +29,20 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/client-go/tools/clientcmd/api"
-	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/client/fake"
-
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha3"
+	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha4"
 	"sigs.k8s.io/cluster-api/util"
 	"sigs.k8s.io/cluster-api/util/certs"
 	"sigs.k8s.io/cluster-api/util/secret"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
 var (
+	ctx = ctrl.SetupSignalHandler()
+
 	validKubeConfig = `
 clusters:
 - cluster:
@@ -73,16 +73,9 @@ users:
 		Data: map[string][]byte{
 			secret.KubeconfigDataName: []byte(validKubeConfig),
 		},
+		Type: clusterv1.ClusterSecretType,
 	}
 )
-
-func setupScheme() *runtime.Scheme {
-	scheme := runtime.NewScheme()
-	if err := corev1.AddToScheme(scheme); err != nil {
-		panic(err)
-	}
-	return scheme
-}
 
 func TestGetKubeConfigSecret(t *testing.T) {
 	g := NewWithT(t)
@@ -91,9 +84,11 @@ func TestGetKubeConfigSecret(t *testing.T) {
 		Name:      "test1",
 		Namespace: "test",
 	}
-	client := fake.NewFakeClientWithScheme(setupScheme(), validSecret)
+	// creating a local copy to ensure validSecret.ObjectMeta.ResourceVersion does not get set by fakeClient
+	validSec := validSecret.DeepCopy()
+	client := fake.NewClientBuilder().WithObjects(validSec).Build()
 
-	found, err := FromSecret(context.Background(), client, clusterKey)
+	found, err := FromSecret(ctx, client, clusterKey)
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(found).To(Equal(validSecret.Data[secret.KubeconfigDataName]))
 }
@@ -179,7 +174,6 @@ func TestNew(t *testing.T) {
 		g.Expect(actualConfig.Contexts[tc.expectedConfig.CurrentContext]).NotTo(BeNil())
 		g.Expect(actualConfig.CurrentContext).To(Equal(tc.expectedConfig.CurrentContext))
 		g.Expect(actualConfig.Contexts).To(Equal(tc.expectedConfig.Contexts))
-
 	}
 }
 
@@ -255,7 +249,7 @@ func TestCreateSecretWithOwner(t *testing.T) {
 		},
 	}
 
-	c := fake.NewFakeClientWithScheme(setupScheme(), caSecret)
+	c := fake.NewClientBuilder().WithObjects(caSecret).Build()
 
 	owner := metav1.OwnerReference{
 		Name:       "test1",
@@ -264,7 +258,7 @@ func TestCreateSecretWithOwner(t *testing.T) {
 	}
 
 	err = CreateSecretWithOwner(
-		context.Background(),
+		ctx,
 		c,
 		client.ObjectKey{
 			Name:      "test1",
@@ -278,8 +272,9 @@ func TestCreateSecretWithOwner(t *testing.T) {
 
 	s := &corev1.Secret{}
 	key := client.ObjectKey{Name: "test1-kubeconfig", Namespace: "test"}
-	g.Expect(c.Get(context.Background(), key, s)).To(Succeed())
+	g.Expect(c.Get(ctx, key, s)).To(Succeed())
 	g.Expect(s.OwnerReferences).To(ContainElement(owner))
+	g.Expect(s.Type).To(Equal(clusterv1.ClusterSecretType))
 
 	clientConfig, err := clientcmd.NewClientConfigFromBytes(s.Data[secret.KubeconfigDataName])
 	g.Expect(err).NotTo(HaveOccurred())
@@ -309,7 +304,7 @@ func TestCreateSecret(t *testing.T) {
 		},
 	}
 
-	c := fake.NewFakeClientWithScheme(setupScheme(), caSecret)
+	c := fake.NewClientBuilder().WithObjects(caSecret).Build()
 
 	cluster := &clusterv1.Cluster{
 		ObjectMeta: metav1.ObjectMeta{
@@ -325,7 +320,7 @@ func TestCreateSecret(t *testing.T) {
 	}
 
 	err = CreateSecret(
-		context.Background(),
+		ctx,
 		c,
 		cluster,
 	)
@@ -334,7 +329,7 @@ func TestCreateSecret(t *testing.T) {
 
 	s := &corev1.Secret{}
 	key := client.ObjectKey{Name: "test1-kubeconfig", Namespace: "test"}
-	g.Expect(c.Get(context.Background(), key, s)).To(Succeed())
+	g.Expect(c.Get(ctx, key, s)).To(Succeed())
 	g.Expect(s.OwnerReferences).To(ContainElement(
 		metav1.OwnerReference{
 			Name:       cluster.Name,
@@ -342,6 +337,7 @@ func TestCreateSecret(t *testing.T) {
 			APIVersion: clusterv1.GroupVersion.String(),
 		},
 	))
+	g.Expect(s.Type).To(Equal(clusterv1.ClusterSecretType))
 
 	clientConfig, err := clientcmd.NewClientConfigFromBytes(s.Data[secret.KubeconfigDataName])
 	g.Expect(err).NotTo(HaveOccurred())
@@ -403,17 +399,17 @@ func TestRegenerateClientCerts(t *testing.T) {
 		},
 	}
 
-	c := fake.NewFakeClientWithScheme(setupScheme(), validSecret, caSecret)
+	c := fake.NewClientBuilder().WithObjects(validSecret, caSecret).Build()
 
 	oldConfig, err := clientcmd.Load(validSecret.Data[secret.KubeconfigDataName])
 	g.Expect(err).NotTo(HaveOccurred())
 	oldCert, err := certs.DecodeCertPEM(oldConfig.AuthInfos["test1-admin"].ClientCertificateData)
 	g.Expect(err).NotTo(HaveOccurred())
 
-	g.Expect(RegenerateSecret(context.Background(), c, validSecret)).To(Succeed())
+	g.Expect(RegenerateSecret(ctx, c, validSecret)).To(Succeed())
 
 	newSecret := &corev1.Secret{}
-	g.Expect(c.Get(context.Background(), util.ObjectKey(validSecret), newSecret)).To(Succeed())
+	g.Expect(c.Get(ctx, util.ObjectKey(validSecret), newSecret)).To(Succeed())
 	newConfig, err := clientcmd.Load(newSecret.Data[secret.KubeconfigDataName])
 	g.Expect(err).NotTo(HaveOccurred())
 	newCert, err := certs.DecodeCertPEM(newConfig.AuthInfos["test1-admin"].ClientCertificateData)

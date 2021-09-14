@@ -33,11 +33,11 @@ import (
 )
 
 const (
-	// ConfigFolder defines the name of the config folder under $home
+	// ConfigFolder defines the name of the config folder under $home.
 	ConfigFolder = ".cluster-api"
-	// ConfigName defines the name of the config file under ConfigFolder
+	// ConfigName defines the name of the config file under ConfigFolder.
 	ConfigName = "clusterctl"
-	// DownloadConfigFile is the config file when fetching the config from a remote location
+	// DownloadConfigFile is the config file when fetching the config from a remote location.
 	DownloadConfigFile = "clusterctl-download.yaml"
 )
 
@@ -49,7 +49,7 @@ type viperReader struct {
 
 type viperReaderOption func(*viperReader)
 
-func InjectConfigPaths(configPaths []string) viperReaderOption {
+func injectConfigPaths(configPaths []string) viperReaderOption {
 	return func(vr *viperReader) {
 		vr.configPaths = configPaths
 	}
@@ -148,7 +148,7 @@ func downloadFile(url string, filepath string) error {
 		return errors.Wrapf(err, "failed to download the clusterctl config file from %s", url)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return errors.New(fmt.Sprintf("failed to download the clusterctl config file from %s got %d", url, resp.StatusCode))
+		return errors.Errorf("failed to download the clusterctl config file from %s got %d", url, resp.StatusCode)
 	}
 	defer resp.Body.Close()
 

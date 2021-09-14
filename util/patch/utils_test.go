@@ -22,11 +22,10 @@ import (
 	. "github.com/onsi/gomega"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha3"
+	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha4"
 )
 
 func TestToUnstructured(t *testing.T) {
-
 	t.Run("with a typed object", func(t *testing.T) {
 		g := NewWithT(t)
 		// Test with a typed object.
@@ -83,7 +82,6 @@ func TestToUnstructured(t *testing.T) {
 		newObj.SetName("test-2")
 		g.Expect(obj.GetName()).To(Equal("test-1"))
 	})
-
 }
 
 func TestUnsafeFocusedUnstructured(t *testing.T) {
@@ -127,7 +125,6 @@ func TestUnsafeFocusedUnstructured(t *testing.T) {
 		g.Expect(newObj.Object["status"]).To(BeNil())
 		g.Expect(obj.Object["status"]).ToNot(BeNil())
 		g.Expect(obj.Object["status"].(map[string]interface{})["conditions"]).ToNot(BeNil())
-
 	})
 
 	t.Run("focus=status w/ condition-setter object, should only return status (without conditions) and common fields", func(t *testing.T) {

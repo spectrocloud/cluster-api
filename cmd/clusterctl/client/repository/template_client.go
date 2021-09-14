@@ -38,6 +38,7 @@ type templateClient struct {
 	processor             yaml.Processor
 }
 
+// TemplateClientInput is an input strict for newTemplateClient.
 type TemplateClientInput struct {
 	version               string
 	provider              config.Provider
@@ -50,7 +51,7 @@ type TemplateClientInput struct {
 var _ TemplateClient = &templateClient{}
 
 // newTemplateClient returns a templateClient. It uses the SimpleYamlProcessor
-// by default
+// by default.
 func newTemplateClient(input TemplateClientInput) *templateClient {
 	return &templateClient{
 		provider:              input.provider,
@@ -63,8 +64,8 @@ func newTemplateClient(input TemplateClientInput) *templateClient {
 
 // Get return the template for the flavor specified.
 // In case the template does not exists, an error is returned.
-// Get assumes the following naming convention for templates: cluster-template[-<flavor_name>].yaml
-func (c *templateClient) Get(flavor, targetNamespace string, listVariablesOnly bool) (Template, error) {
+// Get assumes the following naming convention for templates: cluster-template[-<flavor_name>].yaml.
+func (c *templateClient) Get(flavor, targetNamespace string, skipTemplateProcess bool) (Template, error) {
 	log := logf.Log
 
 	if targetNamespace == "" {
@@ -86,7 +87,7 @@ func (c *templateClient) Get(flavor, targetNamespace string, listVariablesOnly b
 	}
 
 	if rawArtifact == nil {
-		log.V(5).Info("Fetching", "File", name, "Provider", c.provider.ManifestLabel(), "Version", version)
+		log.V(5).Info("Fetching", "File", name, "Provider", c.provider.Name(), "Type", c.provider.Type(), "Version", version)
 		rawArtifact, err = c.repository.GetFile(version, name)
 		if err != nil {
 			return nil, errors.Wrapf(err, "failed to read %q from provider's repository %q", name, c.provider.ManifestLabel())
@@ -95,5 +96,11 @@ func (c *templateClient) Get(flavor, targetNamespace string, listVariablesOnly b
 		log.V(1).Info("Using", "Override", name, "Provider", c.provider.ManifestLabel(), "Version", version)
 	}
 
-	return NewTemplate(TemplateInput{rawArtifact, c.configVariablesClient, c.processor, targetNamespace, listVariablesOnly})
+	return NewTemplate(TemplateInput{
+		rawArtifact,
+		c.configVariablesClient,
+		c.processor,
+		targetNamespace,
+		skipTemplateProcess,
+	})
 }

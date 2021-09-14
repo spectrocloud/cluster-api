@@ -24,7 +24,7 @@ import (
 
 // ANCHOR: MachineHealthCheckSpec
 
-// MachineHealthCheckSpec defines the desired state of MachineHealthCheck
+// MachineHealthCheckSpec defines the desired state of MachineHealthCheck.
 type MachineHealthCheckSpec struct {
 	// ClusterName is the name of the Cluster this object belongs to.
 	// +kubebuilder:validation:MinLength=1
@@ -83,7 +83,7 @@ type UnhealthyCondition struct {
 
 // ANCHOR: MachineHealthCheckStatus
 
-// MachineHealthCheckStatus defines the observed state of MachineHealthCheck
+// MachineHealthCheckStatus defines the observed state of MachineHealthCheck.
 type MachineHealthCheckStatus struct {
 	// total number of machines counted by this machine health check
 	// +kubebuilder:validation:Minimum=0
@@ -115,13 +115,12 @@ type MachineHealthCheckStatus struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:resource:path=machinehealthchecks,shortName=mhc;mhcs,scope=Namespaced,categories=cluster-api
-// +kubebuilder:storageversion
 // +kubebuilder:subresource:status
 // +kubebuilder:printcolumn:name="MaxUnhealthy",type="string",JSONPath=".spec.maxUnhealthy",description="Maximum number of unhealthy machines allowed"
 // +kubebuilder:printcolumn:name="ExpectedMachines",type="integer",JSONPath=".status.expectedMachines",description="Number of machines currently monitored"
 // +kubebuilder:printcolumn:name="CurrentHealthy",type="integer",JSONPath=".status.currentHealthy",description="Current observed healthy machines"
 
-// MachineHealthCheck is the Schema for the machinehealthchecks API
+// MachineHealthCheck is the Schema for the machinehealthchecks API.
 type MachineHealthCheck struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
@@ -133,17 +132,19 @@ type MachineHealthCheck struct {
 	Status MachineHealthCheckStatus `json:"status,omitempty"`
 }
 
+// GetConditions returns the set of conditions for this object.
 func (m *MachineHealthCheck) GetConditions() Conditions {
 	return m.Status.Conditions
 }
 
+// SetConditions sets the conditions on this object.
 func (m *MachineHealthCheck) SetConditions(conditions Conditions) {
 	m.Status.Conditions = conditions
 }
 
 // +kubebuilder:object:root=true
 
-// MachineHealthCheckList contains a list of MachineHealthCheck
+// MachineHealthCheckList contains a list of MachineHealthCheck.
 type MachineHealthCheckList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`

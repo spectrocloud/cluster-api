@@ -17,55 +17,56 @@ limitations under the License.
 package controllers
 
 import (
-	"context"
+	"testing"
 
-	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/log"
 
-	bootstrapv1 "sigs.k8s.io/cluster-api/bootstrap/kubeadm/api/v1alpha3"
+	bootstrapv1 "sigs.k8s.io/cluster-api/bootstrap/kubeadm/api/v1alpha4"
 )
 
-var _ = Describe("KubeadmConfigReconciler", func() {
-	BeforeEach(func() {})
-	AfterEach(func() {})
+func TestKubeadmConfigReconciler(t *testing.T) {
+	t.Run("Reconcile a KubeadmConfig", func(t *testing.T) {
+		t.Run("should wait until infrastructure is ready", func(t *testing.T) {
+			g := NewWithT(t)
 
-	Context("Reconcile a KubeadmConfig", func() {
-		It("should wait until infrastructure is ready", func() {
-			cluster := newCluster("cluster1")
-			Expect(testEnv.Create(context.Background(), cluster)).To(Succeed())
+			ns, err := env.CreateNamespace(ctx, "test-kubeadm-config-reconciler")
+			g.Expect(err).To(BeNil())
 
-			machine := newMachine(cluster, "my-machine")
-			Expect(testEnv.Create(context.Background(), machine)).To(Succeed())
+			cluster := newCluster("cluster1", ns.Name)
+			g.Expect(env.Create(ctx, cluster)).To(Succeed())
 
-			config := newKubeadmConfig(machine, "my-machine-config")
-			Expect(testEnv.Create(context.Background(), config)).To(Succeed())
+			machine := newMachine(cluster, "my-machine", ns.Name)
+			g.Expect(env.Create(ctx, machine)).To(Succeed())
+
+			config := newKubeadmConfig(machine, "my-machine-config", ns.Name)
+			g.Expect(env.Create(ctx, config)).To(Succeed())
+			defer func(do ...client.Object) {
+				g.Expect(env.Cleanup(ctx, do...)).To(Succeed())
+			}(cluster, machine, config, ns)
 
 			reconciler := KubeadmConfigReconciler{
-				Log:    log.Log,
-				Client: testEnv,
+				Client: env,
 			}
-			By("Calling reconcile should requeue")
-			result, err := reconciler.Reconcile(ctrl.Request{
+			t.Log("Calling reconcile should requeue")
+			result, err := reconciler.Reconcile(ctx, ctrl.Request{
 				NamespacedName: client.ObjectKey{
-					Namespace: "default",
+					Namespace: ns.Name,
 					Name:      "my-machine-config",
 				},
 			})
-			Expect(err).To(Succeed())
-			Expect(result.Requeue).To(BeFalse())
+			g.Expect(err).To(Succeed())
+			g.Expect(result.Requeue).To(BeFalse())
 		})
 	})
-})
+}
 
-// getKubeadmConfig returns a KubeadmConfig object from the cluster
-func getKubeadmConfig(c client.Client, name string) (*bootstrapv1.KubeadmConfig, error) {
-	ctx := context.Background()
+// getKubeadmConfig returns a KubeadmConfig object from the cluster.
+func getKubeadmConfig(c client.Client, name, namespace string) (*bootstrapv1.KubeadmConfig, error) {
 	controlplaneConfigKey := client.ObjectKey{
-		Namespace: "default",
+		Namespace: namespace,
 		Name:      name,
 	}
 	config := &bootstrapv1.KubeadmConfig{}

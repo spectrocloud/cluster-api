@@ -21,13 +21,14 @@ import (
 
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
+	containerutil "sigs.k8s.io/cluster-api/util/container"
 
 	appsv1 "k8s.io/api/apps/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-// WaitForKubeProxyUpgradeInput is the input for WaitForKubeProxyUpgradeInput.
+// WaitForKubeProxyUpgradeInput is the input for WaitForKubeProxyUpgrade.
 type WaitForKubeProxyUpgradeInput struct {
 	Getter            Getter
 	KubernetesVersion string
@@ -43,7 +44,7 @@ func WaitForKubeProxyUpgrade(ctx context.Context, input WaitForKubeProxyUpgradeI
 		if err := input.Getter.Get(ctx, client.ObjectKey{Name: "kube-proxy", Namespace: metav1.NamespaceSystem}, ds); err != nil {
 			return false, err
 		}
-		if ds.Spec.Template.Spec.Containers[0].Image == "k8s.gcr.io/kube-proxy:"+input.KubernetesVersion {
+		if ds.Spec.Template.Spec.Containers[0].Image == "k8s.gcr.io/kube-proxy:"+containerutil.SemverToOCIImageTag(input.KubernetesVersion) {
 			return true, nil
 		}
 		return false, nil

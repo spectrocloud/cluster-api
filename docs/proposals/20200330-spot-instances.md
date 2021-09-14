@@ -34,6 +34,7 @@ superseded-by:
             * [Story 1](#story-1)
             * [Story 2](#story-2)
          * [Implementation Details/Notes/Constraints](#implementation-detailsnotesconstraints)
+         * [Interruptible label](#interruptible-label)
             * [Cloud Provider Implementation Specifics](#cloud-provider-implementation-specifics)
                * [AWS](#aws)
                   * [Launching instances](#launching-instances)
@@ -101,7 +102,7 @@ Allow users to cut costs of running Kubernetes clusters on cloud providers by mo
 
 - Any logic for choosing instances types based on availability from the cloud provider
 
-- A one to one map for each provider available mechanism for deploying spot instances, e.g aws fleet.
+- A one to one map for each provider available mechanism for deploying spot instances, e.g. aws fleet.
 
 - Support Spot instances via MachinePool for any cloud provider that doesn't already support MachinePool
 
@@ -249,6 +250,40 @@ The Node will transition to an unready state which would be detected by a Machin
 though there may be some delay depending on the configuration of the MachineHealthCheck.
 In the future, a termination handler could trigger the Machine to be deleted sooner.
 
+
+
+
+### 'Interruptible' label
+
+In order to deploy the termination handler, we'll need to create a DaemonSet that runs it on each spot instance node.
+
+Having `"cluster.x-k8s.io/interruptible"` label on Nodes that run on interruptible instances should help us with it.
+
+Based on the discussion here https://github.com/kubernetes-sigs/cluster-api/pull/3668 ([1](https://github.com/kubernetes-sigs/cluster-api/pull/3668#issuecomment-696143653), [2](https://github.com/kubernetes-sigs/cluster-api/pull/3668#issuecomment-696862994).) we can do following: 
+1. User creates InfraMachine with whatever spec field(s) are required for that provider to indicate it's interruptible.
+2. Infra provider sets InfraMachine.status.interruptible=true
+3. Machine controller looks at InfraMachine.status.interruptible and ensures a label is set on the node if it is true.
+4. Machine controller ensures the interruptible label is always present on the Node if InfraMachine.status.interruptible is true.
+
+This snippet should work and it's similar to what is currently done to set node reference:
+
+```
+// Get and set the failure domain from the infrastructure provider.
+var interruptible bool
+err = util.UnstructuredUnmarshalField(infraConfig, &interruptible, "status", "interruptible")
+switch {
+case err == util.ErrUnstructuredFieldNotFound: // no-op
+case err != nil:
+	return errors.Wrapf(err, "failed to get interruptible status from infrastructure provider for Machine %q in namespace %q", m.Name, m.Namespace)
+}
+
+if !interruptible {
+	return nil
+}
+
+// Here goes logic for assigning a label to node
+```
+
 ### Future Work
 
 #### Termination handler
@@ -280,7 +315,7 @@ could introduce instability to the cluster or even result in a loss of quorum fo
 Running control-plane instances on top of spot instances should be forbidden.
 
 There may also be limitations within cloud providers that restrict the usage of spot instances within the control-plane,
-eg. Azure Spot VMs do not support [ephemeral disks](https://docs.microsoft.com/en-us/azure/virtual-machines/linux/spot-vms#limitations) which may be desired for control-plane instances.
+e.g. Azure Spot VMs do not support [ephemeral disks](https://docs.microsoft.com/en-us/azure/virtual-machines/linux/spot-vms#limitations) which may be desired for control-plane instances.
 
 This risk will be documented and it will be strongly advised that users do not attempt to create control-plane instances on spot instances.
 To prevent it completely, an admission controller could be used to verify that Infrastructure Machines do not get created with the control-plane label,
@@ -424,7 +459,7 @@ Spot VMs are available in two forms in Azure.
 ###### Scale Sets
 
 Scale sets include support for Spot VMs by indicating when created, that they should be backed by Spot VMs.
-At this point, a eviction policy should be set and a maximum price you wish to pay.
+At this point, an eviction policy should be set and a maximum price you wish to pay.
 Alternatively, you can also choose to only be preempted in the case that there are capacity constraints,
 in which case, you will pay whatever the market rate is, but will be preempted less often.
 
@@ -433,7 +468,7 @@ Once support is added, enabling Spot backed Scale Sets would be a case of modify
 
 ###### Single Instances
 Azure supports Spot VMs on single VM instances by indicating when created, that the VM should be a Spot VM.
-At this point, a eviction policy should be set and a maximum price you wish to pay.
+At this point, an eviction policy should be set and a maximum price you wish to pay.
 Alternatively, you can also choose to only be preempted in the case that there are capacity constraints,
 in which case, you will pay whatever the market rate is, but will be preempted less often.
 

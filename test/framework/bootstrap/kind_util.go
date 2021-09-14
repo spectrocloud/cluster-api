@@ -18,16 +18,16 @@ package bootstrap
 
 import (
 	"context"
-	"io/ioutil"
+	"fmt"
 	"os"
 	"path/filepath"
 
 	. "github.com/onsi/gomega"
 	"github.com/pkg/errors"
 
-	"sigs.k8s.io/cluster-api/test/framework"
-	"sigs.k8s.io/cluster-api/test/framework/exec"
+	"sigs.k8s.io/cluster-api/test/framework/clusterctl"
 	"sigs.k8s.io/cluster-api/test/framework/internal/log"
+	"sigs.k8s.io/cluster-api/test/infrastructure/container"
 	kind "sigs.k8s.io/kind/pkg/cluster"
 	kindnodes "sigs.k8s.io/kind/pkg/cluster/nodes"
 	kindnodesutils "sigs.k8s.io/kind/pkg/cluster/nodeutils"
@@ -35,14 +35,20 @@ import (
 
 // CreateKindBootstrapClusterAndLoadImagesInput is the input for CreateKindBootstrapClusterAndLoadImages.
 type CreateKindBootstrapClusterAndLoadImagesInput struct {
-	// Name of the cluster
+	// Name of the cluster.
 	Name string
 
-	// RequiresDockerSock defines if the cluster requires the docker sock
+	// KubernetesVersion of the cluster.
+	KubernetesVersion string
+
+	// RequiresDockerSock defines if the cluster requires the docker sock.
 	RequiresDockerSock bool
 
-	// Images to be loaded in the cluster (this is kind specific)
-	Images []framework.ContainerImage
+	// Images to be loaded in the cluster.
+	Images []clusterctl.ContainerImage
+
+	// IPFamily is either ipv4 or ipv6. Default is ipv4.
+	IPFamily string
 }
 
 // CreateKindBootstrapClusterAndLoadImages returns a new Kubernetes cluster with pre-loaded images.
@@ -53,9 +59,16 @@ func CreateKindBootstrapClusterAndLoadImages(ctx context.Context, input CreateKi
 	log.Logf("Creating a kind cluster with name %q", input.Name)
 
 	options := []KindClusterOption{}
+	if input.KubernetesVersion != "" {
+		options = append(options, WithNodeImage(fmt.Sprintf("%s:%s", DefaultNodeImageRepository, input.KubernetesVersion)))
+	}
 	if input.RequiresDockerSock {
 		options = append(options, WithDockerSockMount())
 	}
+	if input.IPFamily == "IPv6" {
+		options = append(options, WithIPv6Family())
+	}
+
 	clusterProvider := NewKindClusterProvider(input.Name, options...)
 	Expect(clusterProvider).ToNot(BeNil(), "Failed to create a kind cluster")
 
@@ -82,7 +95,7 @@ type LoadImagesToKindClusterInput struct {
 	Name string
 
 	// Images to be loaded in the cluster (this is kind specific)
-	Images []framework.ContainerImage
+	Images []clusterctl.ContainerImage
 }
 
 // LoadImagesToKindCluster provides a utility for loading images into a kind cluster.
@@ -98,9 +111,9 @@ func LoadImagesToKindCluster(ctx context.Context, input LoadImagesToKindClusterI
 		log.Logf("Loading image: %q", image.Name)
 		if err := loadImage(ctx, input.Name, image.Name); err != nil {
 			switch image.LoadBehavior {
-			case framework.MustLoadImage:
+			case clusterctl.MustLoadImage:
 				return errors.Wrapf(err, "Failed to load image %q into the kind cluster %q", image.Name, input.Name)
-			case framework.TryLoadImage:
+			case clusterctl.TryLoadImage:
 				log.Logf("[WARNING] Unable to load image %q into the kind cluster %q: %v", image.Name, input.Name, err)
 			}
 		}
@@ -108,10 +121,10 @@ func LoadImagesToKindCluster(ctx context.Context, input LoadImagesToKindClusterI
 	return nil
 }
 
-// LoadImage will put a local image onto the kind node
+// LoadImage will put a local image onto the kind node.
 func loadImage(ctx context.Context, cluster, image string) error {
 	// Save the image into a tar
-	dir, err := ioutil.TempDir("", "image-tar")
+	dir, err := os.MkdirTemp("", "image-tar")
 	if err != nil {
 		return errors.Wrap(err, "failed to create tempdir")
 	}
@@ -141,19 +154,21 @@ func loadImage(ctx context.Context, cluster, image string) error {
 }
 
 // copied from kind https://github.com/kubernetes-sigs/kind/blob/v0.7.0/pkg/cmd/kind/load/docker-image/docker-image.go#L168
-// save saves image to dest, as in `docker save`
+// save saves image to dest, as in `docker save`.
 func save(ctx context.Context, image, dest string) error {
-	sout, serr, err := exec.NewCommand(
-		exec.WithCommand("docker"),
-		exec.WithArgs("save", "-o", dest, image),
-	).Run(ctx)
-	return errors.Wrapf(err, "stdout: %q, stderr: %q", string(sout), string(serr))
+	containerRuntime, err := container.NewDockerClient()
+	if err != nil {
+		return errors.Wrap(err, "failed to get Docker runtime client")
+	}
+
+	err = containerRuntime.SaveContainerImage(ctx, image, dest)
+	return errors.Wrapf(err, "error saving image %q to %q", image, dest)
 }
 
 // copied from kind https://github.com/kubernetes-sigs/kind/blob/v0.7.0/pkg/cmd/kind/load/docker-image/docker-image.go#L158
-// loads an image tarball onto a node
+// loads an image tarball onto a node.
 func load(imageTarName string, node kindnodes.Node) error {
-	f, err := os.Open(imageTarName)
+	f, err := os.Open(filepath.Clean(imageTarName))
 	if err != nil {
 		return errors.Wrap(err, "failed to open image")
 	}

@@ -25,6 +25,11 @@ import (
 	"sigs.k8s.io/cluster-api/cmd/clusterctl/client"
 )
 
+/*
+NOTE: This command is deprecated in favor of `clusterctl generate cluster`. The source code is located at `cmd/clusterctl/cmd/generate_cluster.go`.
+This file will be removed in 0.5.x. Do not make any changes to this file.
+*/
+
 type configClusterOptions struct {
 	kubeconfig             string
 	kubeconfigContext      string
@@ -71,7 +76,7 @@ var configClusterClusterCmd = &cobra.Command{
 		clusterctl config cluster my-cluster --target-namespace=foo
 
 		# Generates a configuration file for creating workload clusters with a specific Kubernetes version.
-		clusterctl config cluster my-cluster --kubernetes-version=v1.16.0
+		clusterctl config cluster my-cluster --kubernetes-version=v1.19.1
 
 		# Generates a configuration file for creating workload clusters with a
 		# custom number of nodes (if supported by the provider's templates).
@@ -90,6 +95,7 @@ var configClusterClusterCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return runGetClusterTemplate(cmd, args[0])
 	},
+	Deprecated: "use `clusterctl generate cluster` instead",
 }
 
 func init() {

@@ -26,8 +26,9 @@ import (
 	"github.com/pkg/errors"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha3"
+	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha4"
 	"sigs.k8s.io/cluster-api/test/framework/internal/log"
+	"sigs.k8s.io/cluster-api/util/conditions"
 	"sigs.k8s.io/cluster-api/util/patch"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -114,7 +115,7 @@ type WaitForControlPlaneMachinesToBeUpgradedInput struct {
 	MachineCount             int
 }
 
-// WaitForControlPlaneMachinesToBeUpgraded waits until all machines are upgraded to the correct kubernetes version.
+// WaitForControlPlaneMachinesToBeUpgraded waits until all machines are upgraded to the correct Kubernetes version.
 func WaitForControlPlaneMachinesToBeUpgraded(ctx context.Context, input WaitForControlPlaneMachinesToBeUpgradedInput, intervals ...interface{}) {
 	Expect(ctx).NotTo(BeNil(), "ctx is required for WaitForControlPlaneMachinesToBeUpgraded")
 	Expect(input.Lister).ToNot(BeNil(), "Invalid argument. input.Lister can't be nil when calling WaitForControlPlaneMachinesToBeUpgraded")
@@ -132,7 +133,8 @@ func WaitForControlPlaneMachinesToBeUpgraded(ctx context.Context, input WaitForC
 
 		upgraded := 0
 		for _, machine := range machines {
-			if *machine.Spec.Version == input.KubernetesUpgradeVersion {
+			m := machine
+			if *m.Spec.Version == input.KubernetesUpgradeVersion && conditions.IsTrue(&m, clusterv1.MachineNodeHealthyCondition) {
 				upgraded++
 			}
 		}
@@ -209,7 +211,7 @@ func PatchNodeCondition(ctx context.Context, input PatchNodeConditionInput) {
 	Expect(patchHelper.Patch(ctx, node)).To(Succeed())
 }
 
-// MachineStatusCheck is a type that operates a status check on a Machine
+// MachineStatusCheck is a type that operates a status check on a Machine.
 type MachineStatusCheck func(p *clusterv1.Machine) error
 
 // WaitForMachineStatusCheckInput is the input for WaitForMachineStatusCheck.
@@ -244,7 +246,7 @@ func WaitForMachineStatusCheck(ctx context.Context, input WaitForMachineStatusCh
 	}, intervals...).Should(BeTrue())
 }
 
-// MachineNodeRefCheck is a MachineStatusCheck ensuring that a NodeRef is assigned to the machine
+// MachineNodeRefCheck is a MachineStatusCheck ensuring that a NodeRef is assigned to the machine.
 func MachineNodeRefCheck() MachineStatusCheck {
 	return func(machine *clusterv1.Machine) error {
 		if machine.Status.NodeRef == nil {
@@ -254,7 +256,7 @@ func MachineNodeRefCheck() MachineStatusCheck {
 	}
 }
 
-// MachinePhaseCheck is a MachineStatusCheck ensuring that a machines is in the expected phase
+// MachinePhaseCheck is a MachineStatusCheck ensuring that a machines is in the expected phase.
 func MachinePhaseCheck(expectedPhase string) MachineStatusCheck {
 	return func(machine *clusterv1.Machine) error {
 		if machine.Status.Phase != expectedPhase {

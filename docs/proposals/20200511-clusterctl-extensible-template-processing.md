@@ -3,10 +3,10 @@ title: Extensible Templating Processing for clusterctl
 authors:
 * "@wfernandes"
 reviewers:
-* ”@timothysc”
-* “@ncdc”
-* “@fabriziopandini”
-* “@vincepri”
+* "@timothysc"
+* "@ncdc"
+* "@fabriziopandini"
+* "@vincepri"
 
 
 creation-date: 2020-04-27
@@ -64,7 +64,7 @@ Some templating tools that can be used to manage your templates.
 * Dhall - Dhall Programming Configuration Language.
   * Source: https://github.com/dhall-lang/dhall-lang/blob/master/README.md
   * Golang Library: https://github.com/philandstuff/dhall-golang
-  * Kuberentes Library: https://github.com/dhall-lang/dhall-kubernetes
+  * Kubernetes Library: https://github.com/dhall-lang/dhall-kubernetes
 * Helm Template
   * Doc: https://helm.sh/docs/helm/helm_template/
   * Code: https://github.com/helm/helm/blob/master/cmd/helm/template.go
@@ -122,7 +122,7 @@ configuration.
 
 - To automatically detect template files for the appropriate template engine.
 - To use the configuration file to determine which provider should use
-  prefered templating mechanisms.
+  preferred templating mechanisms.
 
 ## Proposal
 
@@ -233,9 +233,9 @@ libraries so the issue of support should be solved with this contract.
 - Currently, clusterctl relies on the conformance of file name conventions
   such as `infrastructure-components.yaml` and
   `cluster-template-<flavor>.yaml`. Other templating tools might require other
-  conventions to be defined and followed to allow the same “day 1” experience.
+  conventions to be defined and followed to allow the same "day 1" experience.
 - Some templating tools will require multiple files to be defined rather than
-  a single yaml file. These artifacts will need to be “grouped” together to
+  a single yaml file. These artifacts will need to be "grouped" together to
   support current retrieval mechanisms. Currently, `clusterctl config cluster`
   retrieves templates from multiple sources such as ConfigMaps within a
   cluster, URL, Github Repository, Local Repository and even the overrides

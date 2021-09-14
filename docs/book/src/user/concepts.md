@@ -2,7 +2,7 @@
 
 ![](../images/management-cluster.svg)
 
-### Management cluster
+## Management cluster
 
 A Kubernetes cluster that manages the lifecycle of Workload Clusters. A Management Cluster is also where one or more Infrastructure Providers run, and where resources such as Machines are stored.
 
@@ -10,13 +10,13 @@ A Kubernetes cluster that manages the lifecycle of Workload Clusters. A Manageme
 
 A Kubernetes cluster whose lifecycle is managed by a Management Cluster.
 
-### Infrastructure provider
+## Infrastructure provider
 
 A source of computational resources, such as compute and networking. For example, cloud Infrastructure Providers include AWS, Azure, and Google, and bare metal Infrastructure Providers include VMware, MAAS, and metal3.io.
 
 When there is more than one way to obtain resources from the same Infrastructure Provider (such as AWS offering both EC2 and EKS), each way is referred to as a variant.
 
-### Bootstrap provider
+## Bootstrap provider
 
 The Bootstrap Provider is responsible for:
 
@@ -24,9 +24,9 @@ The Bootstrap Provider is responsible for:
 1. Initializing the control plane, and gating the creation of other nodes until it is complete
 1. Joining control plane and worker nodes to the cluster
 
-### Control plane
+## Control plane
 
-The control plane is a set of [services](https://kubernetes.io/docs/concepts/#kubernetes-control-plane) that serve the Kubernetes API and continuously reconcile desired state using control loops.
+The [control plane](https://kubernetes.io/docs/concepts/overview/components/) is a set of components that serve the Kubernetes API and continuously reconcile desired state using [control loops](https://kubernetes.io/docs/concepts/architecture/controller/).
 
 * __Machine-based__ control planes are the most common type. Dedicated machines are provisioned, running [static pods](https://kubernetes.io/docs/tasks/configure-pod-container/static-pod/) for components such as [kube-apiserver](https://kubernetes.io/docs/admin/kube-apiserver/), [kube-controller-manager](https://kubernetes.io/docs/admin/kube-controller-manager/) and [kube-scheduler](https://kubernetes.io/docs/admin/kube-scheduler/).
 
@@ -34,11 +34,13 @@ The control plane is a set of [services](https://kubernetes.io/docs/concepts/#ku
 
 * __External__ control planes are offered and controlled by some system other than Cluster API, such as GKE, AKS, EKS, or IKS.
 
-As of v1alpha2, __Machine-Based__ is the only control plane type that Cluster API supports. 
+As of v1alpha2, __Machine-Based__ is the only control plane type that Cluster API supports.
 
 The default provider uses kubeadm to bootstrap the control plane. As of v1alpha3, it exposes the configuration via the `KubeadmControlPlane` object. The controller, `capi-kubeadm-control-plane-controller-manager`, can then create Machine and BootstrapConfig objects based on the requested replicas in the `KubeadmControlPlane` object.
 
 ## Custom Resource Definitions (CRDs)
+
+A [CustomResourceDefinition](https://kubernetes.io/docs/concepts/extend-kubernetes/api-extension/custom-resources/) is a built-in resource that lets you extend the Kubernetes API. Each CustomResourceDefinition represents a customization of a Kubernetes installation. The Cluster API provides and relies on several CustomResourceDefinitions:
 
 ### Machine
 
@@ -75,5 +77,3 @@ MachineHealthChecks will only remediate Nodes if they are owned by a MachineSet.
 ### BootstrapData
 
 BootstrapData contains the Machine or Node role-specific initialization data (usually cloud-init) used by the Infrastructure Provider to bootstrap a Machine into a Node.
-
-<!--TODO-->

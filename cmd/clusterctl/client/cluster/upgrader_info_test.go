@@ -22,6 +22,7 @@ import (
 	. "github.com/onsi/gomega"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/version"
+	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha4"
 	clusterctlv1 "sigs.k8s.io/cluster-api/cmd/clusterctl/api/v1alpha3"
 	"sigs.k8s.io/cluster-api/cmd/clusterctl/client/config"
 	"sigs.k8s.io/cluster-api/cmd/clusterctl/client/repository"
@@ -30,8 +31,8 @@ import (
 
 func Test_providerUpgrader_getUpgradeInfo(t *testing.T) {
 	type fields struct {
-		reader     config.Reader
-		repository repository.Repository
+		reader config.Reader
+		repo   repository.Repository
 	}
 	type args struct {
 		provider clusterctlv1.Provider
@@ -48,7 +49,7 @@ func Test_providerUpgrader_getUpgradeInfo(t *testing.T) {
 			fields: fields{
 				reader: test.NewFakeReader().
 					WithProvider("p1", clusterctlv1.InfrastructureProviderType, "https://somewhere.com"),
-				repository: test.NewFakeRepository().
+				repo: repository.NewMemoryRepository().
 					WithVersions("v1.0.0", "v1.0.1", "v1.0.2", "v1.1.0").
 					WithMetadata("v1.1.0", &clusterctlv1.Metadata{
 						ReleaseSeries: []clusterctlv1.ReleaseSeries{
@@ -58,7 +59,7 @@ func Test_providerUpgrader_getUpgradeInfo(t *testing.T) {
 					}),
 			},
 			args: args{
-				provider: fakeProvider("p1", clusterctlv1.InfrastructureProviderType, "v1.0.1", "p1-system", ""),
+				provider: fakeProvider("p1", clusterctlv1.InfrastructureProviderType, "v1.0.1", "p1-system"),
 			},
 			want: &upgradeInfo{
 				metadata: &clusterctlv1.Metadata{
@@ -86,7 +87,7 @@ func Test_providerUpgrader_getUpgradeInfo(t *testing.T) {
 			fields: fields{
 				reader: test.NewFakeReader().
 					WithProvider("p1", clusterctlv1.InfrastructureProviderType, "https://somewhere.com"),
-				repository: test.NewFakeRepository().
+				repo: repository.NewMemoryRepository().
 					WithVersions("v1.0.0", "v1.0.1", "v1.0.2", "v1.1.0").
 					WithMetadata("v1.1.0", &clusterctlv1.Metadata{
 						ReleaseSeries: []clusterctlv1.ReleaseSeries{
@@ -96,7 +97,7 @@ func Test_providerUpgrader_getUpgradeInfo(t *testing.T) {
 					}),
 			},
 			args: args{
-				provider: fakeProvider("p1", clusterctlv1.InfrastructureProviderType, "v1.0.1", "p1-system", ""),
+				provider: fakeProvider("p1", clusterctlv1.InfrastructureProviderType, "v1.0.1", "p1-system"),
 			},
 			want: &upgradeInfo{
 				metadata: &clusterctlv1.Metadata{
@@ -124,7 +125,7 @@ func Test_providerUpgrader_getUpgradeInfo(t *testing.T) {
 			fields: fields{
 				reader: test.NewFakeReader().
 					WithProvider("p1", clusterctlv1.InfrastructureProviderType, "https://somewhere.com"),
-				repository: test.NewFakeRepository().
+				repo: repository.NewMemoryRepository().
 					WithVersions("v1.0.0", "v1.0.1", "v1.0.2", "v1.1.0").
 					WithMetadata("v1.1.0", &clusterctlv1.Metadata{
 						ReleaseSeries: []clusterctlv1.ReleaseSeries{
@@ -134,7 +135,7 @@ func Test_providerUpgrader_getUpgradeInfo(t *testing.T) {
 					}),
 			},
 			args: args{
-				provider: fakeProvider("p1", clusterctlv1.InfrastructureProviderType, "v1.0.1", "p1-system", ""),
+				provider: fakeProvider("p1", clusterctlv1.InfrastructureProviderType, "v1.0.1", "p1-system"),
 			},
 			want: &upgradeInfo{
 				metadata: &clusterctlv1.Metadata{
@@ -162,11 +163,11 @@ func Test_providerUpgrader_getUpgradeInfo(t *testing.T) {
 			fields: fields{
 				reader: test.NewFakeReader().
 					WithProvider("p1", clusterctlv1.InfrastructureProviderType, "https://somewhere.com"),
-				repository: test.NewFakeRepository(). // without metadata
+				repo: repository.NewMemoryRepository(). // without metadata
 									WithVersions("v1.0.0", "v1.0.1"),
 			},
 			args: args{
-				provider: fakeProvider("p1", clusterctlv1.InfrastructureProviderType, "v1.0.0", "p1-system", ""),
+				provider: fakeProvider("p1", clusterctlv1.InfrastructureProviderType, "v1.0.0", "p1-system"),
 			},
 			want:    nil,
 			wantErr: true,
@@ -176,12 +177,12 @@ func Test_providerUpgrader_getUpgradeInfo(t *testing.T) {
 			fields: fields{
 				reader: test.NewFakeReader().
 					WithProvider("p1", clusterctlv1.InfrastructureProviderType, "https://somewhere.com"),
-				repository: test.NewFakeRepository(). // with metadata but only for versions <= current version (not for next versions)
+				repo: repository.NewMemoryRepository(). // with metadata but only for versions <= current version (not for next versions)
 									WithVersions("v1.0.0", "v1.0.1").
 									WithMetadata("v1.0.0", &clusterctlv1.Metadata{}),
 			},
 			args: args{
-				provider: fakeProvider("p1", clusterctlv1.InfrastructureProviderType, "v1.0.0", "p1-system", ""),
+				provider: fakeProvider("p1", clusterctlv1.InfrastructureProviderType, "v1.0.0", "p1-system"),
 			},
 			want:    nil,
 			wantErr: true,
@@ -191,12 +192,12 @@ func Test_providerUpgrader_getUpgradeInfo(t *testing.T) {
 			fields: fields{
 				reader: test.NewFakeReader().
 					WithProvider("p1", clusterctlv1.InfrastructureProviderType, "https://somewhere.com"),
-				repository: test.NewFakeRepository(). // without metadata
+				repo: repository.NewMemoryRepository(). // without metadata
 									WithVersions("v1.0.0", "v1.0.1").
 									WithMetadata("v1.0.1", &clusterctlv1.Metadata{}),
 			},
 			args: args{
-				provider: fakeProvider("p1", clusterctlv1.InfrastructureProviderType, "v1.0.0", "p1-system", ""),
+				provider: fakeProvider("p1", clusterctlv1.InfrastructureProviderType, "v1.0.0", "p1-system"),
 			},
 			want:    nil,
 			wantErr: true,
@@ -206,7 +207,7 @@ func Test_providerUpgrader_getUpgradeInfo(t *testing.T) {
 			fields: fields{
 				reader: test.NewFakeReader().
 					WithProvider("p1", clusterctlv1.InfrastructureProviderType, "https://somewhere.com"),
-				repository: test.NewFakeRepository(). // without metadata
+				repo: repository.NewMemoryRepository(). // without metadata
 									WithVersions("v1.0.0", "v1.0.1", "v1.1.1").
 									WithMetadata("v1.1.1", &clusterctlv1.Metadata{
 						ReleaseSeries: []clusterctlv1.ReleaseSeries{
@@ -216,7 +217,7 @@ func Test_providerUpgrader_getUpgradeInfo(t *testing.T) {
 					}),
 			},
 			args: args{
-				provider: fakeProvider("p1", clusterctlv1.InfrastructureProviderType, "v1.0.0", "p1-system", ""),
+				provider: fakeProvider("p1", clusterctlv1.InfrastructureProviderType, "v1.0.0", "p1-system"),
 			},
 			want:    nil,
 			wantErr: true,
@@ -231,7 +232,7 @@ func Test_providerUpgrader_getUpgradeInfo(t *testing.T) {
 			u := &providerUpgrader{
 				configClient: configClient,
 				repositoryClientFactory: func(provider config.Provider, configClient config.Client, options ...repository.Option) (repository.Client, error) {
-					return repository.New(provider, configClient, repository.InjectRepository(tt.fields.repository))
+					return repository.New(provider, configClient, repository.InjectRepository(tt.fields.repo))
 				},
 			}
 			got, err := u.getUpgradeInfo(tt.args.provider)
@@ -431,4 +432,26 @@ func toSemanticVersions(versions []string) []version.Version {
 		semanticVersions = append(semanticVersions, *version.MustParseSemantic(v))
 	}
 	return semanticVersions
+}
+
+func fakeProvider(name string, providerType clusterctlv1.ProviderType, version, targetNamespace string) clusterctlv1.Provider {
+	return clusterctlv1.Provider{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: clusterctlv1.GroupVersion.String(),
+			Kind:       "Provider",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			ResourceVersion: "999",
+			Namespace:       targetNamespace,
+			Name:            clusterctlv1.ManifestLabel(name, providerType),
+			Labels: map[string]string{
+				clusterctlv1.ClusterctlLabelName:     "",
+				clusterv1.ProviderLabelName:          clusterctlv1.ManifestLabel(name, providerType),
+				clusterctlv1.ClusterctlCoreLabelName: clusterctlv1.ClusterctlCoreLabelInventoryValue,
+			},
+		},
+		ProviderName: name,
+		Type:         string(providerType),
+		Version:      version,
+	}
 }

@@ -23,8 +23,8 @@ import (
 	"time"
 
 	"github.com/pkg/errors"
-	"go.etcd.io/etcd/clientv3"
-	"go.etcd.io/etcd/etcdserver/etcdserverpb"
+	"go.etcd.io/etcd/api/v3/etcdserverpb"
+	clientv3 "go.etcd.io/etcd/client/v3"
 	"google.golang.org/grpc"
 	"sigs.k8s.io/cluster-api/controlplane/kubeadm/internal/proxy"
 )
@@ -65,11 +65,12 @@ type MemberAlarm struct {
 	Type AlarmType
 }
 
+// AlarmType defines the type of alarm for etcd.
 type AlarmType int32
 
 const (
 	// AlarmOK denotes that the cluster member is OK.
-	AlarmOk AlarmType = iota
+	AlarmOK AlarmType = iota
 
 	// AlarmNoSpace denotes that the cluster member has run out of disk space.
 	AlarmNoSpace
@@ -80,7 +81,7 @@ const (
 
 // AlarmTypeName provides a text translation for AlarmType codes.
 var AlarmTypeName = map[AlarmType]string{
-	AlarmOk:      "NONE",
+	AlarmOK:      "NONE",
 	AlarmNoSpace: "NOSPACE",
 	AlarmCorrupt: "CORRUPT",
 }
@@ -211,7 +212,7 @@ func (c *Client) RemoveMember(ctx context.Context, id uint64) error {
 	return errors.Wrapf(err, "failed to remove member: %v", id)
 }
 
-// UpdateMemberPeerList updates the list of peer URLs
+// UpdateMemberPeerURLs updates the list of peer URLs.
 func (c *Client) UpdateMemberPeerURLs(ctx context.Context, id uint64, peerURLs []string) ([]*Member, error) {
 	response, err := c.EtcdClient.MemberUpdate(ctx, id, peerURLs)
 	if err != nil {

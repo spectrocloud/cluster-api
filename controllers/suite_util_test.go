@@ -29,7 +29,7 @@ import (
 	"k8s.io/utils/pointer"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha3"
+	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha4"
 )
 
 func intOrStrPtr(i int32) *intstr.IntOrString {
@@ -38,10 +38,10 @@ func intOrStrPtr(i int32) *intstr.IntOrString {
 	return &res
 }
 
-func fakeBootstrapRefReady(ref corev1.ObjectReference, base map[string]interface{}) {
+func fakeBootstrapRefReady(ref corev1.ObjectReference, base map[string]interface{}, g *WithT) {
 	bref := (&unstructured.Unstructured{Object: base}).DeepCopy()
-	Eventually(func() error {
-		return testEnv.Get(ctx, client.ObjectKey{Name: ref.Name, Namespace: ref.Namespace}, bref)
+	g.Eventually(func() error {
+		return env.Get(ctx, client.ObjectKey{Name: ref.Name, Namespace: ref.Namespace}, bref)
 	}).Should(Succeed())
 
 	bdataSecret := &corev1.Secret{
@@ -53,35 +53,35 @@ func fakeBootstrapRefReady(ref corev1.ObjectReference, base map[string]interface
 			"value": "data",
 		},
 	}
-	Expect(testEnv.Create(ctx, bdataSecret)).To(Succeed())
+	g.Expect(env.Create(ctx, bdataSecret)).To(Succeed())
 
 	brefPatch := client.MergeFrom(bref.DeepCopy())
-	Expect(unstructured.SetNestedField(bref.Object, true, "status", "ready")).To(Succeed())
-	Expect(unstructured.SetNestedField(bref.Object, bdataSecret.Name, "status", "dataSecretName")).To(Succeed())
-	Expect(testEnv.Status().Patch(ctx, bref, brefPatch)).To(Succeed())
+	g.Expect(unstructured.SetNestedField(bref.Object, true, "status", "ready")).To(Succeed())
+	g.Expect(unstructured.SetNestedField(bref.Object, bdataSecret.Name, "status", "dataSecretName")).To(Succeed())
+	g.Expect(env.Status().Patch(ctx, bref, brefPatch)).To(Succeed())
 }
 
-func fakeInfrastructureRefReady(ref corev1.ObjectReference, base map[string]interface{}) string {
+func fakeInfrastructureRefReady(ref corev1.ObjectReference, base map[string]interface{}, g *WithT) string {
 	iref := (&unstructured.Unstructured{Object: base}).DeepCopy()
-	Eventually(func() error {
-		return testEnv.Get(ctx, client.ObjectKey{Name: ref.Name, Namespace: ref.Namespace}, iref)
+	g.Eventually(func() error {
+		return env.Get(ctx, client.ObjectKey{Name: ref.Name, Namespace: ref.Namespace}, iref)
 	}).Should(Succeed())
 
 	irefPatch := client.MergeFrom(iref.DeepCopy())
 	providerID := fmt.Sprintf("test:////%v", uuid.NewUUID())
-	Expect(unstructured.SetNestedField(iref.Object, providerID, "spec", "providerID")).To(Succeed())
-	Expect(testEnv.Patch(ctx, iref, irefPatch)).To(Succeed())
+	g.Expect(unstructured.SetNestedField(iref.Object, providerID, "spec", "providerID")).To(Succeed())
+	g.Expect(env.Patch(ctx, iref, irefPatch)).To(Succeed())
 
 	irefPatch = client.MergeFrom(iref.DeepCopy())
-	Expect(unstructured.SetNestedField(iref.Object, true, "status", "ready")).To(Succeed())
-	Expect(testEnv.Status().Patch(ctx, iref, irefPatch)).To(Succeed())
+	g.Expect(unstructured.SetNestedField(iref.Object, true, "status", "ready")).To(Succeed())
+	g.Expect(env.Status().Patch(ctx, iref, irefPatch)).To(Succeed())
 	return providerID
 }
 
-func fakeMachineNodeRef(m *clusterv1.Machine, pid string) {
-	Eventually(func() error {
+func fakeMachineNodeRef(m *clusterv1.Machine, pid string, g *WithT) {
+	g.Eventually(func() error {
 		key := client.ObjectKey{Name: m.Name, Namespace: m.Namespace}
-		return testEnv.Get(ctx, key, &clusterv1.Machine{})
+		return env.Get(ctx, key, &clusterv1.Machine{})
 	}).Should(Succeed())
 
 	if m.Status.NodeRef != nil {
@@ -97,22 +97,22 @@ func fakeMachineNodeRef(m *clusterv1.Machine, pid string) {
 			ProviderID: pid,
 		},
 	}
-	Expect(testEnv.Create(ctx, node)).To(Succeed())
+	g.Expect(env.Create(ctx, node)).To(Succeed())
 
-	Eventually(func() error {
+	g.Eventually(func() error {
 		key := client.ObjectKey{Name: node.Name, Namespace: node.Namespace}
-		return testEnv.Get(ctx, key, &corev1.Node{})
+		return env.Get(ctx, key, &corev1.Node{})
 	}).Should(Succeed())
 
 	// Patch the node and make it look like ready.
 	patchNode := client.MergeFrom(node.DeepCopy())
 	node.Status.Conditions = append(node.Status.Conditions, corev1.NodeCondition{Type: corev1.NodeReady, Status: corev1.ConditionTrue})
-	Expect(testEnv.Status().Patch(ctx, node, patchNode)).To(Succeed())
+	g.Expect(env.Status().Patch(ctx, node, patchNode)).To(Succeed())
 
 	// Patch the Machine.
 	patchMachine := client.MergeFrom(m.DeepCopy())
 	m.Spec.ProviderID = pointer.StringPtr(pid)
-	Expect(testEnv.Patch(ctx, m, patchMachine)).To(Succeed())
+	g.Expect(env.Patch(ctx, m, patchMachine)).To(Succeed())
 
 	patchMachine = client.MergeFrom(m.DeepCopy())
 	m.Status.NodeRef = &corev1.ObjectReference{
@@ -120,5 +120,5 @@ func fakeMachineNodeRef(m *clusterv1.Machine, pid string) {
 		Kind:       node.Kind,
 		Name:       node.Name,
 	}
-	Expect(testEnv.Status().Patch(ctx, m, patchMachine)).To(Succeed())
+	g.Expect(env.Status().Patch(ctx, m, patchMachine)).To(Succeed())
 }

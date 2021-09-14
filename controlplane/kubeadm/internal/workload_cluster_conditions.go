@@ -25,10 +25,11 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/sets"
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha3"
-	controlplanev1 "sigs.k8s.io/cluster-api/controlplane/kubeadm/api/v1alpha3"
+	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha4"
+	controlplanev1 "sigs.k8s.io/cluster-api/controlplane/kubeadm/api/v1alpha4"
 	"sigs.k8s.io/cluster-api/controlplane/kubeadm/internal/etcd"
 	etcdutil "sigs.k8s.io/cluster-api/controlplane/kubeadm/internal/etcd/util"
+	"sigs.k8s.io/cluster-api/util/collections"
 	"sigs.k8s.io/cluster-api/util/conditions"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -101,14 +102,14 @@ func (w *Workload) updateManagedEtcdConditions(ctx context.Context, controlPlane
 		}
 
 		// Create the etcd Client for the etcd Pod scheduled on the Node
-		etcdClient, err := w.etcdClientGenerator.forNodes(ctx, []string{node.Name})
+		etcdClient, err := w.etcdClientGenerator.forFirstAvailableNode(ctx, []string{node.Name})
 		if err != nil {
-			conditions.MarkUnknown(machine, controlplanev1.MachineEtcdMemberHealthyCondition, controlplanev1.EtcdMemberInspectionFailedReason, "Failed to connect to the etcd pod on the %s node", node.Name)
+			conditions.MarkUnknown(machine, controlplanev1.MachineEtcdMemberHealthyCondition, controlplanev1.EtcdMemberInspectionFailedReason, "Failed to connect to the etcd pod on the %s node: %s", node.Name, err)
 			continue
 		}
 		defer etcdClient.Close()
 
-		// While creating a new client, forNodes retrieves the status for the endpoint; check if the endpoint has errors.
+		// While creating a new client, forFirstAvailableNode retrieves the status for the endpoint; check if the endpoint has errors.
 		if len(etcdClient.Errors) > 0 {
 			conditions.MarkFalse(machine, controlplanev1.MachineEtcdMemberHealthyCondition, controlplanev1.EtcdMemberUnhealthyReason, clusterv1.ConditionSeverityError, "Etcd member status reports errors: %s", strings.Join(etcdClient.Errors, ", "))
 			continue
@@ -117,7 +118,7 @@ func (w *Workload) updateManagedEtcdConditions(ctx context.Context, controlPlane
 		// Gets the list etcd members known by this member.
 		currentMembers, err := etcdClient.Members(ctx)
 		if err != nil {
-			// NB. We should never be in here, given that we just received answer to the etcd calls included in forNodes;
+			// NB. We should never be in here, given that we just received answer to the etcd calls included in forFirstAvailableNode;
 			// however, we are considering the calls to Members a signal of etcd not being stable.
 			conditions.MarkFalse(machine, controlplanev1.MachineEtcdMemberHealthyCondition, controlplanev1.EtcdMemberUnhealthyReason, clusterv1.ConditionSeverityError, "Failed get answer from the etcd member on the %s node", node.Name)
 			continue
@@ -134,13 +135,13 @@ func (w *Workload) updateManagedEtcdConditions(ctx context.Context, controlPlane
 		}
 
 		// Retrieve the member and check for alarms.
-		// NB. The member for this node always exists given forNodes(node) used above
+		// NB. The member for this node always exists given forFirstAvailableNode(node) used above
 		member := etcdutil.MemberForName(currentMembers, node.Name)
 		if len(member.Alarms) > 0 {
 			alarmList := []string{}
 			for _, alarm := range member.Alarms {
 				switch alarm {
-				case etcd.AlarmOk:
+				case etcd.AlarmOK:
 					continue
 				default:
 					alarmList = append(alarmList, etcd.AlarmTypeName[alarm])
@@ -243,10 +244,10 @@ func (w *Workload) UpdateStaticPodConditions(ctx context.Context, controlPlane *
 		for i := range controlPlane.Machines {
 			machine := controlPlane.Machines[i]
 			for _, condition := range allMachinePodConditions {
-				conditions.MarkUnknown(machine, condition, controlplanev1.PodInspectionFailedReason, "Failed to get the node which is hosting this component")
+				conditions.MarkUnknown(machine, condition, controlplanev1.PodInspectionFailedReason, "Failed to get the node which is hosting this component: %v", err)
 			}
 		}
-		conditions.MarkUnknown(controlPlane.KCP, controlplanev1.ControlPlaneComponentsHealthyCondition, controlplanev1.ControlPlaneComponentsInspectionFailedReason, "Failed to list nodes which are hosting control plane components")
+		conditions.MarkUnknown(controlPlane.KCP, controlplanev1.ControlPlaneComponentsHealthyCondition, controlplanev1.ControlPlaneComponentsInspectionFailedReason, "Failed to list nodes which are hosting control plane components: %v", err)
 		return
 	}
 
@@ -333,7 +334,7 @@ func (w *Workload) UpdateStaticPodConditions(ctx context.Context, controlPlane *
 	})
 }
 
-func hasProvisioningMachine(machines FilterableMachineCollection) bool {
+func hasProvisioningMachine(machines collections.Machines) bool {
 	for _, machine := range machines {
 		if machine.Status.NodeRef == nil {
 			return true
@@ -356,6 +357,13 @@ func nodeHasUnreachableTaint(node corev1.Node) bool {
 // in a static pod generated by kubeadm. This operation is best effort, in the sense that in case of problems
 // in retrieving the pod status, it sets the condition to Unknown state without returning any error.
 func (w *Workload) updateStaticPodCondition(ctx context.Context, machine *clusterv1.Machine, node corev1.Node, component string, staticPodCondition clusterv1.ConditionType) {
+	// If node ready is unknown there is a good chance that kubelet is not updating mirror pods, so we consider pod status
+	// to be unknown as well without further investigations.
+	if nodeReadyUnknown(node) {
+		conditions.MarkUnknown(machine, staticPodCondition, controlplanev1.PodInspectionFailedReason, "Node Ready condition is unknown, pod data might be stale")
+		return
+	}
+
 	podKey := ctrlclient.ObjectKey{
 		Namespace: metav1.NamespaceSystem,
 		Name:      staticPodName(component, node.Name),
@@ -459,6 +467,15 @@ func (w *Workload) updateStaticPodCondition(ctx context.Context, machine *cluste
 		// to an error in communicating with the host of the pod.
 		conditions.MarkUnknown(machine, staticPodCondition, controlplanev1.PodInspectionFailedReason, "Pod is reporting unknown status")
 	}
+}
+
+func nodeReadyUnknown(node corev1.Node) bool {
+	for _, condition := range node.Status.Conditions {
+		if condition.Type == corev1.NodeReady {
+			return condition.Status == corev1.ConditionUnknown
+		}
+	}
+	return false
 }
 
 func podCondition(pod corev1.Pod, condition corev1.PodConditionType) corev1.ConditionStatus {

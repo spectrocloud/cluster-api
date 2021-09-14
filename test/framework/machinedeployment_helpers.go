@@ -26,9 +26,8 @@ import (
 	"github.com/pkg/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/utils/pointer"
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha3"
+	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha4"
 	"sigs.k8s.io/cluster-api/test/framework/internal/log"
 	"sigs.k8s.io/cluster-api/util"
 	"sigs.k8s.io/cluster-api/util/patch"
@@ -39,8 +38,8 @@ import (
 type CreateMachineDeploymentInput struct {
 	Creator                 Creator
 	MachineDeployment       *clusterv1.MachineDeployment
-	BootstrapConfigTemplate runtime.Object
-	InfraMachineTemplate    runtime.Object
+	BootstrapConfigTemplate client.Object
+	InfraMachineTemplate    client.Object
 }
 
 // CreateMachineDeployment creates the machine deployment and dependencies.
@@ -55,7 +54,7 @@ func CreateMachineDeployment(ctx context.Context, input CreateMachineDeploymentI
 	Expect(input.Creator.Create(ctx, input.InfraMachineTemplate)).To(Succeed())
 }
 
-// GetMachineDeploymentsByClusterInput is the input for GetMachineDeploymentsByCluster
+// GetMachineDeploymentsByClusterInput is the input for GetMachineDeploymentsByCluster.
 type GetMachineDeploymentsByClusterInput struct {
 	Lister      Lister
 	ClusterName string
@@ -71,6 +70,7 @@ func GetMachineDeploymentsByCluster(ctx context.Context, input GetMachineDeploym
 
 	deployments := make([]*clusterv1.MachineDeployment, len(deploymentList.Items))
 	for i := range deploymentList.Items {
+		Expect(deploymentList.Items[i].Spec.Replicas).ToNot(BeNil())
 		deployments[i] = &deploymentList.Items[i]
 	}
 	return deployments
@@ -174,7 +174,7 @@ func UpgradeMachineDeploymentsAndWait(ctx context.Context, input UpgradeMachineD
 
 		oldVersion := deployment.Spec.Template.Spec.Version
 		deployment.Spec.Template.Spec.Version = &input.UpgradeVersion
-		Expect(patchHelper.Patch(context.TODO(), deployment)).To(Succeed())
+		Expect(patchHelper.Patch(ctx, deployment)).To(Succeed())
 
 		log.Logf("Waiting for Kubernetes versions of machines in MachineDeployment %s/%s to be upgraded from %s to %s",
 			deployment.Namespace, deployment.Name, *oldVersion, input.UpgradeVersion)
@@ -214,7 +214,7 @@ type WaitForMachineDeploymentRollingUpgradeToCompleteInput struct {
 	MachineDeployment *clusterv1.MachineDeployment
 }
 
-// WaitForMachineDeploymentNodesToExist waits until rolling upgrade is complete.
+// WaitForMachineDeploymentRollingUpgradeToComplete waits until rolling upgrade is complete.
 func WaitForMachineDeploymentRollingUpgradeToComplete(ctx context.Context, input WaitForMachineDeploymentRollingUpgradeToCompleteInput, intervals ...interface{}) {
 	Expect(ctx).NotTo(BeNil(), "ctx is required for WaitForMachineDeploymentRollingUpgradeToComplete")
 	Expect(input.Getter).ToNot(BeNil(), "Invalid argument. input.Getter can't be nil when calling WaitForMachineDeploymentRollingUpgradeToComplete")
@@ -269,7 +269,7 @@ func UpgradeMachineDeploymentInfrastructureRefAndWait(ctx context.Context, input
 		Expect(err).ToNot(HaveOccurred())
 		infraRef.Name = newInfraObjName
 		deployment.Spec.Template.Spec.InfrastructureRef = infraRef
-		Expect(patchHelper.Patch(context.TODO(), deployment)).To(Succeed())
+		Expect(patchHelper.Patch(ctx, deployment)).To(Succeed())
 
 		log.Logf("Waiting for rolling upgrade to start.")
 		WaitForMachineDeploymentRollingUpgradeToStart(ctx, WaitForMachineDeploymentRollingUpgradeToStartInput{
@@ -307,7 +307,7 @@ func ScaleAndWaitMachineDeployment(ctx context.Context, input ScaleAndWaitMachin
 	Expect(input.ClusterProxy).ToNot(BeNil(), "Invalid argument. input.ClusterProxy can't be nil when calling ScaleAndWaitMachineDeployment")
 	Expect(input.Cluster).ToNot(BeNil(), "Invalid argument. input.Cluster can't be nil when calling ScaleAndWaitMachineDeployment")
 
-	log.Logf("Scaling machine deployment %s/%s from %v to %v replicas", input.MachineDeployment.Namespace, input.MachineDeployment.Name, input.MachineDeployment.Spec.Replicas, input.Replicas)
+	log.Logf("Scaling machine deployment %s/%s from %d to %d replicas", input.MachineDeployment.Namespace, input.MachineDeployment.Name, *input.MachineDeployment.Spec.Replicas, input.Replicas)
 	patchHelper, err := patch.NewHelper(input.MachineDeployment, input.ClusterProxy.GetClient())
 	Expect(err).ToNot(HaveOccurred())
 	input.MachineDeployment.Spec.Replicas = pointer.Int32Ptr(input.Replicas)

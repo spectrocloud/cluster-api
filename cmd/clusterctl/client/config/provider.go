@@ -48,14 +48,14 @@ type Provider interface {
 	Less(other Provider) bool
 }
 
-// provider implements Provider
+// provider implements Provider.
 type provider struct {
 	name         string
 	url          string
 	providerType clusterctlv1.ProviderType
 }
 
-// ensure provider implements provider
+// ensure provider implements provider.
 var _ Provider = &provider{}
 
 func (p *provider) Name() string {
@@ -83,6 +83,7 @@ func (p *provider) Less(other Provider) bool {
 		(p.providerType.Order() == other.Type().Order() && p.name < other.Name())
 }
 
+// NewProvider creates a new Provider with the given input.
 func NewProvider(name string, url string, ttype clusterctlv1.ProviderType) Provider {
 	return &provider{
 		name:         name,

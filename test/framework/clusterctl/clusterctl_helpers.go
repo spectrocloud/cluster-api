@@ -18,16 +18,15 @@ package clusterctl
 
 import (
 	"context"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 
 	. "github.com/onsi/gomega"
 
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha3"
+	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha4"
 	"sigs.k8s.io/cluster-api/cmd/clusterctl/client/config"
-	controlplanev1 "sigs.k8s.io/cluster-api/controlplane/kubeadm/api/v1alpha3"
-	clusterv1exp "sigs.k8s.io/cluster-api/exp/api/v1alpha3"
+	controlplanev1 "sigs.k8s.io/cluster-api/controlplane/kubeadm/api/v1alpha4"
+	clusterv1exp "sigs.k8s.io/cluster-api/exp/api/v1alpha4"
 	"sigs.k8s.io/cluster-api/test/framework"
 	"sigs.k8s.io/cluster-api/test/framework/internal/log"
 )
@@ -36,9 +35,13 @@ import (
 type InitManagementClusterAndWatchControllerLogsInput struct {
 	ClusterProxy             framework.ClusterProxy
 	ClusterctlConfigPath     string
+	CoreProvider             string
+	BootstrapProviders       []string
+	ControlPlaneProviders    []string
 	InfrastructureProviders  []string
 	LogFolder                string
 	DisableMetricsCollection bool
+	ClusterctlBinaryPath     string
 }
 
 // InitManagementClusterAndWatchControllerLogs initializes a management using clusterctl and setup watches for controller logs.
@@ -49,50 +52,119 @@ func InitManagementClusterAndWatchControllerLogs(ctx context.Context, input Init
 	Expect(input.ClusterProxy).ToNot(BeNil(), "Invalid argument. input.ClusterProxy can't be nil when calling InitManagementClusterAndWatchControllerLogs")
 	Expect(input.ClusterctlConfigPath).To(BeAnExistingFile(), "Invalid argument. input.ClusterctlConfigPath must be an existing file when calling InitManagementClusterAndWatchControllerLogs")
 	Expect(input.InfrastructureProviders).ToNot(BeEmpty(), "Invalid argument. input.InfrastructureProviders can't be empty when calling InitManagementClusterAndWatchControllerLogs")
-	Expect(os.MkdirAll(input.LogFolder, 0755)).To(Succeed(), "Invalid argument. input.LogFolder can't be created for InitManagementClusterAndWatchControllerLogs")
+	Expect(os.MkdirAll(input.LogFolder, 0750)).To(Succeed(), "Invalid argument. input.LogFolder can't be created for InitManagementClusterAndWatchControllerLogs")
+
+	if input.CoreProvider == "" {
+		input.CoreProvider = config.ClusterAPIProviderName
+	}
+	if len(input.BootstrapProviders) == 0 {
+		input.BootstrapProviders = []string{config.KubeadmBootstrapProviderName}
+	}
+	if len(input.ControlPlaneProviders) == 0 {
+		input.ControlPlaneProviders = []string{config.KubeadmControlPlaneProviderName}
+	}
 
 	client := input.ClusterProxy.GetClient()
-	controllersDeployments := framework.GetControllerDeployments(context.TODO(), framework.GetControllerDeploymentsInput{
+	controllersDeployments := framework.GetControllerDeployments(ctx, framework.GetControllerDeploymentsInput{
 		Lister: client,
 	})
 	if len(controllersDeployments) == 0 {
-		Init(context.TODO(), InitInput{
+		initInput := InitInput{
 			// pass reference to the management cluster hosting this test
 			KubeconfigPath: input.ClusterProxy.GetKubeconfigPath(),
 			// pass the clusterctl config file that points to the local provider repository created for this test
 			ClusterctlConfigPath: input.ClusterctlConfigPath,
 			// setup the desired list of providers for a single-tenant management cluster
-			CoreProvider:            config.ClusterAPIProviderName,
-			BootstrapProviders:      []string{config.KubeadmBootstrapProviderName},
-			ControlPlaneProviders:   []string{config.KubeadmControlPlaneProviderName},
+			CoreProvider:            input.CoreProvider,
+			BootstrapProviders:      input.BootstrapProviders,
+			ControlPlaneProviders:   input.ControlPlaneProviders,
 			InfrastructureProviders: input.InfrastructureProviders,
 			// setup clusterctl logs folder
 			LogFolder: input.LogFolder,
-		})
+		}
+
+		if input.ClusterctlBinaryPath != "" {
+			InitWithBinary(ctx, input.ClusterctlBinaryPath, initInput)
+		} else {
+			Init(ctx, initInput)
+		}
 	}
 
 	log.Logf("Waiting for provider controllers to be running")
-	controllersDeployments = framework.GetControllerDeployments(context.TODO(), framework.GetControllerDeploymentsInput{
+	controllersDeployments = framework.GetControllerDeployments(ctx, framework.GetControllerDeploymentsInput{
 		Lister: client,
 	})
 	Expect(controllersDeployments).ToNot(BeEmpty(), "The list of controller deployments should not be empty")
 	for _, deployment := range controllersDeployments {
-		framework.WaitForDeploymentsAvailable(context.TODO(), framework.WaitForDeploymentsAvailableInput{
+		framework.WaitForDeploymentsAvailable(ctx, framework.WaitForDeploymentsAvailableInput{
 			Getter:     client,
 			Deployment: deployment,
 		}, intervals...)
 
 		// Start streaming logs from all controller providers
-		framework.WatchDeploymentLogs(context.TODO(), framework.WatchDeploymentLogsInput{
+		framework.WatchDeploymentLogs(ctx, framework.WatchDeploymentLogsInput{
 			GetLister:  client,
 			ClientSet:  input.ClusterProxy.GetClientSet(),
 			Deployment: deployment,
 			LogPath:    filepath.Join(input.LogFolder, "controllers"),
 		})
 
-		if input.DisableMetricsCollection {
-			return
+		if !input.DisableMetricsCollection {
+			framework.WatchPodMetrics(ctx, framework.WatchPodMetricsInput{
+				GetLister:   client,
+				ClientSet:   input.ClusterProxy.GetClientSet(),
+				Deployment:  deployment,
+				MetricsPath: filepath.Join(input.LogFolder, "controllers"),
+			})
 		}
+	}
+}
+
+// UpgradeManagementClusterAndWaitInput is the input type for UpgradeManagementClusterAndWait.
+type UpgradeManagementClusterAndWaitInput struct {
+	ClusterProxy         framework.ClusterProxy
+	ClusterctlConfigPath string
+	Contract             string
+	LogFolder            string
+}
+
+// UpgradeManagementClusterAndWait upgrades provider a management cluster using clusterctl, and waits for the cluster to be ready.
+func UpgradeManagementClusterAndWait(ctx context.Context, input UpgradeManagementClusterAndWaitInput, intervals ...interface{}) {
+	Expect(ctx).NotTo(BeNil(), "ctx is required for UpgradeManagementClusterAndWait")
+	Expect(input.ClusterProxy).ToNot(BeNil(), "Invalid argument. input.ClusterProxy can't be nil when calling UpgradeManagementClusterAndWait")
+	Expect(input.ClusterctlConfigPath).To(BeAnExistingFile(), "Invalid argument. input.ClusterctlConfigPath must be an existing file when calling UpgradeManagementClusterAndWait")
+	Expect(input.Contract).ToNot(BeEmpty(), "Invalid argument. input.Contract can't be empty when calling UpgradeManagementClusterAndWait")
+	Expect(os.MkdirAll(input.LogFolder, 0750)).To(Succeed(), "Invalid argument. input.LogFolder can't be created for UpgradeManagementClusterAndWait")
+
+	Upgrade(ctx, UpgradeInput{
+		ClusterctlConfigPath: input.ClusterctlConfigPath,
+		KubeconfigPath:       input.ClusterProxy.GetKubeconfigPath(),
+		Contract:             input.Contract,
+		LogFolder:            input.LogFolder,
+	})
+
+	client := input.ClusterProxy.GetClient()
+
+	log.Logf("Waiting for provider controllers to be running")
+	controllersDeployments := framework.GetControllerDeployments(ctx, framework.GetControllerDeploymentsInput{
+		Lister:            client,
+		ExcludeNamespaces: []string{"capi-webhook-system"}, // this namespace has been dropped in v1alpha4; this ensures we are not waiting for deployments being deleted as part of the upgrade process
+	})
+	Expect(controllersDeployments).ToNot(BeEmpty(), "The list of controller deployments should not be empty")
+	for _, deployment := range controllersDeployments {
+		framework.WaitForDeploymentsAvailable(ctx, framework.WaitForDeploymentsAvailableInput{
+			Getter:     client,
+			Deployment: deployment,
+		}, intervals...)
+
+		// Start streaming logs from all controller providers
+		framework.WatchDeploymentLogs(ctx, framework.WatchDeploymentLogsInput{
+			GetLister:  client,
+			ClientSet:  input.ClusterProxy.GetClientSet(),
+			Deployment: deployment,
+			LogPath:    filepath.Join(input.LogFolder, "controllers"),
+		})
+
 		framework.WatchPodMetrics(ctx, framework.WatchPodMetricsInput{
 			GetLister:   client,
 			ClientSet:   input.ClusterProxy.GetClientSet(),
@@ -111,8 +183,20 @@ type ApplyClusterTemplateAndWaitInput struct {
 	WaitForControlPlaneIntervals []interface{}
 	WaitForMachineDeployments    []interface{}
 	WaitForMachinePools          []interface{}
+	Args                         []string // extra args to be used during `kubectl apply`
+	ControlPlaneWaiters
 }
 
+// Waiter is a function that runs and waits for a long running operation to finish and updates the result.
+type Waiter func(ctx context.Context, input ApplyClusterTemplateAndWaitInput, result *ApplyClusterTemplateAndWaitResult)
+
+// ControlPlaneWaiters are Waiter functions for the control plane.
+type ControlPlaneWaiters struct {
+	WaitForControlPlaneInitialized   Waiter
+	WaitForControlPlaneMachinesReady Waiter
+}
+
+// ApplyClusterTemplateAndWaitResult is the output type for ApplyClusterTemplateAndWait.
 type ApplyClusterTemplateAndWaitResult struct {
 	Cluster            *clusterv1.Cluster
 	ControlPlane       *controlplanev1.KubeadmControlPlane
@@ -120,15 +204,49 @@ type ApplyClusterTemplateAndWaitResult struct {
 	MachinePools       []*clusterv1exp.MachinePool
 }
 
+// ExpectedWorkerNodes returns the expected number of worker nodes that will
+// be provisioned by the given cluster template.
+func (r *ApplyClusterTemplateAndWaitResult) ExpectedWorkerNodes() int32 {
+	expectedWorkerNodes := int32(0)
+
+	for _, md := range r.MachineDeployments {
+		if md.Spec.Replicas != nil {
+			expectedWorkerNodes += *md.Spec.Replicas
+		}
+	}
+	for _, mp := range r.MachinePools {
+		if mp.Spec.Replicas != nil {
+			expectedWorkerNodes += *mp.Spec.Replicas
+		}
+	}
+
+	return expectedWorkerNodes
+}
+
+// ExpectedTotalNodes returns the expected number of nodes that will
+// be provisioned by the given cluster template.
+func (r *ApplyClusterTemplateAndWaitResult) ExpectedTotalNodes() int32 {
+	expectedNodes := r.ExpectedWorkerNodes()
+
+	if r.ControlPlane != nil && r.ControlPlane.Spec.Replicas != nil {
+		expectedNodes += *r.ControlPlane.Spec.Replicas
+	}
+
+	return expectedNodes
+}
+
 // ApplyClusterTemplateAndWait gets a cluster template using clusterctl, and waits for the cluster to be ready.
 // Important! this method assumes the cluster uses a KubeadmControlPlane and MachineDeployments.
-func ApplyClusterTemplateAndWait(ctx context.Context, input ApplyClusterTemplateAndWaitInput) *ApplyClusterTemplateAndWaitResult {
+func ApplyClusterTemplateAndWait(ctx context.Context, input ApplyClusterTemplateAndWaitInput, result *ApplyClusterTemplateAndWaitResult) {
+	setDefaults(&input)
 	Expect(ctx).NotTo(BeNil(), "ctx is required for ApplyClusterTemplateAndWait")
-
 	Expect(input.ClusterProxy).ToNot(BeNil(), "Invalid argument. input.ClusterProxy can't be nil when calling ApplyClusterTemplateAndWait")
+	Expect(result).ToNot(BeNil(), "Invalid argument. result can't be nil when calling ApplyClusterTemplateAndWait")
+	Expect(input.ConfigCluster.ControlPlaneMachineCount).ToNot(BeNil())
+	Expect(input.ConfigCluster.WorkerMachineCount).ToNot(BeNil())
 
 	log.Logf("Creating the workload cluster with name %q using the %q template (Kubernetes %s, %d control-plane machines, %d worker machines)",
-		input.ConfigCluster.ClusterName, valueOrDefault(input.ConfigCluster.Flavor), input.ConfigCluster.KubernetesVersion, input.ConfigCluster.ControlPlaneMachineCount, input.ConfigCluster.WorkerMachineCount)
+		input.ConfigCluster.ClusterName, valueOrDefault(input.ConfigCluster.Flavor), input.ConfigCluster.KubernetesVersion, *input.ConfigCluster.ControlPlaneMachineCount, *input.ConfigCluster.WorkerMachineCount)
 
 	log.Logf("Getting the cluster template yaml")
 	workloadClusterTemplate := ConfigCluster(ctx, ConfigClusterInput{
@@ -151,55 +269,64 @@ func ApplyClusterTemplateAndWait(ctx context.Context, input ApplyClusterTemplate
 	Expect(workloadClusterTemplate).ToNot(BeNil(), "Failed to get the cluster template")
 
 	log.Logf("Applying the cluster template yaml to the cluster")
-	Expect(input.ClusterProxy.Apply(ctx, workloadClusterTemplate)).ShouldNot(HaveOccurred())
+	Expect(input.ClusterProxy.Apply(ctx, workloadClusterTemplate, input.Args...)).To(Succeed())
 
 	log.Logf("Waiting for the cluster infrastructure to be provisioned")
-	cluster := framework.DiscoveryAndWaitForCluster(ctx, framework.DiscoveryAndWaitForClusterInput{
+	result.Cluster = framework.DiscoveryAndWaitForCluster(ctx, framework.DiscoveryAndWaitForClusterInput{
 		Getter:    input.ClusterProxy.GetClient(),
 		Namespace: input.ConfigCluster.Namespace,
 		Name:      input.ConfigCluster.ClusterName,
 	}, input.WaitForClusterIntervals...)
 
 	log.Logf("Waiting for control plane to be initialized")
-	controlPlane := framework.DiscoveryAndWaitForControlPlaneInitialized(ctx, framework.DiscoveryAndWaitForControlPlaneInitializedInput{
-		Lister:  input.ClusterProxy.GetClient(),
-		Cluster: cluster,
-	}, input.WaitForControlPlaneIntervals...)
+	input.WaitForControlPlaneInitialized(ctx, input, result)
 
 	if input.CNIManifestPath != "" {
 		log.Logf("Installing a CNI plugin to the workload cluster")
-		workloadCluster := input.ClusterProxy.GetWorkloadCluster(context.TODO(), cluster.Namespace, cluster.Name)
+		workloadCluster := input.ClusterProxy.GetWorkloadCluster(ctx, result.Cluster.Namespace, result.Cluster.Name)
 
-		cniYaml, err := ioutil.ReadFile(input.CNIManifestPath)
+		cniYaml, err := os.ReadFile(input.CNIManifestPath)
 		Expect(err).ShouldNot(HaveOccurred())
 
-		Expect(workloadCluster.Apply(context.TODO(), cniYaml)).ShouldNot(HaveOccurred())
+		Expect(workloadCluster.Apply(ctx, cniYaml)).ShouldNot(HaveOccurred())
 	}
 
 	log.Logf("Waiting for control plane to be ready")
-	framework.WaitForControlPlaneAndMachinesReady(ctx, framework.WaitForControlPlaneAndMachinesReadyInput{
-		GetLister:    input.ClusterProxy.GetClient(),
-		Cluster:      cluster,
-		ControlPlane: controlPlane,
-	}, input.WaitForControlPlaneIntervals...)
+	input.WaitForControlPlaneMachinesReady(ctx, input, result)
 
 	log.Logf("Waiting for the machine deployments to be provisioned")
-	machineDeployments := framework.DiscoveryAndWaitForMachineDeployments(ctx, framework.DiscoveryAndWaitForMachineDeploymentsInput{
+	result.MachineDeployments = framework.DiscoveryAndWaitForMachineDeployments(ctx, framework.DiscoveryAndWaitForMachineDeploymentsInput{
 		Lister:  input.ClusterProxy.GetClient(),
-		Cluster: cluster,
+		Cluster: result.Cluster,
 	}, input.WaitForMachineDeployments...)
 
 	log.Logf("Waiting for the machine pools to be provisioned")
-	machinePools := framework.DiscoveryAndWaitForMachinePools(ctx, framework.DiscoveryAndWaitForMachinePoolsInput{
+	result.MachinePools = framework.DiscoveryAndWaitForMachinePools(ctx, framework.DiscoveryAndWaitForMachinePoolsInput{
 		Getter:  input.ClusterProxy.GetClient(),
 		Lister:  input.ClusterProxy.GetClient(),
-		Cluster: cluster,
+		Cluster: result.Cluster,
 	}, input.WaitForMachineDeployments...)
+}
 
-	return &ApplyClusterTemplateAndWaitResult{
-		Cluster:            cluster,
-		ControlPlane:       controlPlane,
-		MachineDeployments: machineDeployments,
-		MachinePools:       machinePools,
+// setDefaults sets the default values for ApplyClusterTemplateAndWaitInput if not set.
+// Currently, we set the default ControlPlaneWaiters here, which are implemented for KubeadmControlPlane.
+func setDefaults(input *ApplyClusterTemplateAndWaitInput) {
+	if input.WaitForControlPlaneInitialized == nil {
+		input.WaitForControlPlaneInitialized = func(ctx context.Context, input ApplyClusterTemplateAndWaitInput, result *ApplyClusterTemplateAndWaitResult) {
+			result.ControlPlane = framework.DiscoveryAndWaitForControlPlaneInitialized(ctx, framework.DiscoveryAndWaitForControlPlaneInitializedInput{
+				Lister:  input.ClusterProxy.GetClient(),
+				Cluster: result.Cluster,
+			}, input.WaitForControlPlaneIntervals...)
+		}
+	}
+
+	if input.WaitForControlPlaneMachinesReady == nil {
+		input.WaitForControlPlaneMachinesReady = func(ctx context.Context, input ApplyClusterTemplateAndWaitInput, result *ApplyClusterTemplateAndWaitResult) {
+			framework.WaitForControlPlaneAndMachinesReady(ctx, framework.WaitForControlPlaneAndMachinesReadyInput{
+				GetLister:    input.ClusterProxy.GetClient(),
+				Cluster:      result.Cluster,
+				ControlPlane: result.ControlPlane,
+			}, input.WaitForControlPlaneIntervals...)
+		}
 	}
 }

@@ -22,8 +22,7 @@ import (
 	. "github.com/onsi/gomega"
 
 	"k8s.io/utils/pointer"
-	bootstrapv1 "sigs.k8s.io/cluster-api/bootstrap/kubeadm/api/v1alpha3"
-	infrav1 "sigs.k8s.io/cluster-api/bootstrap/kubeadm/api/v1alpha3"
+	bootstrapv1 "sigs.k8s.io/cluster-api/bootstrap/kubeadm/api/v1alpha4"
 	"sigs.k8s.io/cluster-api/util/certs"
 	"sigs.k8s.io/cluster-api/util/secret"
 )
@@ -36,10 +35,10 @@ func TestNewInitControlPlaneAdditionalFileEncodings(t *testing.T) {
 			Header:              "test",
 			PreKubeadmCommands:  nil,
 			PostKubeadmCommands: nil,
-			AdditionalFiles: []infrav1.File{
+			AdditionalFiles: []bootstrapv1.File{
 				{
 					Path:     "/tmp/my-path",
-					Encoding: infrav1.Base64,
+					Encoding: bootstrapv1.Base64,
 					Content:  "aGk=",
 				},
 				{
@@ -167,7 +166,7 @@ func TestNewInitControlPlaneDiskMounts(t *testing.T) {
   - label: test_disk
     filesystem: ext4
     device: test-device
-    extra_opts: 
+    extra_opts:
       - -F
       - -E
       - lazy_itable_init=1,lazy_journal_init=1`
@@ -175,7 +174,98 @@ func TestNewInitControlPlaneDiskMounts(t *testing.T) {
   - - test_disk
     - /var/lib/testdir`
 
-	g.Expect(out).To(ContainSubstring(expectedDiskSetup))
-	g.Expect(out).To(ContainSubstring(expectedFSSetup))
-	g.Expect(out).To(ContainSubstring(expectedMounts))
+	g.Expect(string(out)).To(ContainSubstring(expectedDiskSetup))
+	g.Expect(string(out)).To(ContainSubstring(expectedFSSetup))
+	g.Expect(string(out)).To(ContainSubstring(expectedMounts))
+}
+
+func TestNewJoinControlPlaneAdditionalFileEncodings(t *testing.T) {
+	g := NewWithT(t)
+
+	cpinput := &ControlPlaneJoinInput{
+		BaseUserData: BaseUserData{
+			Header:              "test",
+			PreKubeadmCommands:  nil,
+			PostKubeadmCommands: nil,
+			AdditionalFiles: []bootstrapv1.File{
+				{
+					Path:     "/tmp/my-path",
+					Encoding: bootstrapv1.Base64,
+					Content:  "aGk=",
+				},
+				{
+					Path:    "/tmp/my-other-path",
+					Content: "hi",
+				},
+			},
+			WriteFiles: nil,
+			Users:      nil,
+			NTP:        nil,
+		},
+		Certificates:      secret.Certificates{},
+		BootstrapToken:    "my-bootstrap-token",
+		JoinConfiguration: "my-join-config",
+	}
+
+	for _, certificate := range cpinput.Certificates {
+		certificate.KeyPair = &certs.KeyPair{
+			Cert: []byte("some certificate"),
+			Key:  []byte("some key"),
+		}
+	}
+
+	out, err := NewJoinControlPlane(cpinput)
+	g.Expect(err).NotTo(HaveOccurred())
+
+	expectedFiles := []string{
+		`-   path: /tmp/my-path
+    encoding: "base64"
+    content: |
+      aGk=`,
+		`-   path: /tmp/my-other-path
+    content: |
+      hi`,
+	}
+	for _, f := range expectedFiles {
+		g.Expect(out).To(ContainSubstring(f))
+	}
+}
+
+func TestNewJoinControlPlaneExperimentalRetry(t *testing.T) {
+	g := NewWithT(t)
+
+	cpinput := &ControlPlaneJoinInput{
+		BaseUserData: BaseUserData{
+			Header:               "test",
+			PreKubeadmCommands:   nil,
+			PostKubeadmCommands:  nil,
+			UseExperimentalRetry: true,
+			WriteFiles:           nil,
+			Users:                nil,
+			NTP:                  nil,
+		},
+		Certificates:      secret.Certificates{},
+		BootstrapToken:    "my-bootstrap-token",
+		JoinConfiguration: "my-join-config",
+	}
+
+	for _, certificate := range cpinput.Certificates {
+		certificate.KeyPair = &certs.KeyPair{
+			Cert: []byte("some certificate"),
+			Key:  []byte("some key"),
+		}
+	}
+
+	out, err := NewJoinControlPlane(cpinput)
+	g.Expect(err).NotTo(HaveOccurred())
+
+	expectedFiles := []string{
+		`-   path: ` + retriableJoinScriptName + `
+    owner: ` + retriableJoinScriptOwner + `
+    permissions: '` + retriableJoinScriptPermissions + `'
+    `,
+	}
+	for _, f := range expectedFiles {
+		g.Expect(out).To(ContainSubstring(f))
+	}
 }

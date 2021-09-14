@@ -14,6 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// Package certs implements cert handling utilities.
 package certs
 
 import (
@@ -27,7 +28,7 @@ import (
 	kerrors "k8s.io/apimachinery/pkg/util/errors"
 )
 
-// NewPrivateKey creates an RSA private key
+// NewPrivateKey creates an RSA private key.
 func NewPrivateKey() (*rsa.PrivateKey, error) {
 	pk, err := rsa.GenerateKey(rand.Reader, DefaultRSAKeySize)
 	return pk, errors.WithStack(err)

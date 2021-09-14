@@ -22,7 +22,7 @@ import (
 
 	"github.com/pkg/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha3"
+	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha4"
 )
 
 type (
@@ -31,15 +31,6 @@ type (
 )
 
 const (
-	// DeleteNodeAnnotation marks nodes that will be given priority for deletion
-	// when a machineset scales down. This annotation is given top priority on all delete policies.
-	// Deprecated: Please use DeleteMachineAnnotation instead.
-	DeleteNodeAnnotation = "cluster.k8s.io/delete-machine"
-	// DeleteMachineAnnotation marks nodes that will be given priority for deletion
-	// when a machineset scales down. This annotation is given top priority on all delete policies.
-	// Deprecated: Please use DeleteMachineAnnotation under api/v1alpha3 instead.
-	DeleteMachineAnnotation = "cluster.x-k8s.io/delete-machine"
-
 	mustDelete    deletePriority = 100.0
 	betterDelete  deletePriority = 50.0
 	couldDelete   deletePriority = 20.0
@@ -48,12 +39,9 @@ const (
 	secondsPerTenDays float64 = 864000
 )
 
-// maps the creation timestamp onto the 0-100 priority range
+// maps the creation timestamp onto the 0-100 priority range.
 func oldestDeletePriority(machine *clusterv1.Machine) deletePriority {
 	if !machine.DeletionTimestamp.IsZero() {
-		return mustDelete
-	}
-	if machine.ObjectMeta.Annotations != nil && machine.ObjectMeta.Annotations[DeleteNodeAnnotation] != "" {
 		return mustDelete
 	}
 	if _, ok := machine.ObjectMeta.Annotations[clusterv1.DeleteMachineAnnotation]; ok {
@@ -79,9 +67,6 @@ func newestDeletePriority(machine *clusterv1.Machine) deletePriority {
 	if !machine.DeletionTimestamp.IsZero() {
 		return mustDelete
 	}
-	if machine.ObjectMeta.Annotations != nil && machine.ObjectMeta.Annotations[DeleteNodeAnnotation] != "" {
-		return mustDelete
-	}
 	if _, ok := machine.ObjectMeta.Annotations[clusterv1.DeleteMachineAnnotation]; ok {
 		return mustDelete
 	}
@@ -97,9 +82,6 @@ func newestDeletePriority(machine *clusterv1.Machine) deletePriority {
 func randomDeletePolicy(machine *clusterv1.Machine) deletePriority {
 	if !machine.DeletionTimestamp.IsZero() {
 		return mustDelete
-	}
-	if machine.ObjectMeta.Annotations != nil && machine.ObjectMeta.Annotations[DeleteNodeAnnotation] != "" {
-		return betterDelete
 	}
 	if _, ok := machine.ObjectMeta.Annotations[clusterv1.DeleteMachineAnnotation]; ok {
 		return betterDelete

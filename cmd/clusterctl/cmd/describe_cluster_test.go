@@ -28,15 +28,15 @@ import (
 
 	"github.com/fatih/color"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha3"
+	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha4"
 	"sigs.k8s.io/cluster-api/cmd/clusterctl/client/tree"
-	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 func Test_getRowName(t *testing.T) {
 	tests := []struct {
 		name   string
-		object controllerutil.Object
+		object ctrlclient.Object
 		expect string
 	}{
 		{
@@ -286,14 +286,13 @@ func Test_TreePrefix(t *testing.T) {
 			for i := range tt.expectPrefix {
 				g.Expect(tbl.Rows[i].Cells[0].String()).To(Equal(tt.expectPrefix[i]))
 			}
-
 		})
 	}
 }
 
-type objectOption func(object controllerutil.Object)
+type objectOption func(object ctrlclient.Object)
 
-func fakeObject(name string, options ...objectOption) controllerutil.Object {
+func fakeObject(name string, options ...objectOption) ctrlclient.Object {
 	c := &clusterv1.Cluster{ // suing type cluster for simplicity, but this could be any object
 		TypeMeta: metav1.TypeMeta{
 			Kind: "Object",
@@ -310,8 +309,8 @@ func fakeObject(name string, options ...objectOption) controllerutil.Object {
 	return c
 }
 
-func withAnnotation(name, value string) func(controllerutil.Object) {
-	return func(c controllerutil.Object) {
+func withAnnotation(name, value string) func(ctrlclient.Object) {
+	return func(c ctrlclient.Object) {
 		if c.GetAnnotations() == nil {
 			c.SetAnnotations(map[string]string{})
 		}
@@ -321,14 +320,14 @@ func withAnnotation(name, value string) func(controllerutil.Object) {
 	}
 }
 
-func withCondition(c *clusterv1.Condition) func(controllerutil.Object) {
-	return func(m controllerutil.Object) {
+func withCondition(c *clusterv1.Condition) func(ctrlclient.Object) {
+	return func(m ctrlclient.Object) {
 		setter := m.(conditions.Setter)
 		conditions.Set(setter, c)
 	}
 }
 
-func withDeletionTimestamp(object controllerutil.Object) {
+func withDeletionTimestamp(object ctrlclient.Object) {
 	now := metav1.Now()
 	object.SetDeletionTimestamp(&now)
 }

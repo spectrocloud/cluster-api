@@ -42,9 +42,9 @@ performed in-place or via Node replacement.
 ## Proposal
 
 This proposal introduces a new API type: Machine. See the full definition in
-[types.go](types.go).
+[machine_types.go](../../api/v1alpha4/machine_types.go).
 
-A "Machine" is the declarative spec for a Node, as represented in Kuberenetes
+A "Machine" is the declarative spec for a Node, as represented in Kubernetes
 core. If a new Machine object is created, a provider-specific controller will
 handle provisioning and installing a new host to register as a new Node matching
 the Machine spec. If the Machine's spec is updated, a provider-specific
@@ -138,9 +138,9 @@ generally been used as a timeline of state transitions for the object's
 reconciliation, and difficult to consume for clients that just want a meaningful
 representation of the object's current state. There are no existing examples of
 the new pattern to follow instead, just the guidance that we should use
-top-level fields in the status to reprensent meaningful information. We can
+top-level fields in the status to represent meaningful information. We can
 revisit the specifics when new patterns start to emerge in core.
 
 ## Types
 
-Please see the full types [here](https://github.com/kubernetes-sigs/cluster-api/tree/release-0.2/pkg/apis/deprecated/v1alpha1/machine_types.go).
+Please see the full types [here](../../api/v1alpha4/machine_types.go).

@@ -10,7 +10,7 @@ reviewers:
   - "@ncdc"
   - "@timothysc"
 creation-date: 2019-10-30
-last-updated: 2020-08-04
+last-updated: 2021-01-28
 status: implementable
 see-also:
 replaces:
@@ -89,8 +89,8 @@ MHC requests a remediation in one of the following ways:
 - Applying a Condition which the owning controller consumes to remediate the machine (default) 
 - Creating a CR based on a template which signals external component to remediate the machine 
 
-It provides a short-circuit mechanism and limits remediation when the `maxUnhealthy` threshold is reached for a targeted group of machines.
-This is similar to what the node life cycle controller does for reducing the eviction rate as nodes become unhealthy in a given zone. E.g a large number of nodes in a single zone are down due to a networking issue.
+It provides a short-circuit mechanism and limits remediation when the number of unhealthy machines is not within `unhealthyRange`, or has reached `maxUnhealthy` threshold for a targeted group of machines with `unhealthyRange` taking precedence.
+This is similar to what the node life cycle controller does for reducing the eviction rate as nodes become unhealthy in a given zone. E.g. a large number of nodes in a single zone are down due to a networking issue.
 
 The machine health checker is an integration point between node problem detection tooling expressed as node conditions and remediation to achieve a node auto repairing feature.
 
@@ -100,11 +100,11 @@ A machine is unhealthy when:
 - The Machine has no nodeRef.
 - The Machine has a nodeRef but the referenced node is not found.
 
-If any of those criteria are met for longer than the given timeouts and the `maxUnhealthy` threshold has not been reached yet, the machine will be marked as failing the healthcheck.
+If any of those criteria are met for longer than the given timeouts and the number of unhealthy machines is either within the `unhealthyRange` if specified, or has not reached `maxUnhealthy` threshold, the machine will be marked as failing the healthcheck.
 
 Timeouts:
 - For the node conditions the time outs are defined by the admin.
-- For a machine with no nodeRef an opinionated value could be assumed e.g 10 min.
+- For a machine with no nodeRef an opinionated value could be assumed e.g. 10 min.
 
 ### Remediation:
 - Remediation is not an integral part or responsibility of MachineHealthCheck. This controller only functions as a means for others to act when a Machine is unhealthy in the best way possible.
@@ -187,11 +187,11 @@ This is the default remediation strategy.
 
 A generic mechanism for supporting externally provided custom remediation strategies.
 
-We propose modifying the MachineHealthCheck CRD to support a externalRemediationTemplate, an ObjectReference to a provider-specific template CRD.
+We propose modifying the MachineHealthCheck CRD to support a remediationTemplate, an ObjectReference to a provider-specific template CRD.
 
-If no value for externalRemediationTemplate is defined for the MachineHealthCheck CR, the condition-based flow is preserved.
+If no value for remediationTemplate is defined for the MachineHealthCheck CR, the condition-based flow is preserved.
 
-If a value for externalRemediationTemplate is supplied and the Machine enters an unhealthy state, the template will be instantiated using existing CAPI functionality, with the same name and namespace as the target Machine, and the remediation flow passed to an External Remediation Controller (ERC) watching for that CR.
+If a value for remediationTemplate is supplied and the Machine enters an unhealthy state, the template will be instantiated using existing CAPI functionality, with the same name and namespace as the target Machine, and the remediation flow passed to an External Remediation Controller (ERC) watching for that CR.
 
 No further action (deletion or applying conditions) will be taken by the MachineHealthCheck controller until the Node becomes healthy, when it will locate and delete the instantiated MachineRemediation CR.
 
@@ -200,7 +200,7 @@ No further action (deletion or applying conditions) will be taken by the Machine
         ...
     
         // +optional
-        ExternalRemediationTemplate *ObjectReference `json:"externalRemediationTemplate,omitempty"`
+        RemediationTemplate *ObjectReference `json:"remediationTemplate,omitempty"`
     }
 ```
 
@@ -237,7 +237,7 @@ MachineHealthCheck:
       selector:
         matchLabels: 
           ...
-      externalRemediationTemplate:
+      remediationTemplate:
         kind: Metal3RemediationTemplate
         apiVersion: remediation.metal3.io/v1alphaX
         name: M3_REMEDIATION_GROUP
@@ -299,7 +299,8 @@ type target struct {
 ```
 
 - Calculate the number of unhealthy targets.
-- Compare current number against `maxUnhealthy` threshold and temporary short circuits remediation if the threshold is met.
+- Compare current number against `unhealthyRange`, if specified, and temporarily short circuit remediation if it's not within the range.
+- If `unhealthyRange` is not specified, compare against `maxUnhealthy` threshold and temporarily short circuit remediation if the threshold is met.
 - Either marks unhealthy target machines with conditions or create an external remediation CR as described above.
 
 Out of band:
@@ -375,7 +376,7 @@ For failing early testing we could consider a test suite leveraging kubemark as 
 [testing-guidelines]: https://git.k8s.io/community/contributors/devel/sig-testing/testing.md
 
 ### Graduation Criteria [optional]
-This propose the new CRD to belong to the same API group than other cluster-api resources, e.g machine, machineSet and to follow the same release cadence.
+This propose the new CRD to belong to the same API group than other cluster-api resources, e.g. machine, machineSet and to follow the same release cadence.
 
 ### Version Skew Strategy [optional]
 

@@ -2,10 +2,10 @@
 
 aliases:
   sig-cluster-lifecycle-leads:
-  - neolit123
-  - justinsb
-  - timothysc
   - fabriziopandini
+  - justinsb
+  - neolit123
+  - timothysc
 
   # -----------------------------------------------------------
   # OWNER_ALIASES for Cluster API
@@ -14,59 +14,53 @@ aliases:
   # active folks who can be contacted to perform admin-related
   # tasks on the repo, or otherwise approve any PRS.
   cluster-api-admins:
-  - justinsb
-  - detiber
-  - davidewatson
+  - CecileRobertMichon
   - vincepri
 
   # non-admin folks who have write-access and can approve any PRs in the repo
   cluster-api-maintainers:
-  - justinsb
-  - detiber
-  - vincepri
   - CecileRobertMichon
+  - fabriziopandini
+  - vincepri
 
   # folks who can review and LGTM any PRs in the repo
   cluster-api-reviewers:
-  - CecileRobertMichon
-  - vincepri
   - JoelSpeed
-  - benmoss
+  - sbueringer
+  - enxebre
 
   # -----------------------------------------------------------
-  # OWNER_ALIASES for docs/book
+  # OWNER_ALIASES for controllers/topology
   # -----------------------------------------------------------
 
-  # folks who can review and LGTM any PRs under docs/book
-  cluster-api-book-reviewers:
-  - randomvariable
-  - moshloop
-
-  # -----------------------------------------------------------
-  # OWNER_ALIASES for test/infrastructure/docker
-  # -----------------------------------------------------------
-
-  cluster-api-provider-docker-maintainers:
-  - fabriziopandini
+  cluster-api-topology-maintainers:
+  cluster-api-topology-reviewers:
+  - ykakarap
 
   # -----------------------------------------------------------
   # OWNER_ALIASES for bootstrap/kubeadm
   # -----------------------------------------------------------
 
   cluster-api-bootstrap-provider-kubeadm-maintainers:
-  - fabriziopandini
-  - SataQiu
-
   cluster-api-bootstrap-provider-kubeadm-reviewers:
-  - fabriziopandini
+
+  # -----------------------------------------------------------
+  # OWNER_ALIASES for controlplane/kubeadm
+  # -----------------------------------------------------------
+
+  cluster-api-controlplane-provider-kubeadm-maintainers:
+  cluster-api-controlplane-provider-kubeadm-reviewers:
 
   # -----------------------------------------------------------
   # OWNER_ALIASES for cmd/clusterctl
   # -----------------------------------------------------------
 
   cluster-api-clusterctl-maintainers:
-  - fabriziopandini
-
   cluster-api-clusterctl-reviewers:
-  - fabriziopandini
-  - wfernandes
+
+  # -----------------------------------------------------------
+  # OWNER_ALIASES for test/infrastructure/docker
+  # -----------------------------------------------------------
+
+  cluster-api-provider-docker-reviewers:
+  cluster-api-provider-docker-maintainers:

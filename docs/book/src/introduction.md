@@ -1,18 +1,18 @@
-# The Cluster API project<div style="float: right; position: relative; display: inline;"><img src="images/introduction.png" width="160px" /></div>
+# Kubernetes Cluster API<div style="float: right; position: relative; display: inline;"><img src="images/introduction.png" width="160px" /></div>
 
 Cluster API is a Kubernetes sub-project focused on providing declarative APIs and tooling to simplify provisioning, upgrading, and operating multiple Kubernetes clusters.
 
-Started by the Kubernetes Special Interest Group (SIG) Cluster Lifecycle, the Cluster API project uses Kubernetes-style APIs and patterns to automate cluster lifecycle management for platform operators. The supporting infrastructure, like virtual machines, networks, load balancers, and VPCs, as well as the Kubernetes cluster configuration are all defined in the same way that application developers operate deploying and managing their workloads. This enables consistent and repeatable cluster deployments across a wide variety of infrastructure environments.
+Started by the Kubernetes Special Interest Group (SIG) [Cluster Lifecycle](https://github.com/kubernetes/community/tree/master/sig-cluster-lifecycle#readme), the Cluster API project uses Kubernetes-style APIs and patterns to automate cluster lifecycle management for platform operators. The supporting infrastructure, like virtual machines, networks, load balancers, and VPCs, as well as the Kubernetes cluster configuration are all defined in the same way that application developers operate deploying and managing their workloads. This enables consistent and repeatable cluster deployments across a wide variety of infrastructure environments.
 
-### Getting started
+## Getting started
+
 * [Quick start](./user/quick-start.md)
 * [Concepts](./user/concepts.md)
 * [Developer guide](./developer/guide.md)
 * [Contributing](./CONTRIBUTING.md)
 
-**Using Cluster API v1alpha2?** See the [legacy
-documentation](https://release-0-2.cluster-api.sigs.k8s.io).
-
+**Using Cluster API v1alpha3?** See the [legacy
+documentation](https://release-0-3.cluster-api.sigs.k8s.io).
 
 ## Why build Cluster API?
 
@@ -20,7 +20,7 @@ Kubernetes is a complex system that relies on several components being configure
 
 [Kubeadm](https://kubernetes.io/docs/reference/setup-tools/kubeadm/kubeadm/) was designed as a focused tool for bootstrapping a best-practices Kubernetes cluster. The core tenet behind the kubeadm project was to create a tool that other installers can leverage and ultimately alleviate the amount of configuration that an individual installer needed to maintain. Since it began, kubeadm has become the underlying bootstrapping tool for several other applications, including Kubespray, Minikube, kind, etc.
 
-However, while kubeadm and other bootstrap providers reduce installation complexity, they don't address how to manage a cluster day-to-day or a Kubernetes environment long term. You are still faced with several questions when setting up a production environment, including
+However, while kubeadm and other bootstrap providers reduce installation complexity, they don't address how to manage a cluster day-to-day or a Kubernetes environment long term. You are still faced with several questions when setting up a production environment, including:
 
 * How can I consistently provision machines, load balancers, VPC, etc., across multiple infrastructure providers and locations?
 * How can I automate cluster lifecycle management, including things like upgrades and cluster deletion?

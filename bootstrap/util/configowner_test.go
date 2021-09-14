@@ -17,34 +17,26 @@ limitations under the License.
 package util
 
 import (
-	"context"
 	"testing"
 
 	. "github.com/onsi/gomega"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/utils/pointer"
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha3"
-	bootstrapv1 "sigs.k8s.io/cluster-api/bootstrap/kubeadm/api/v1alpha3"
-	expv1 "sigs.k8s.io/cluster-api/exp/api/v1alpha3"
+	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha4"
+	bootstrapv1 "sigs.k8s.io/cluster-api/bootstrap/kubeadm/api/v1alpha4"
+	expv1 "sigs.k8s.io/cluster-api/exp/api/v1alpha4"
 	"sigs.k8s.io/cluster-api/feature"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
 func TestGetConfigOwner(t *testing.T) {
-	g := NewWithT(t)
-
-	scheme := runtime.NewScheme()
-	g.Expect(clusterv1.AddToScheme(scheme)).To(Succeed())
-	g.Expect(expv1.AddToScheme(scheme)).To(Succeed())
-
 	t.Run("should get the owner when present (Machine)", func(t *testing.T) {
 		g := NewWithT(t)
 		myMachine := &clusterv1.Machine{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      "my-machine",
-				Namespace: "my-ns",
+				Namespace: metav1.NamespaceDefault,
 				Labels: map[string]string{
 					clusterv1.MachineControlPlaneLabelName: "",
 				},
@@ -61,7 +53,7 @@ func TestGetConfigOwner(t *testing.T) {
 			},
 		}
 
-		c := fake.NewFakeClientWithScheme(scheme, myMachine)
+		c := fake.NewClientBuilder().WithObjects(myMachine).Build()
 		obj := &bootstrapv1.KubeadmConfig{
 			ObjectMeta: metav1.ObjectMeta{
 				OwnerReferences: []metav1.OwnerReference{
@@ -71,11 +63,11 @@ func TestGetConfigOwner(t *testing.T) {
 						Name:       "my-machine",
 					},
 				},
-				Namespace: "my-ns",
+				Namespace: metav1.NamespaceDefault,
 				Name:      "my-resource-owned-by-machine",
 			},
 		}
-		configOwner, err := GetConfigOwner(context.TODO(), c, obj)
+		configOwner, err := GetConfigOwner(ctx, c, obj)
 		g.Expect(err).NotTo(HaveOccurred())
 		g.Expect(configOwner).ToNot(BeNil())
 		g.Expect(configOwner.ClusterName()).To(BeEquivalentTo("my-cluster"))
@@ -93,7 +85,7 @@ func TestGetConfigOwner(t *testing.T) {
 		myPool := &expv1.MachinePool{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      "my-machine-pool",
-				Namespace: "my-ns",
+				Namespace: metav1.NamespaceDefault,
 				Labels: map[string]string{
 					clusterv1.MachineControlPlaneLabelName: "",
 				},
@@ -111,7 +103,7 @@ func TestGetConfigOwner(t *testing.T) {
 			},
 		}
 
-		c := fake.NewFakeClientWithScheme(scheme, myPool)
+		c := fake.NewClientBuilder().WithObjects(myPool).Build()
 		obj := &bootstrapv1.KubeadmConfig{
 			ObjectMeta: metav1.ObjectMeta{
 				OwnerReferences: []metav1.OwnerReference{
@@ -121,11 +113,11 @@ func TestGetConfigOwner(t *testing.T) {
 						Name:       "my-machine-pool",
 					},
 				},
-				Namespace: "my-ns",
+				Namespace: metav1.NamespaceDefault,
 				Name:      "my-resource-owned-by-machine-pool",
 			},
 		}
-		configOwner, err := GetConfigOwner(context.TODO(), c, obj)
+		configOwner, err := GetConfigOwner(ctx, c, obj)
 		g.Expect(err).NotTo(HaveOccurred())
 		g.Expect(configOwner).ToNot(BeNil())
 		g.Expect(configOwner.ClusterName()).To(BeEquivalentTo("my-cluster"))
@@ -138,7 +130,7 @@ func TestGetConfigOwner(t *testing.T) {
 
 	t.Run("return an error when not found", func(t *testing.T) {
 		g := NewWithT(t)
-		c := fake.NewFakeClientWithScheme(scheme)
+		c := fake.NewClientBuilder().Build()
 		obj := &bootstrapv1.KubeadmConfig{
 			ObjectMeta: metav1.ObjectMeta{
 				OwnerReferences: []metav1.OwnerReference{
@@ -148,25 +140,25 @@ func TestGetConfigOwner(t *testing.T) {
 						Name:       "my-machine",
 					},
 				},
-				Namespace: "my-ns",
+				Namespace: metav1.NamespaceDefault,
 				Name:      "my-resource-owned-by-machine",
 			},
 		}
-		_, err := GetConfigOwner(context.TODO(), c, obj)
+		_, err := GetConfigOwner(ctx, c, obj)
 		g.Expect(err).To(HaveOccurred())
 	})
 
 	t.Run("return nothing when there is no owner", func(t *testing.T) {
 		g := NewWithT(t)
-		c := fake.NewFakeClientWithScheme(scheme)
+		c := fake.NewClientBuilder().Build()
 		obj := &bootstrapv1.KubeadmConfig{
 			ObjectMeta: metav1.ObjectMeta{
 				OwnerReferences: []metav1.OwnerReference{},
-				Namespace:       "my-ns",
+				Namespace:       metav1.NamespaceDefault,
 				Name:            "my-resource-owned-by-machine",
 			},
 		}
-		configOwner, err := GetConfigOwner(context.TODO(), c, obj)
+		configOwner, err := GetConfigOwner(ctx, c, obj)
 		g.Expect(err).NotTo(HaveOccurred())
 		g.Expect(configOwner).To(BeNil())
 	})

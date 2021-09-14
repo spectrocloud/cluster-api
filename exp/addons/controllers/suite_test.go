@@ -18,62 +18,63 @@ package controllers
 
 import (
 	"context"
+	"fmt"
+	"os"
 	"testing"
 
-	. "github.com/onsi/ginkgo"
-	. "github.com/onsi/gomega"
-
+	corev1 "k8s.io/api/core/v1"
+	"sigs.k8s.io/cluster-api/api/v1alpha4/index"
 	"sigs.k8s.io/cluster-api/controllers/remote"
-	"sigs.k8s.io/cluster-api/test/helpers"
+	"sigs.k8s.io/cluster-api/exp/addons/api/v1alpha4"
+	"sigs.k8s.io/cluster-api/internal/envtest"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
-	"sigs.k8s.io/controller-runtime/pkg/envtest/printer"
-	"sigs.k8s.io/controller-runtime/pkg/log"
 	// +kubebuilder:scaffold:imports
 )
 
-// These tests use Ginkgo (BDD-style Go testing framework). Refer to
-// http://onsi.github.io/ginkgo/ to learn more about Ginkgo.
-
 var (
-	testEnv *helpers.TestEnvironment
-	ctx     = context.Background()
+	env *envtest.Environment
+	ctx = ctrl.SetupSignalHandler()
 )
 
-func TestAPIs(t *testing.T) {
-	RegisterFailHandler(Fail)
-
-	RunSpecsWithDefaultAndCustomReporters(t,
-		"Controller Suite",
-		[]Reporter{printer.NewlineReporter{}})
-}
-
-var _ = BeforeSuite(func(done Done) {
-	By("bootstrapping test environment")
-	testEnv = helpers.NewTestEnvironment()
-	trckr, err := remote.NewClusterCacheTracker(log.NullLogger{}, testEnv.Manager)
-	Expect(err).NotTo(HaveOccurred())
-	Expect((&ClusterResourceSetReconciler{
-		Client:  testEnv,
-		Log:     log.Log,
-		Tracker: trckr,
-	}).SetupWithManager(testEnv.Manager, controller.Options{MaxConcurrentReconciles: 1})).To(Succeed())
-	Expect((&ClusterResourceSetBindingReconciler{
-		Client: testEnv,
-		Log:    log.Log,
-	}).SetupWithManager(testEnv.Manager, controller.Options{MaxConcurrentReconciles: 1})).To(Succeed())
-
-	By("starting the manager")
-	go func() {
-		defer GinkgoRecover()
-		Expect(testEnv.StartManager()).To(Succeed())
-	}()
-
-	close(done)
-}, 60)
-
-var _ = AfterSuite(func() {
-	if testEnv != nil {
-		By("tearing down the test environment")
-		Expect(testEnv.Stop()).To(Succeed())
+func TestMain(m *testing.M) {
+	setupIndexes := func(ctx context.Context, mgr ctrl.Manager) {
+		if err := index.AddDefaultIndexes(ctx, mgr); err != nil {
+			panic(fmt.Sprintf("unable to setup index: %v", err))
+		}
 	}
-})
+
+	setupReconcilers := func(ctx context.Context, mgr ctrl.Manager) {
+		tracker, err := remote.NewClusterCacheTracker(mgr, remote.ClusterCacheTrackerOptions{})
+		if err != nil {
+			panic(fmt.Sprintf("Failed to create new cluster cache tracker: %v", err))
+		}
+
+		reconciler := ClusterResourceSetReconciler{
+			Client:  mgr.GetClient(),
+			Tracker: tracker,
+		}
+		if err = reconciler.SetupWithManager(ctx, mgr, controller.Options{MaxConcurrentReconciles: 1}); err != nil {
+			panic(fmt.Sprintf("Failed to set up cluster resource set reconciler: %v", err))
+		}
+		bindingReconciler := ClusterResourceSetBindingReconciler{
+			Client: mgr.GetClient(),
+		}
+		if err = bindingReconciler.SetupWithManager(ctx, mgr, controller.Options{MaxConcurrentReconciles: 1}); err != nil {
+			panic(fmt.Sprintf("Failed to set up cluster resource set binding reconciler: %v", err))
+		}
+	}
+
+	os.Exit(envtest.Run(ctx, envtest.RunInput{
+		M:        m,
+		SetupEnv: func(e *envtest.Environment) { env = e },
+		ManagerUncachedObjs: []client.Object{
+			&corev1.ConfigMap{},
+			&corev1.Secret{},
+			&v1alpha4.ClusterResourceSetBinding{},
+		},
+		SetupIndexes:     setupIndexes,
+		SetupReconcilers: setupReconcilers,
+	}))
+}

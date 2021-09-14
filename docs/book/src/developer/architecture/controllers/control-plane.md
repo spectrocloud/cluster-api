@@ -48,7 +48,7 @@ The `ImplementationControlPlane` *must* rely on the existence of
 
 * `replicas` - is an integer representing the number of desired
   replicas. In the KubeadmControlPlane, this represents the desired
-  number of desired control plane machines.
+  number of control plane machines.
 
 * `scale` subresource with the following signature:
 
@@ -63,6 +63,35 @@ status: {}
 More information about the [scale subresource can be found in the Kubernetes
 documentation][scale].
 
+#### Required `spec` fields for implementations using version
+
+* `version` - is a string representing the Kubernetes version to be used
+  by the control plane machines. The value must be a valid semantic version;
+  also if the value provided by the user does not start with the v prefix, it
+  must be added.
+
+#### Required `spec` fields for implementations using Machines
+
+* `machineTemplate` - is a struct containing details of the control plane 
+  machine template.
+
+* `machineTemplate.metadata` - is a struct containing info about metadata for control plane
+  machines.
+
+* `machineTemplate.metadata.labels` - is a map of string keys and values that can be used 
+  to organize and categorize control plane machines.
+
+* `machineTemplate.metadata.annotations` - is a map of string keys and values containing
+  arbitrary metadata to be applied to control plane machines.
+
+* `machineTemplate.infrastructureRef` - is a corev1.ObjectReference to a custom resource
+  offered by an infrastructure provider. The namespace in the ObjectReference must
+  be in the same namespace of the control plane object. 
+
+* `machineTemplate.nodeDrainTimeout` - is a *metav1.Duration defining the total amount of time
+  that the controller will spend on draining a control plane node.
+  The default value is 0, meaning that the node can be drained without any time limitations.
+  
 #### Required `status` fields
 
 The `ImplementationControlPlane` object **must** have a `status` object.
@@ -77,7 +106,7 @@ The `status` object **must** have the following fields defined:
     <th> Implementation in Kubeadm Control Plane Controller </th>
   </tr>
   <tr>
-    <td><code>initialized</code>
+    <td><code>initialized</code></td>
     <td>Boolean</td>
     <td>
       a boolean field that is true when the target cluster has
@@ -95,9 +124,8 @@ The `status` object **must** have the following fields defined:
     <td>
       Ready denotes that the target API Server is ready to receive requests.
     </td>
-    <td />
+    <td></td>
   </tr>
-  <tr>
 </table>
 
 #### Required `status` fields for implementations using replicas
@@ -118,7 +146,6 @@ following fields defined:
     <td>Integer</td>
     <td>Total number of fully running and ready control plane instances.</td>
     <td>Is equal to the number of fully running and ready control plane machines</td>
-    <td />
   </tr>
   <tr>
     <td><code>replicas</code></td>
@@ -127,7 +154,6 @@ following fields defined:
       i.e. the state machine for this instance
       of the control plane is able to transition to ready.</td>
     <td>Is equal to the number of non-terminated control plane machines</td>
-    <td />
   </tr>
   <tr>
     <td><code>selector</code></td>
@@ -138,7 +164,7 @@ following fields defined:
       kubectl describe. The string will be in the same format as the query-param
       syntax. More info about label selectors: http://kubernetes.io/docs/user-guide/labels#label-selectors
     </td>
-    <td />
+    <td></td>
   </tr>
   <tr>
     <td><code>unavailableReplicas</code></td>
@@ -169,9 +195,17 @@ following fields defined:
       control plane that have the desired template spec.
     </td>
   </tr>
-  </tr>
 </table>
 
+#### Required `status` fields for implementations using version
+
+* `version` - is a string representing the minimum Kubernetes version for the
+  control plane machines in the cluster.
+  NOTE: The minimum Kubernetes version, and more specifically the API server
+  version, will be used to determine when a control plane is fully upgraded
+  (`spec.version == status.version`) and for enforcing [Kubernetes version
+  skew policies](https://kubernetes.io/releases/version-skew-policy/) in managed topologies.
+  
 #### Optional `status` fields
 
 The `status` object **may** define several fields:

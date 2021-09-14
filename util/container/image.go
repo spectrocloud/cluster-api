@@ -14,6 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// Package container implements container utility functionality.
 package container
 
 import (
@@ -34,7 +35,7 @@ var (
 	ociTagAllowedChars = regexp.MustCompile(`[^-a-zA-Z0-9_\.]`)
 )
 
-// Image type represents the container image details
+// Image type represents the container image details.
 type Image struct {
 	Repository string
 	Name       string
@@ -82,7 +83,7 @@ func (i Image) String() string {
 	return ref
 }
 
-// ModifyImageRepository takes an imageName (e.g., repository/image:tag), and returns an image name with updated repository
+// ModifyImageRepository takes an imageName (e.g., repository/image:tag), and returns an image name with updated repository.
 func ModifyImageRepository(imageName, repositoryName string) (string, error) {
 	image, err := ImageFromString(imageName)
 	if err != nil {
@@ -102,7 +103,7 @@ func ModifyImageRepository(imageName, repositoryName string) (string, error) {
 	return "", errors.New("image must be tagged")
 }
 
-// ModifyImageTag takes an imageName (e.g., repository/image:tag), and returns an image name with updated tag
+// ModifyImageTag takes an imageName (e.g., repository/image:tag), and returns an image name with updated tag.
 func ModifyImageTag(imageName, tagName string) (string, error) {
 	normalisedTagName := SemverToOCIImageTag(tagName)
 
@@ -124,7 +125,7 @@ func ModifyImageTag(imageName, tagName string) (string, error) {
 	return reference.FamiliarString(reference.TagNameOnly(namedTagged)), nil
 }
 
-// ImageTagIsValid ensures that a given image tag is compliant with the OCI spec
+// ImageTagIsValid ensures that a given image tag is compliant with the OCI spec.
 func ImageTagIsValid(tagName string) bool {
 	return !ociTagAllowedChars.MatchString(tagName)
 }
@@ -135,7 +136,7 @@ func ImageTagIsValid(tagName string) bool {
 // underscores, periods and dashes.
 // Current usage is for CI images where all of symbols except '+' are valid,
 // but function is for generic usage where input can't be always pre-validated.
-// Taken from k8s.io/cmd/kubeadm/app/util
+// Taken from k8s.io/cmd/kubeadm/app/util.
 func SemverToOCIImageTag(version string) string {
 	return ociTagAllowedChars.ReplaceAllString(version, "_")
 }

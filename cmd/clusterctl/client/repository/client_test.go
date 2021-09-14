@@ -73,7 +73,7 @@ func Test_newRepositoryClient_LocalFileSystemRepository(t *testing.T) {
 	}
 }
 
-func Test_newRepositoryClient_YamlProcesor(t *testing.T) {
+func Test_newRepositoryClient_YamlProcessor(t *testing.T) {
 	tests := []struct {
 		name   string
 		opts   []Option
@@ -114,7 +114,7 @@ func Test_newRepositoryClient_YamlProcesor(t *testing.T) {
 			configClient, err := config.New("", config.InjectReader(test.NewFakeReader()))
 			g.Expect(err).NotTo(HaveOccurred())
 
-			tt.opts = append(tt.opts, InjectRepository(test.NewFakeRepository()))
+			tt.opts = append(tt.opts, InjectRepository(NewMemoryRepository()))
 
 			repoClient, err := newRepositoryClient(
 				configProvider,

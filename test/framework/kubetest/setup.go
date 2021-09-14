@@ -20,14 +20,14 @@ import (
 	"io"
 	"os"
 	"path"
+	"path/filepath"
 )
 
 func copyFile(srcFilePath, destFilePath string) error {
-	err := os.MkdirAll(path.Dir(destFilePath), 0o750)
-	if err != nil {
+	if err := os.MkdirAll(path.Dir(destFilePath), 0o750); err != nil {
 		return err
 	}
-	srcFile, err := os.Open(srcFilePath)
+	srcFile, err := os.Open(filepath.Clean(srcFilePath))
 	if err != nil {
 		return err
 	}

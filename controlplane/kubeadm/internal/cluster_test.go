@@ -28,20 +28,20 @@ import (
 	"time"
 
 	. "github.com/onsi/gomega"
-
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha3"
-	"sigs.k8s.io/cluster-api/controlplane/kubeadm/internal/machinefilters"
+	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha4"
+	"sigs.k8s.io/cluster-api/controllers/remote"
 	"sigs.k8s.io/cluster-api/util/certs"
+	"sigs.k8s.io/cluster-api/util/collections"
 	"sigs.k8s.io/cluster-api/util/kubeconfig"
 	"sigs.k8s.io/cluster-api/util/secret"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
 func TestGetMachinesForCluster(t *testing.T) {
@@ -50,16 +50,18 @@ func TestGetMachinesForCluster(t *testing.T) {
 	m := Management{Client: &fakeClient{
 		list: machineListForTestGetMachinesForCluster(),
 	}}
-	clusterKey := client.ObjectKey{
-		Namespace: "my-namespace",
-		Name:      "my-cluster",
+	cluster := &clusterv1.Cluster{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: metav1.NamespaceDefault,
+			Name:      "my-cluster",
+		},
 	}
-	machines, err := m.GetMachinesForCluster(context.Background(), clusterKey)
+	machines, err := m.GetMachinesForCluster(ctx, cluster)
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(machines).To(HaveLen(3))
 
 	// Test the ControlPlaneMachines works
-	machines, err = m.GetMachinesForCluster(context.Background(), clusterKey, machinefilters.ControlPlaneMachines("my-cluster"))
+	machines, err = m.GetMachinesForCluster(ctx, cluster, collections.ControlPlaneMachines("my-cluster"))
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(machines).To(HaveLen(1))
 
@@ -67,7 +69,7 @@ func TestGetMachinesForCluster(t *testing.T) {
 	nameFilter := func(cluster *clusterv1.Machine) bool {
 		return cluster.Name == "first-machine"
 	}
-	machines, err = m.GetMachinesForCluster(context.Background(), clusterKey, machinefilters.ControlPlaneMachines("my-cluster"), nameFilter)
+	machines, err = m.GetMachinesForCluster(ctx, cluster, collections.ControlPlaneMachines("my-cluster"), nameFilter)
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(machines).To(HaveLen(1))
 }
@@ -75,10 +77,10 @@ func TestGetMachinesForCluster(t *testing.T) {
 func TestGetWorkloadCluster(t *testing.T) {
 	g := NewWithT(t)
 
-	ns, err := testEnv.CreateNamespace(ctx, "workload-cluster2")
+	ns, err := env.CreateNamespace(ctx, "workload-cluster2")
 	g.Expect(err).ToNot(HaveOccurred())
 	defer func() {
-		g.Expect(testEnv.Cleanup(ctx, ns)).To(Succeed())
+		g.Expect(env.Cleanup(ctx, ns)).To(Succeed())
 	}()
 
 	// Create an etcd secret with valid certs
@@ -102,12 +104,20 @@ func TestGetWorkloadCluster(t *testing.T) {
 	delete(emptyKeyEtcdSecret.Data, secret.TLSKeyDataName)
 	badCrtEtcdSecret := etcdSecret.DeepCopy()
 	badCrtEtcdSecret.Data[secret.TLSCrtDataName] = []byte("bad cert")
+	tracker, err := remote.NewClusterCacheTracker(
+		env.Manager,
+		remote.ClusterCacheTrackerOptions{
+			Log:     log.Log,
+			Indexes: remote.DefaultIndexes,
+		},
+	)
+	g.Expect(err).ToNot(HaveOccurred())
 
 	// Create kubeconfig secret
 	// Store the envtest config as the contents of the kubeconfig secret.
 	// This way we are using the envtest environment as both the
 	// management and the workload cluster.
-	testEnvKubeconfig := kubeconfig.FromEnvTestConfig(testEnv.GetConfig(), &clusterv1.Cluster{
+	testEnvKubeconfig := kubeconfig.FromEnvTestConfig(env.GetConfig(), &clusterv1.Cluster{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "my-cluster",
 			Namespace: ns.Name,
@@ -130,43 +140,43 @@ func TestGetWorkloadCluster(t *testing.T) {
 	tests := []struct {
 		name       string
 		clusterKey client.ObjectKey
-		objs       []runtime.Object
+		objs       []client.Object
 		expectErr  bool
 	}{
 		{
 			name:       "returns a workload cluster",
 			clusterKey: clusterKey,
-			objs:       []runtime.Object{etcdSecret.DeepCopy(), kubeconfigSecret.DeepCopy()},
+			objs:       []client.Object{etcdSecret.DeepCopy(), kubeconfigSecret.DeepCopy()},
 			expectErr:  false,
 		},
 		{
 			name:       "returns error if cannot get rest.Config from kubeconfigSecret",
 			clusterKey: clusterKey,
-			objs:       []runtime.Object{etcdSecret.DeepCopy()},
+			objs:       []client.Object{etcdSecret.DeepCopy()},
 			expectErr:  true,
 		},
 		{
 			name:       "returns error if unable to find the etcd secret",
 			clusterKey: clusterKey,
-			objs:       []runtime.Object{kubeconfigSecret.DeepCopy()},
+			objs:       []client.Object{kubeconfigSecret.DeepCopy()},
 			expectErr:  true,
 		},
 		{
 			name:       "returns error if unable to find the certificate in the etcd secret",
 			clusterKey: clusterKey,
-			objs:       []runtime.Object{emptyCrtEtcdSecret.DeepCopy(), kubeconfigSecret.DeepCopy()},
+			objs:       []client.Object{emptyCrtEtcdSecret.DeepCopy(), kubeconfigSecret.DeepCopy()},
 			expectErr:  true,
 		},
 		{
 			name:       "returns error if unable to find the key in the etcd secret",
 			clusterKey: clusterKey,
-			objs:       []runtime.Object{emptyKeyEtcdSecret.DeepCopy(), kubeconfigSecret.DeepCopy()},
+			objs:       []client.Object{emptyKeyEtcdSecret.DeepCopy(), kubeconfigSecret.DeepCopy()},
 			expectErr:  true,
 		},
 		{
 			name:       "returns error if unable to generate client cert",
 			clusterKey: clusterKey,
-			objs:       []runtime.Object{badCrtEtcdSecret.DeepCopy(), kubeconfigSecret.DeepCopy()},
+			objs:       []client.Object{badCrtEtcdSecret.DeepCopy(), kubeconfigSecret.DeepCopy()},
 			expectErr:  true,
 		},
 	}
@@ -176,17 +186,18 @@ func TestGetWorkloadCluster(t *testing.T) {
 			g := NewWithT(t)
 
 			for _, o := range tt.objs {
-				g.Expect(testEnv.CreateObj(ctx, o)).To(Succeed())
-				defer func(do runtime.Object) {
-					g.Expect(testEnv.Cleanup(ctx, do)).To(Succeed())
+				g.Expect(env.Client.Create(ctx, o)).To(Succeed())
+				defer func(do client.Object) {
+					g.Expect(env.Cleanup(ctx, do)).To(Succeed())
 				}(o)
 			}
 
 			m := Management{
-				Client: testEnv,
+				Client:  env,
+				Tracker: tracker,
 			}
 
-			workloadCluster, err := m.GetWorkloadCluster(context.Background(), tt.clusterKey)
+			workloadCluster, err := m.GetWorkloadCluster(ctx, tt.clusterKey)
 			if tt.expectErr {
 				g.Expect(err).To(HaveOccurred())
 				g.Expect(workloadCluster).To(BeNil())
@@ -196,7 +207,6 @@ func TestGetWorkloadCluster(t *testing.T) {
 			g.Expect(workloadCluster).ToNot(BeNil())
 		})
 	}
-
 }
 
 func getTestCACert(key *rsa.PrivateKey) (*x509.Certificate, error) {
@@ -244,7 +254,7 @@ func machineListForTestGetMachinesForCluster() *clusterv1.MachineList {
 			TypeMeta: metav1.TypeMeta{},
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      name,
-				Namespace: "my-namespace",
+				Namespace: metav1.NamespaceDefault,
 				Labels: map[string]string{
 					clusterv1.ClusterLabelName: "my-cluster",
 				},
@@ -278,7 +288,7 @@ type fakeClient struct {
 	listErr      error
 }
 
-func (f *fakeClient) Get(_ context.Context, key client.ObjectKey, obj runtime.Object) error {
+func (f *fakeClient) Get(_ context.Context, key client.ObjectKey, obj client.Object) error {
 	f.getCalled = true
 	if f.getErr != nil {
 		return f.getErr
@@ -305,7 +315,7 @@ func (f *fakeClient) Get(_ context.Context, key client.ObjectKey, obj runtime.Ob
 	return nil
 }
 
-func (f *fakeClient) List(_ context.Context, list runtime.Object, _ ...client.ListOption) error {
+func (f *fakeClient) List(_ context.Context, list client.ObjectList, _ ...client.ListOption) error {
 	if f.listErr != nil {
 		return f.listErr
 	}
@@ -322,21 +332,21 @@ func (f *fakeClient) List(_ context.Context, list runtime.Object, _ ...client.Li
 	return nil
 }
 
-func (f *fakeClient) Create(_ context.Context, _ runtime.Object, _ ...client.CreateOption) error {
+func (f *fakeClient) Create(_ context.Context, _ client.Object, _ ...client.CreateOption) error {
 	if f.createErr != nil {
 		return f.createErr
 	}
 	return nil
 }
 
-func (f *fakeClient) Patch(_ context.Context, _ runtime.Object, _ client.Patch, _ ...client.PatchOption) error {
+func (f *fakeClient) Patch(_ context.Context, _ client.Object, _ client.Patch, _ ...client.PatchOption) error {
 	if f.patchErr != nil {
 		return f.patchErr
 	}
 	return nil
 }
 
-func (f *fakeClient) Update(_ context.Context, _ runtime.Object, _ ...client.UpdateOption) error {
+func (f *fakeClient) Update(_ context.Context, _ client.Object, _ ...client.UpdateOption) error {
 	f.updateCalled = true
 	if f.updateErr != nil {
 		return f.updateErr

@@ -17,13 +17,12 @@ limitations under the License.
 package repository
 
 import (
-	"fmt"
 	"testing"
 
 	. "github.com/onsi/gomega"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha3"
+	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha4"
 	clusterctlv1 "sigs.k8s.io/cluster-api/cmd/clusterctl/api/v1alpha3"
 	"sigs.k8s.io/cluster-api/cmd/clusterctl/client/config"
 )
@@ -104,34 +103,32 @@ func Test_inspectTargetNamespace(t *testing.T) {
 }
 
 func Test_fixTargetNamespace(t *testing.T) {
-	type args struct {
+	tests := []struct {
+		name            string
 		objs            []unstructured.Unstructured
 		targetNamespace string
-	}
-	tests := []struct {
-		name string
-		args args
-		want []unstructured.Unstructured
+		want            []unstructured.Unstructured
+		wantErr         bool
 	}{
 		{
 			name: "fix Namespace object if exists",
-			args: args{
-				objs: []unstructured.Unstructured{
-					{
-						Object: map[string]interface{}{
-							"kind": namespaceKind,
-							"metadata": map[string]interface{}{
-								"name": "foo",
-							},
+			objs: []unstructured.Unstructured{
+				{
+					Object: map[string]interface{}{
+						"apiVersion": "v1",
+						"kind":       namespaceKind,
+						"metadata": map[string]interface{}{
+							"name": "foo",
 						},
 					},
 				},
-				targetNamespace: "bar",
 			},
+			targetNamespace: "bar",
 			want: []unstructured.Unstructured{
 				{
 					Object: map[string]interface{}{
-						"kind": namespaceKind,
+						"apiVersion": "v1",
+						"kind":       namespaceKind,
 						"metadata": map[string]interface{}{
 							"name": "bar",
 						},
@@ -141,21 +138,46 @@ func Test_fixTargetNamespace(t *testing.T) {
 		},
 		{
 			name: "fix namespaced objects",
-			args: args{
-				objs: []unstructured.Unstructured{
-					{
-						Object: map[string]interface{}{
-							"kind": "Pod",
+			objs: []unstructured.Unstructured{
+				{
+					Object: map[string]interface{}{
+						"apiVersion": "apps/v1",
+						"kind":       "Deployment",
+						"metadata": map[string]interface{}{
+							"name":      "test",
+							"namespace": "system",
 						},
 					},
 				},
-				targetNamespace: "bar",
+				{
+					Object: map[string]interface{}{
+						"apiVersion": "v1",
+						"kind":       "Service",
+						"metadata": map[string]interface{}{
+							"name":      "capa-controller-manager-metrics-service",
+							"namespace": "capa-system",
+						},
+					},
+				},
 			},
+			targetNamespace: "bar",
 			want: []unstructured.Unstructured{
 				{
 					Object: map[string]interface{}{
-						"kind": "Pod",
+						"apiVersion": "apps/v1",
+						"kind":       "Deployment",
 						"metadata": map[string]interface{}{
+							"name":      "test",
+							"namespace": "bar",
+						},
+					},
+				},
+				{
+					Object: map[string]interface{}{
+						"apiVersion": "v1",
+						"kind":       "Service",
+						"metadata": map[string]interface{}{
+							"name":      "capa-controller-manager-metrics-service",
 							"namespace": "bar",
 						},
 					},
@@ -164,16 +186,14 @@ func Test_fixTargetNamespace(t *testing.T) {
 		},
 		{
 			name: "ignore global objects",
-			args: args{
-				objs: []unstructured.Unstructured{
-					{
-						Object: map[string]interface{}{
-							"kind": "ClusterRole",
-						},
+			objs: []unstructured.Unstructured{
+				{
+					Object: map[string]interface{}{
+						"kind": "ClusterRole",
 					},
 				},
-				targetNamespace: "bar",
 			},
+			targetNamespace: "bar",
 			want: []unstructured.Unstructured{
 				{
 					Object: map[string]interface{}{
@@ -183,13 +203,339 @@ func Test_fixTargetNamespace(t *testing.T) {
 				},
 			},
 		},
+		{
+			name: "fix v1beta1 webhook configs",
+			objs: []unstructured.Unstructured{
+				{
+					Object: map[string]interface{}{
+						"apiVersion": "admissionregistration.k8s.io/v1beta1",
+						"kind":       "MutatingWebhookConfiguration",
+						"metadata": map[string]interface{}{
+							"annotations": map[string]interface{}{
+								"cert-manager.io/inject-ca-from": "capi-webhook-system/capm3-serving-cert",
+							},
+							"name": "capm3-mutating-webhook-configuration",
+						},
+						"webhooks": []interface{}{
+							map[string]interface{}{
+								"clientConfig": map[string]interface{}{
+									"caBundle": "Cg==",
+									"service": map[string]interface{}{
+										"name":      "capm3-webhook-service",
+										"namespace": "capi-webhook-system",
+										"path":      "/mutate-infrastructure-cluster-x-k8s-io-v1alpha4-metal3cluster",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			targetNamespace: "bar",
+			want: []unstructured.Unstructured{
+				{
+					Object: map[string]interface{}{
+						"apiVersion": "admissionregistration.k8s.io/v1beta1",
+						"kind":       "MutatingWebhookConfiguration",
+						"metadata": map[string]interface{}{
+							"annotations": map[string]interface{}{
+								"cert-manager.io/inject-ca-from": "bar/capm3-serving-cert",
+							},
+							"creationTimestamp": nil,
+							"name":              "capm3-mutating-webhook-configuration",
+						},
+						"webhooks": []interface{}{
+							map[string]interface{}{
+								"name": "",
+								"clientConfig": map[string]interface{}{
+									"service": map[string]interface{}{
+										"name":      "capm3-webhook-service",
+										"path":      "/mutate-infrastructure-cluster-x-k8s-io-v1alpha4-metal3cluster",
+										"namespace": "bar",
+									},
+									"caBundle": "Cg==",
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "unable to fix v1beta2 webhook configs",
+			objs: []unstructured.Unstructured{
+				{
+					Object: map[string]interface{}{
+						"apiVersion": "admissionregistration.k8s.io/v1beta2",
+						"kind":       "MutatingWebhookConfiguration",
+						"metadata": map[string]interface{}{
+							"annotations": map[string]interface{}{
+								"cert-manager.io/inject-ca-from": "capi-webhook-system/capm3-serving-cert",
+							},
+							"name": "capm3-mutating-webhook-configuration",
+						},
+						"webhooks": []interface{}{
+							map[string]interface{}{
+								"clientConfig": map[string]interface{}{
+									"caBundle": "Cg==",
+									"service": map[string]interface{}{
+										"name":      "capm3-webhook-service",
+										"namespace": "capi-webhook-system",
+										"path":      "/mutate-infrastructure-cluster-x-k8s-io-v1alpha4-metal3cluster",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			targetNamespace: "bar",
+			wantErr:         true,
+		}, {
+			name: "fix v1 webhook configs",
+			objs: []unstructured.Unstructured{
+				{
+					Object: map[string]interface{}{
+						"apiVersion": "admissionregistration.k8s.io/v1",
+						"kind":       "MutatingWebhookConfiguration",
+						"metadata": map[string]interface{}{
+							"annotations": map[string]interface{}{
+								"cert-manager.io/inject-ca-from": "capi-webhook-system/capm3-serving-cert",
+							},
+							"name": "capm3-mutating-webhook-configuration",
+						},
+						"webhooks": []interface{}{
+							map[string]interface{}{
+								"clientConfig": map[string]interface{}{
+									"caBundle": "Cg==",
+									"service": map[string]interface{}{
+										"name":      "capm3-webhook-service",
+										"namespace": "capi-webhook-system",
+										"path":      "/mutate-infrastructure-cluster-x-k8s-io-v1alpha4-metal3cluster",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			targetNamespace: "bar",
+			want: []unstructured.Unstructured{
+				{
+					Object: map[string]interface{}{
+						"apiVersion": "admissionregistration.k8s.io/v1",
+						"kind":       "MutatingWebhookConfiguration",
+						"metadata": map[string]interface{}{
+							"annotations": map[string]interface{}{
+								"cert-manager.io/inject-ca-from": "bar/capm3-serving-cert",
+							},
+							"creationTimestamp": nil,
+							"name":              "capm3-mutating-webhook-configuration",
+						},
+						"webhooks": []interface{}{
+							map[string]interface{}{
+								"name":                    "",
+								"admissionReviewVersions": nil,
+								"clientConfig": map[string]interface{}{
+									"service": map[string]interface{}{
+										"name":      "capm3-webhook-service",
+										"path":      "/mutate-infrastructure-cluster-x-k8s-io-v1alpha4-metal3cluster",
+										"namespace": "bar",
+									},
+									"caBundle": "Cg==",
+								},
+								"sideEffects": nil,
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "fix v1beta1 crd webhook namespace",
+			objs: []unstructured.Unstructured{
+				{
+					Object: map[string]interface{}{
+						"apiVersion": "apiextensions.k8s.io/v1beta1",
+						"kind":       "CustomResourceDefinition",
+						"metadata": map[string]interface{}{
+							"annotations": map[string]interface{}{
+								"cert-manager.io/inject-ca-from": "capi-webhook-system/capm3-serving-cert",
+							},
+							"name": "aCoolName",
+						},
+						"spec": map[string]interface{}{
+							"conversion": map[string]interface{}{
+								"strategy": "Webhook",
+								"webhookClientConfig": map[string]interface{}{
+									"caBundle": "Cg==",
+									"service": map[string]interface{}{
+										"name":      "capa-webhook-service",
+										"namespace": "capi-webhook-system",
+										"path":      "/convert",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			targetNamespace: "bar",
+			want: []unstructured.Unstructured{
+				{
+					Object: map[string]interface{}{
+						"apiVersion": "apiextensions.k8s.io/v1beta1",
+						"kind":       "CustomResourceDefinition",
+						"metadata": map[string]interface{}{
+							"annotations": map[string]interface{}{
+								"cert-manager.io/inject-ca-from": "bar/capm3-serving-cert",
+							},
+							"creationTimestamp": nil,
+							"name":              "aCoolName",
+						},
+						"spec": map[string]interface{}{
+							"group": "",
+							"names": map[string]interface{}{"plural": "", "kind": ""},
+							"scope": "",
+							"conversion": map[string]interface{}{
+								"strategy": "Webhook",
+								"webhookClientConfig": map[string]interface{}{
+									"caBundle": "Cg==",
+									"service": map[string]interface{}{
+										"name":      "capa-webhook-service",
+										"namespace": "bar",
+										"path":      "/convert",
+									},
+								},
+							},
+						},
+						"status": map[string]interface{}{
+							"storedVersions": nil,
+							"conditions":     nil,
+							"acceptedNames":  map[string]interface{}{"kind": "", "plural": ""},
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "unable to fix v1beta2 crd webhook namespace",
+			objs: []unstructured.Unstructured{
+				{
+					Object: map[string]interface{}{
+						"apiVersion": "apiextensions.k8s.io/v1beta2",
+						"kind":       "CustomResourceDefinition",
+						"metadata": map[string]interface{}{
+							"annotations": map[string]interface{}{
+								"cert-manager.io/inject-ca-from": "capi-webhook-system/capm3-serving-cert",
+							},
+							"name": "aCoolName",
+						},
+						"spec": map[string]interface{}{
+							"conversion": map[string]interface{}{
+								"strategy": "Webhook",
+								"webhookClientConfig": map[string]interface{}{
+									"caBundle": "Cg==",
+									"service": map[string]interface{}{
+										"name":      "capa-webhook-service",
+										"namespace": "capi-webhook-system",
+										"path":      "/convert",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			targetNamespace: "bar",
+			wantErr:         true,
+		},
+		{
+			name: "fix v1 crd webhook namespace",
+			objs: []unstructured.Unstructured{
+				{
+					Object: map[string]interface{}{
+						"apiVersion": "apiextensions.k8s.io/v1",
+						"kind":       "CustomResourceDefinition",
+						"metadata": map[string]interface{}{
+							"annotations": map[string]interface{}{
+								"cert-manager.io/inject-ca-from": "capi-webhook-system/capm3-serving-cert",
+							},
+							"name": "aCoolName",
+						},
+						"spec": map[string]interface{}{
+							"conversion": map[string]interface{}{
+								"strategy": "Webhook",
+								"webhook": map[string]interface{}{
+									"clientConfig": map[string]interface{}{
+										"caBundle": "Cg==",
+										"service": map[string]interface{}{
+											"name":      "capa-webhook-service",
+											"namespace": "capi-webhook-system",
+											"path":      "/convert",
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			targetNamespace: "bar",
+			want: []unstructured.Unstructured{
+				{
+					Object: map[string]interface{}{
+						"apiVersion": "apiextensions.k8s.io/v1",
+						"kind":       "CustomResourceDefinition",
+						"metadata": map[string]interface{}{
+							"annotations": map[string]interface{}{
+								"cert-manager.io/inject-ca-from": "bar/capm3-serving-cert",
+							},
+							"creationTimestamp": nil,
+							"name":              "aCoolName",
+						},
+						"spec": map[string]interface{}{
+							"group":    "",
+							"names":    map[string]interface{}{"plural": "", "kind": ""},
+							"scope":    "",
+							"versions": nil,
+							"conversion": map[string]interface{}{
+								"strategy": "Webhook",
+								"webhook": map[string]interface{}{
+									"conversionReviewVersions": nil,
+									"clientConfig": map[string]interface{}{
+										"caBundle": "Cg==",
+										"service": map[string]interface{}{
+											"name":      "capa-webhook-service",
+											"namespace": "bar",
+											"path":      "/convert",
+										},
+									},
+								},
+							},
+						},
+						"status": map[string]interface{}{
+							"storedVersions": nil,
+							"conditions":     nil,
+							"acceptedNames":  map[string]interface{}{"kind": "", "plural": ""},
+						},
+					},
+				},
+			},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			g := NewWithT(t)
 
-			got := fixTargetNamespace(tt.args.objs, tt.args.targetNamespace)
-			g.Expect(got).To(ContainElements(tt.want)) //skipping from test the automatically added namespace Object
+			got, err := fixTargetNamespace(tt.objs, tt.targetNamespace)
+			if tt.wantErr {
+				g.Expect(err).To(HaveOccurred())
+				return
+			}
+
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(got).To(ContainElements(tt.want)) // skipping from test the automatically added namespace Object
 		})
 	}
 }
@@ -486,134 +832,6 @@ func Test_fixRBAC(t *testing.T) {
 			},
 			wantErr: false,
 		},
-		{
-			name: "ClusterRoleBinding with subjects IN capi-webhook-system get fixed (without changing the subject namespace)",
-			args: args{
-				objs: []unstructured.Unstructured{
-					{
-						Object: map[string]interface{}{
-							"kind":       "ClusterRoleBinding",
-							"apiVersion": "rbac.authorization.k8s.io/v1",
-							"metadata": map[string]interface{}{
-								"name": "foo",
-							},
-							"roleRef": map[string]interface{}{
-								"apiGroup": "",
-								"kind":     "",
-								"name":     "bar",
-							},
-							"subjects": []interface{}{
-								map[string]interface{}{
-									"kind":      "ServiceAccount",
-									"name":      "baz",
-									"namespace": "capi-webhook-system",
-								},
-							},
-						},
-					},
-					{
-						Object: map[string]interface{}{
-							"kind":       "ClusterRole",
-							"apiVersion": "rbac.authorization.k8s.io/v1",
-							"metadata": map[string]interface{}{
-								"name": "bar",
-							},
-						},
-					},
-				},
-				targetNamespace: "target",
-			},
-			want: []unstructured.Unstructured{
-				{
-					Object: map[string]interface{}{
-						"kind":       "ClusterRoleBinding",
-						"apiVersion": "rbac.authorization.k8s.io/v1",
-						"metadata": map[string]interface{}{
-							"name":              "target-foo", // ClusterRoleBinding name fixed!
-							"creationTimestamp": nil,
-						},
-						"roleRef": map[string]interface{}{
-							"apiGroup": "",
-							"kind":     "",
-							"name":     "target-bar", // ClusterRole name fixed!
-						},
-						"subjects": []interface{}{
-							map[string]interface{}{
-								"kind":      "ServiceAccount",
-								"name":      "baz",
-								"namespace": "capi-webhook-system", // Subjects namespace get preserved!
-							},
-						},
-					},
-				},
-				{
-					Object: map[string]interface{}{
-						"kind":       "ClusterRole",
-						"apiVersion": "rbac.authorization.k8s.io/v1",
-						"metadata": map[string]interface{}{
-							"name": "target-bar", // ClusterRole fixed!
-						},
-					},
-				},
-			},
-			wantErr: false,
-		},
-		{
-			name: "RoleBinding with subjects IN capi-webhook-system get fixed (without changing the subject namespace)",
-			args: args{
-				objs: []unstructured.Unstructured{
-					{
-						Object: map[string]interface{}{
-							"kind":       "RoleBinding",
-							"apiVersion": "rbac.authorization.k8s.io/v1",
-							"metadata": map[string]interface{}{
-								"name":      "foo",
-								"namespace": "target",
-							},
-							"roleRef": map[string]interface{}{
-								"apiGroup": "",
-								"kind":     "",
-								"name":     "bar",
-							},
-							"subjects": []interface{}{
-								map[string]interface{}{
-									"kind":      "ServiceAccount",
-									"name":      "baz",
-									"namespace": "capi-webhook-system",
-								},
-							},
-						},
-					},
-				},
-				targetNamespace: "target",
-			},
-			want: []unstructured.Unstructured{
-				{
-					Object: map[string]interface{}{
-						"kind":       "RoleBinding",
-						"apiVersion": "rbac.authorization.k8s.io/v1",
-						"metadata": map[string]interface{}{
-							"name":              "foo",
-							"namespace":         "target",
-							"creationTimestamp": nil,
-						},
-						"roleRef": map[string]interface{}{
-							"apiGroup": "",
-							"kind":     "",
-							"name":     "bar",
-						},
-						"subjects": []interface{}{
-							map[string]interface{}{
-								"kind":      "ServiceAccount",
-								"name":      "baz",
-								"namespace": "capi-webhook-system", // Subjects namespace get preserved!
-							},
-						},
-					},
-				},
-			},
-			wantErr: false,
-		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -625,156 +843,7 @@ func Test_fixRBAC(t *testing.T) {
 				return
 			}
 			g.Expect(err).NotTo(HaveOccurred())
-
 			g.Expect(got).To(Equal(tt.want))
-		})
-	}
-}
-
-func fakeDeployment(watchNamespace string) unstructured.Unstructured {
-	args := []string{}
-	if watchNamespace != "" {
-		args = append(args, fmt.Sprintf("%s%s", namespaceArgPrefix, watchNamespace))
-	}
-	return unstructured.Unstructured{
-		Object: map[string]interface{}{
-			"apiVersion": "apps/v1",
-			"kind":       deploymentKind,
-			"spec": map[string]interface{}{
-				"template": map[string]interface{}{
-					"spec": map[string]interface{}{
-						"containers": []map[string]interface{}{
-							{
-								"name": controllerContainerName,
-								"args": args,
-							},
-						},
-					},
-				},
-			},
-		},
-	}
-}
-
-func Test_inspectWatchNamespace(t *testing.T) {
-	type args struct {
-		objs []unstructured.Unstructured
-	}
-	tests := []struct {
-		name    string
-		args    args
-		want    string
-		wantErr bool
-	}{
-		{
-			name: "get watchingNamespace if exists",
-			args: args{
-				objs: []unstructured.Unstructured{
-					fakeDeployment("foo"),
-				},
-			},
-			want: "foo",
-		},
-		{
-			name: "get watchingNamespace if exists more than once, but it is consistent",
-			args: args{
-				objs: []unstructured.Unstructured{
-					fakeDeployment("foo"),
-					fakeDeployment("foo"),
-				},
-			},
-			want: "foo",
-		},
-		{
-			name: "return empty if there is no watchingNamespace",
-			args: args{
-				objs: []unstructured.Unstructured{},
-			},
-			want: "",
-		},
-		{
-			name: "fails if inconsistent watchingNamespace",
-			args: args{
-				objs: []unstructured.Unstructured{
-					fakeDeployment("foo"),
-					fakeDeployment("bar"),
-				},
-			},
-			want:    "",
-			wantErr: true,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			g := NewWithT(t)
-
-			got, err := inspectWatchNamespace(tt.args.objs)
-			if tt.wantErr {
-				g.Expect(err).To(HaveOccurred())
-				return
-			}
-			g.Expect(err).NotTo(HaveOccurred())
-
-			g.Expect(got).To(Equal(tt.want))
-		})
-	}
-}
-
-func Test_fixWatchNamespace(t *testing.T) {
-	type args struct {
-		objs              []unstructured.Unstructured
-		watchingNamespace string
-	}
-	tests := []struct {
-		name    string
-		args    args
-		wantErr bool
-	}{
-		{
-			name: "fix if existing",
-			args: args{
-				objs: []unstructured.Unstructured{
-					fakeDeployment("foo"),
-				},
-				watchingNamespace: "bar",
-			},
-			wantErr: false,
-		},
-		{
-			name: "set if not existing",
-			args: args{
-				objs: []unstructured.Unstructured{
-					fakeDeployment(""),
-				},
-				watchingNamespace: "bar",
-			},
-			wantErr: false,
-		},
-		{
-			name: "unset if existing",
-			args: args{
-				objs: []unstructured.Unstructured{
-					fakeDeployment("foo"),
-				},
-				watchingNamespace: "",
-			},
-			wantErr: false,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			g := NewWithT(t)
-
-			got, err := fixWatchNamespace(tt.args.objs, tt.args.watchingNamespace)
-			if tt.wantErr {
-				g.Expect(err).To(HaveOccurred())
-				return
-			}
-			g.Expect(err).NotTo(HaveOccurred())
-
-			wgot, err := inspectWatchNamespace(got)
-			g.Expect(err).NotTo(HaveOccurred())
-			g.Expect(wgot).To(Equal(tt.args.watchingNamespace))
 		})
 	}
 }
@@ -824,157 +893,6 @@ func Test_addCommonLabels(t *testing.T) {
 
 			got := addCommonLabels(tt.args.objs, config.NewProvider(tt.args.name, "", tt.args.providerType))
 			g.Expect(got).To(Equal(tt.want))
-		})
-	}
-}
-
-func Test_splitInstanceAndSharedResources(t *testing.T) {
-	type args struct {
-		objs []unstructured.Unstructured
-	}
-	tests := []struct {
-		name             string
-		args             args
-		wantInstanceObjs []unstructured.Unstructured
-		wantSharedObjs   []unstructured.Unstructured
-	}{
-		{
-			name: "objects are split in two sets",
-			args: args{
-				objs: []unstructured.Unstructured{
-					// Instance objs
-					{
-						Object: map[string]interface{}{
-							"kind": "Namespace",
-							"metadata": map[string]interface{}{
-								"name": "capi-system",
-							},
-						},
-					},
-					{
-						Object: map[string]interface{}{
-							"kind": "Deployment",
-							"metadata": map[string]interface{}{
-								"name":      "capi-controller-manager",
-								"namespace": "capi-system",
-							},
-						},
-					},
-					// Shared objs
-					{
-						Object: map[string]interface{}{
-							"kind": "Namespace",
-							"metadata": map[string]interface{}{
-								"name": "capi-webhook-system",
-							},
-						},
-					},
-					{
-						Object: map[string]interface{}{
-							"kind": "Deployment",
-							"metadata": map[string]interface{}{
-								"name":      "capi-controller-manager",
-								"namespace": "capi-webhook-system",
-							},
-						},
-					},
-					{
-						Object: map[string]interface{}{
-							"kind": "CustomResourceDefinition",
-							"metadata": map[string]interface{}{
-								"name": "clusters.cluster.x-k8s.io",
-							},
-						},
-					},
-					{
-						Object: map[string]interface{}{
-							"kind": "MutatingWebhookConfiguration",
-							"metadata": map[string]interface{}{
-								"name": "capi-mutating-webhook-configuration",
-							},
-						},
-					},
-					{
-						Object: map[string]interface{}{
-							"kind": "ValidatingWebhookConfiguration",
-							"metadata": map[string]interface{}{
-								"name": "capi-validating-webhook-configuration",
-							},
-						},
-					},
-				},
-			},
-			wantInstanceObjs: []unstructured.Unstructured{
-				{
-					Object: map[string]interface{}{
-						"kind": "Namespace",
-						"metadata": map[string]interface{}{
-							"name": "capi-system",
-						},
-					},
-				},
-				{
-					Object: map[string]interface{}{
-						"kind": "Deployment",
-						"metadata": map[string]interface{}{
-							"name":      "capi-controller-manager",
-							"namespace": "capi-system",
-						},
-					},
-				},
-			},
-			wantSharedObjs: []unstructured.Unstructured{
-				{
-					Object: map[string]interface{}{
-						"kind": "Namespace",
-						"metadata": map[string]interface{}{
-							"name": "capi-webhook-system",
-						},
-					},
-				},
-				{
-					Object: map[string]interface{}{
-						"kind": "Deployment",
-						"metadata": map[string]interface{}{
-							"name":      "capi-controller-manager",
-							"namespace": "capi-webhook-system",
-						},
-					},
-				},
-				{
-					Object: map[string]interface{}{
-						"kind": "CustomResourceDefinition",
-						"metadata": map[string]interface{}{
-							"name": "clusters.cluster.x-k8s.io",
-						},
-					},
-				},
-				{
-					Object: map[string]interface{}{
-						"kind": "MutatingWebhookConfiguration",
-						"metadata": map[string]interface{}{
-							"name": "capi-mutating-webhook-configuration",
-						},
-					},
-				},
-				{
-					Object: map[string]interface{}{
-						"kind": "ValidatingWebhookConfiguration",
-						"metadata": map[string]interface{}{
-							"name": "capi-validating-webhook-configuration",
-						},
-					},
-				},
-			},
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			g := NewWithT(t)
-
-			gotInstanceObjs, gotWebHookObjs := splitInstanceAndSharedResources(tt.args.objs)
-			g.Expect(gotInstanceObjs).To(ConsistOf(tt.wantInstanceObjs))
-			g.Expect(gotWebHookObjs).To(ConsistOf(tt.wantSharedObjs))
 		})
 	}
 }

@@ -19,6 +19,7 @@ package repository
 import (
 	"github.com/pkg/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+
 	"sigs.k8s.io/cluster-api/cmd/clusterctl/client/config"
 	yaml "sigs.k8s.io/cluster-api/cmd/clusterctl/client/yamlprocessor"
 	utilyaml "sigs.k8s.io/cluster-api/util/yaml"
@@ -28,11 +29,16 @@ import (
 // It is important to notice that clusterctl applies a set of processing steps to the “raw” cluster template YAML read
 // from the provider repositories:
 // 1. Checks for all the variables in the cluster template YAML file and replace with corresponding config values
-// 2. Ensure all the cluster objects are deployed in the target namespace
+// 2. Ensure all the cluster objects are deployed in the target namespace.
 type Template interface {
-	// Variables required by the template.
-	// This value is derived by the template YAML.
+	// Variables used by the template.
+	// This value is derived from the template YAML.
 	Variables() []string
+
+	// VariableMap used by the template with their default values. If the value is `nil`, there is no
+	// default and the variable is required.
+	// This value is derived from the template YAML.
+	VariableMap() map[string]*string
 
 	// TargetNamespace where the template objects will be installed.
 	TargetNamespace() string
@@ -47,6 +53,7 @@ type Template interface {
 // template implements Template.
 type template struct {
 	variables       []string
+	variableMap     map[string]*string
 	targetNamespace string
 	objs            []unstructured.Unstructured
 }
@@ -56,6 +63,10 @@ var _ Template = &template{}
 
 func (t *template) Variables() []string {
 	return t.variables
+}
+
+func (t *template) VariableMap() map[string]*string {
+	return t.variableMap
 }
 
 func (t *template) TargetNamespace() string {
@@ -70,24 +81,31 @@ func (t *template) Yaml() ([]byte, error) {
 	return utilyaml.FromUnstructured(t.objs)
 }
 
+// TemplateInput is an input struct for NewTemplate.
 type TemplateInput struct {
 	RawArtifact           []byte
 	ConfigVariablesClient config.VariablesClient
 	Processor             yaml.Processor
 	TargetNamespace       string
-	ListVariablesOnly     bool
+	SkipTemplateProcess   bool
 }
 
 // NewTemplate returns a new objects embedding a cluster template YAML file.
-func NewTemplate(input TemplateInput) (*template, error) {
+func NewTemplate(input TemplateInput) (Template, error) {
 	variables, err := input.Processor.GetVariables(input.RawArtifact)
 	if err != nil {
 		return nil, err
 	}
 
-	if input.ListVariablesOnly {
+	variableMap, err := input.Processor.GetVariableMap(input.RawArtifact)
+	if err != nil {
+		return nil, err
+	}
+
+	if input.SkipTemplateProcess {
 		return &template{
 			variables:       variables,
+			variableMap:     variableMap,
 			targetNamespace: input.TargetNamespace,
 		}, nil
 	}
@@ -106,10 +124,14 @@ func NewTemplate(input TemplateInput) (*template, error) {
 	// Ensures all the template components are deployed in the target namespace (applies only to namespaced objects)
 	// This is required in order to ensure a cluster and all the related objects are in a single namespace, that is a requirement for
 	// the clusterctl move operation (and also for many controller reconciliation loops).
-	objs = fixTargetNamespace(objs, input.TargetNamespace)
+	objs, err = fixTargetNamespace(objs, input.TargetNamespace)
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to set the TargetNamespace in the template")
+	}
 
 	return &template{
 		variables:       variables,
+		variableMap:     variableMap,
 		targetNamespace: input.TargetNamespace,
 		objs:            objs,
 	}, nil

@@ -27,10 +27,10 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha3"
+	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha4"
 	clusterctlv1 "sigs.k8s.io/cluster-api/cmd/clusterctl/api/v1alpha3"
 	logf "sigs.k8s.io/cluster-api/cmd/clusterctl/log"
-	addonsv1alpha3 "sigs.k8s.io/cluster-api/exp/addons/api/v1alpha3"
+	addonsv1 "sigs.k8s.io/cluster-api/exp/addons/api/v1alpha4"
 	secretutil "sigs.k8s.io/cluster-api/util/secret"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -57,27 +57,38 @@ type node struct {
 	// This ensures the node is moved, regardless of its owner refs.
 	forceMove bool
 
+	// forceMoveHierarchy is set to true if the CRD of this object has the "move-hierarchy" label attached.
+	// This ensures the node and it's entire hierarchy of dependants (via owner ref chain) is moved.
+	forceMoveHierarchy bool
+
 	// isGlobal gets set to true if this object is a global resource (no namespace).
 	isGlobal bool
+
+	// isGlobalHierarchy gets set to true if this object is part of a hierarchy of a global resource e.g.
+	// a secrets holding credentials for a global identity object.
+	// When this flag is true the object should not be deleted from the source cluster.
+	isGlobalHierarchy bool
 
 	// virtual records if this node was discovered indirectly, e.g. by processing an OwnerRef, but not yet observed as a concrete object.
 	virtual bool
 
-	//newID stores the new UID the objects gets once created in the target cluster.
+	// newID stores the new UID the objects gets once created in the target cluster.
 	newUID types.UID
 
-	// tenantClusters define the list of Clusters which are tenant for the node, no matter if the node has a direct OwnerReference to the Cluster or if
-	// the node is linked to a Cluster indirectly in the OwnerReference chain.
-	tenantClusters map[*node]empty
+	// tenant define the list of objects which are tenant for the node, no matter if the node has a direct OwnerReference to the object or if
+	// the node is linked to a object indirectly in the OwnerReference chain.
+	tenant map[*node]empty
 
-	// tenantCRSs define the list of ClusterResourceSet which are tenant for the node, no matter if the node has a direct OwnerReference to the ClusterResourceSet or if
-	// the node is linked to a ClusterResourceSet indirectly in the OwnerReference chain.
-	tenantCRSs map[*node]empty
+	// restoreObject holds the object that is referenced when creating a node during restore from file.
+	// the object can then be referenced latter when restoring objects to a target management cluster
+	restoreObject *unstructured.Unstructured
 }
 
 type discoveryTypeInfo struct {
-	typeMeta  metav1.TypeMeta
-	forceMove bool
+	typeMeta           metav1.TypeMeta
+	forceMove          bool
+	forceMoveHierarchy bool
+	scope              apiextensionsv1.ResourceScope
 }
 
 // markObserved marks the fact that a node was observed as a concrete object.
@@ -103,17 +114,23 @@ func (n *node) isSoftOwnedBy(other *node) bool {
 	return ok
 }
 
-// objectGraph manages the Kubernetes object graph that is generated during the discovery phase for the move operation.
-type objectGraph struct {
-	proxy     Proxy
-	uidToNode map[types.UID]*node
-	types     map[string]*discoveryTypeInfo
+func (n *node) getFilename() string {
+	return n.identity.Kind + "_" + n.identity.Namespace + "_" + n.identity.Name + ".yaml"
 }
 
-func newObjectGraph(proxy Proxy) *objectGraph {
+// objectGraph manages the Kubernetes object graph that is generated during the discovery phase for the move operation.
+type objectGraph struct {
+	proxy             Proxy
+	providerInventory InventoryClient
+	uidToNode         map[types.UID]*node
+	types             map[string]*discoveryTypeInfo
+}
+
+func newObjectGraph(proxy Proxy, providerInventory InventoryClient) *objectGraph {
 	return &objectGraph{
-		proxy:     proxy,
-		uidToNode: map[types.UID]*node{},
+		proxy:             proxy,
+		providerInventory: providerInventory,
+		uidToNode:         map[types.UID]*node{},
 	}
 }
 
@@ -123,14 +140,40 @@ func (o *objectGraph) addObj(obj *unstructured.Unstructured) {
 	// Adds the node to the Graph.
 	newNode := o.objToNode(obj)
 
-	// Process OwnerReferences; if the owner object doe not exists yet, create a virtual node as a placeholder for it.
+	// Process OwnerReferences; if the owner object does not exists yet, create a virtual node as a placeholder for it.
+	o.processOwnerReferences(obj, newNode)
+}
+
+// addRestoredObj adds a Kubernetes object to the object graph from file that is generated during a restore
+// Populates the restoredObject field to be referenced during restore
+// During add, OwnerReferences are processed in order to create the dependency graph.
+func (o *objectGraph) addRestoredObj(obj *unstructured.Unstructured) error {
+	// Add object to graph
+	o.objToNode(obj)
+
+	// Check to ensure node has been added to graph
+	node, found := o.uidToNode[obj.GetUID()]
+	if !found {
+		return errors.Errorf("error adding obj %v with id %v to object graph", obj.GetName(), obj.GetUID())
+	}
+
+	// Copy the raw object yaml to be referenced when restoring object
+	node.restoreObject = obj.DeepCopy()
+
+	// Process OwnerReferences; if the owner object does not exists yet, create a virtual node as a placeholder for it.
+	o.processOwnerReferences(obj, node)
+
+	return nil
+}
+
+func (o *objectGraph) processOwnerReferences(obj *unstructured.Unstructured, node *node) {
 	for _, ownerReference := range obj.GetOwnerReferences() {
 		ownerNode, ok := o.uidToNode[ownerReference.UID]
 		if !ok {
-			ownerNode = o.ownerToVirtualNode(ownerReference, newNode.identity.Namespace)
+			ownerNode = o.ownerToVirtualNode(ownerReference)
 		}
 
-		newNode.addOwner(ownerNode, ownerReferenceAttributes{
+		node.addOwner(ownerNode, ownerReferenceAttributes{
 			Controller:         ownerReference.Controller,
 			BlockOwnerDeletion: ownerReference.BlockOwnerDeletion,
 		})
@@ -139,27 +182,20 @@ func (o *objectGraph) addObj(obj *unstructured.Unstructured) {
 
 // ownerToVirtualNode creates a virtual node as a placeholder for the Kubernetes owner object received in input.
 // The virtual node will be eventually converted to an actual node when the node will be visited during discovery.
-func (o *objectGraph) ownerToVirtualNode(owner metav1.OwnerReference, namespace string) *node {
-	isGlobal := false
-	if namespace == "" {
-		isGlobal = true
-	}
-
+func (o *objectGraph) ownerToVirtualNode(owner metav1.OwnerReference) *node {
 	ownerNode := &node{
 		identity: corev1.ObjectReference{
 			APIVersion: owner.APIVersion,
 			Kind:       owner.Kind,
 			Name:       owner.Name,
 			UID:        owner.UID,
-			Namespace:  namespace,
+			// NOTE: deferring initialization of fields derived from object meta to when the node reference is actually processed.
 		},
-		owners:         make(map[*node]ownerReferenceAttributes),
-		softOwners:     make(map[*node]empty),
-		tenantClusters: make(map[*node]empty),
-		tenantCRSs:     make(map[*node]empty),
-		virtual:        true,
-		forceMove:      o.getForceMove(owner.Kind, owner.APIVersion, nil),
-		isGlobal:       isGlobal,
+		owners:     make(map[*node]ownerReferenceAttributes),
+		softOwners: make(map[*node]empty),
+		tenant:     make(map[*node]empty),
+		virtual:    true,
+		// NOTE: deferring initialization of fields derived from object meta to when the node reference is actually processed.
 	}
 
 	o.uidToNode[ownerNode.identity.UID] = ownerNode
@@ -175,15 +211,11 @@ func (o *objectGraph) objToNode(obj *unstructured.Unstructured) *node {
 		existingNode.markObserved()
 
 		// In order to compensate the lack of labels when adding a virtual node,
-		// it is required to re-compute the forceMove flag when the real node is processed
-		// Without this, there is the risk that, forceMove will report false negatives depending on the discovery order
-		existingNode.forceMove = o.getForceMove(obj.GetKind(), obj.GetAPIVersion(), obj.GetLabels())
-		return existingNode
-	}
+		// it is required to re-compute the forceMove and forceMoveHierarchy field when the real node is processed.
+		// Without this, there is the risk that those fields could report false negatives depending on the discovery order.
+		o.objMetaToNode(obj, existingNode)
 
-	isGlobal := false
-	if obj.GetNamespace() == "" {
-		isGlobal = true
+		return existingNode
 	}
 
 	newNode := &node{
@@ -194,30 +226,40 @@ func (o *objectGraph) objToNode(obj *unstructured.Unstructured) *node {
 			Name:       obj.GetName(),
 			Namespace:  obj.GetNamespace(),
 		},
-		owners:         make(map[*node]ownerReferenceAttributes),
-		softOwners:     make(map[*node]empty),
-		tenantClusters: make(map[*node]empty),
-		tenantCRSs:     make(map[*node]empty),
-		virtual:        false,
-		forceMove:      o.getForceMove(obj.GetKind(), obj.GetAPIVersion(), obj.GetLabels()),
-		isGlobal:       isGlobal,
+		owners:     make(map[*node]ownerReferenceAttributes),
+		softOwners: make(map[*node]empty),
+		tenant:     make(map[*node]empty),
+		virtual:    false,
 	}
+	o.objMetaToNode(obj, newNode)
 
 	o.uidToNode[newNode.identity.UID] = newNode
 	return newNode
 }
 
-func (o *objectGraph) getForceMove(kind, apiVersion string, labels map[string]string) bool {
-	if _, ok := labels[clusterctlv1.ClusterctlMoveLabelName]; ok {
-		return true
+func (o *objectGraph) objMetaToNode(obj *unstructured.Unstructured, n *node) {
+	n.identity.Namespace = obj.GetNamespace()
+	if _, ok := obj.GetLabels()[clusterctlv1.ClusterctlMoveLabelName]; ok {
+		n.forceMove = true
+	}
+	if _, ok := obj.GetLabels()[clusterctlv1.ClusterctlMoveHierarchyLabelName]; ok {
+		n.forceMoveHierarchy = true
 	}
 
-	kindAPIStr := getKindAPIString(metav1.TypeMeta{Kind: kind, APIVersion: apiVersion})
-
+	kindAPIStr := getKindAPIString(metav1.TypeMeta{Kind: obj.GetKind(), APIVersion: obj.GetAPIVersion()})
 	if discoveryType, ok := o.types[kindAPIStr]; ok {
-		return discoveryType.forceMove
+		if !n.forceMove && discoveryType.forceMove {
+			n.forceMove = true
+		}
+
+		if !n.forceMoveHierarchy && discoveryType.forceMoveHierarchy {
+			n.forceMoveHierarchy = true
+		}
+
+		if discoveryType.scope == apiextensionsv1.ClusterScoped {
+			n.isGlobal = true
+		}
 	}
-	return false
 }
 
 // getDiscoveryTypes returns the list of TypeMeta to be considered for the the move discovery phase.
@@ -239,7 +281,23 @@ func (o *objectGraph) getDiscoveryTypes() error {
 				continue
 			}
 
-			forceMove := false
+			// If a CRD is labeled with force move-hierarchy, keep track of this so all the objects of this kind could be moved
+			// together with their descendants identified via the owner chain.
+			// NOTE: Cluster and ClusterResourceSet are automatically considered as force move-hierarchy.
+			forceMoveHierarchy := false
+			if crd.Spec.Group == clusterv1.GroupVersion.Group && crd.Spec.Names.Kind == "Cluster" {
+				forceMoveHierarchy = true
+			}
+			if crd.Spec.Group == addonsv1.GroupVersion.Group && crd.Spec.Names.Kind == "ClusterResourceSet" {
+				forceMoveHierarchy = true
+			}
+			if _, ok := crd.Labels[clusterctlv1.ClusterctlMoveHierarchyLabelName]; ok {
+				forceMoveHierarchy = true
+			}
+
+			// If a CRD is with as force move, keep track of this so all the objects of this type could be moved.
+			// NOTE: if a kind is set for force move-hierarchy, it is also automatically force moved.
+			forceMove := forceMoveHierarchy
 			if _, ok := crd.Labels[clusterctlv1.ClusterctlMoveLabelName]; ok {
 				forceMove = true
 			}
@@ -253,10 +311,11 @@ func (o *objectGraph) getDiscoveryTypes() error {
 			}
 
 			o.types[getKindAPIString(typeMeta)] = &discoveryTypeInfo{
-				typeMeta:  typeMeta,
-				forceMove: forceMove,
+				typeMeta:           typeMeta,
+				forceMove:          forceMove,
+				forceMoveHierarchy: forceMoveHierarchy,
+				scope:              crd.Spec.Scope,
 			}
-
 		}
 	}
 
@@ -270,7 +329,7 @@ func (o *objectGraph) getDiscoveryTypes() error {
 }
 
 // getKindAPIString returns a concatenated string of the API name and the plural of the kind
-// Ex: KIND=Foo API NAME=foo.bar.domain.tld => foos.foo.bar.domain.tld
+// Ex: KIND=Foo API NAME=foo.bar.domain.tld => foos.foo.bar.domain.tld.
 func getKindAPIString(typeMeta metav1.TypeMeta) string {
 	api := strings.Split(typeMeta.APIVersion, "/")[0]
 	return fmt.Sprintf("%ss.%s", strings.ToLower(typeMeta.Kind), api)
@@ -310,6 +369,26 @@ func (o *objectGraph) Discovery(namespace string) error {
 			return err
 		}
 
+		// if we are discovering Secrets, also secrets from the providers namespace should be included.
+		if discoveryType.typeMeta.GetObjectKind().GroupVersionKind().GroupKind() == corev1.SchemeGroupVersion.WithKind("SecretList").GroupKind() {
+			providers, err := o.providerInventory.List()
+			if err != nil {
+				return err
+			}
+			for _, p := range providers.Items {
+				if p.Type == string(clusterctlv1.InfrastructureProviderType) {
+					providerNamespaceSelector := []client.ListOption{client.InNamespace(p.Namespace)}
+					providerNamespaceSecretList := new(unstructured.UnstructuredList)
+					if err := retryWithExponentialBackoff(discoveryBackoff, func() error {
+						return getObjList(o.proxy, typeMeta, providerNamespaceSelector, providerNamespaceSecretList)
+					}); err != nil {
+						return err
+					}
+					objList.Items = append(objList.Items, providerNamespaceSecretList.Items...)
+				}
+			}
+		}
+
 		if len(objList.Items) == 0 {
 			continue
 		}
@@ -327,11 +406,8 @@ func (o *objectGraph) Discovery(namespace string) error {
 	// by a naming convention (without any explicit OwnerReference).
 	o.setSoftOwnership()
 
-	// Completes the graph by setting for each node the list of Clusters the node belong to.
-	o.setClusterTenants()
-
-	// Completes the graph by setting for each node the list of ClusterResourceSet the node belong to.
-	o.setCRSTenants()
+	// Completes the graph by setting for each node the list of tenants the node belongs to.
+	o.setTenants()
 
 	return nil
 }
@@ -389,19 +465,19 @@ func (o *objectGraph) getNodes() []*node {
 func (o *objectGraph) getCRSs() []*node {
 	clusters := []*node{}
 	for _, node := range o.uidToNode {
-		if node.identity.GroupVersionKind().GroupKind() == addonsv1alpha3.GroupVersion.WithKind("ClusterResourceSet").GroupKind() {
+		if node.identity.GroupVersionKind().GroupKind() == addonsv1.GroupVersion.WithKind("ClusterResourceSet").GroupKind() {
 			clusters = append(clusters, node)
 		}
 	}
 	return clusters
 }
 
-// getMoveNodes returns the list of nodes existing in the object graph that belong at least to one Cluster or to a ClusterResourceSet
-// or to a CRD containing the "move" label.
+// getMoveNodes returns the list of nodes existing in the object graph that belong at least to one tenant (e.g Cluster or to a ClusterResourceSet)
+// or it is labeled for force move (at object level or at CRD level).
 func (o *objectGraph) getMoveNodes() []*node {
 	nodes := []*node{}
 	for _, node := range o.uidToNode {
-		if len(node.tenantClusters) > 0 || len(node.tenantCRSs) > 0 || node.forceMove {
+		if len(node.tenant) > 0 || node.forceMove {
 			nodes = append(nodes, node)
 		}
 	}
@@ -446,41 +522,28 @@ func (o *objectGraph) setSoftOwnership() {
 	}
 }
 
-// setClusterTenants sets the cluster tenants for the clusters itself and all their dependent object tree.
-func (o *objectGraph) setClusterTenants() {
-	for _, cluster := range o.getClusters() {
-		o.setClusterTenant(cluster, cluster)
+// setTenants identifies all the nodes linked to a parent with forceMoveHierarchy = true (e.g. Clusters or ClusterResourceSet)
+// via the owner ref chain.
+func (o *objectGraph) setTenants() {
+	for _, node := range o.getNodes() {
+		if node.forceMoveHierarchy {
+			o.setTenant(node, node, node.isGlobal)
+		}
 	}
 }
 
-// setNodeTenant sets a cluster tenant for a node and for its own dependents/sofDependents.
-func (o *objectGraph) setClusterTenant(node, tenant *node) {
-	node.tenantClusters[tenant] = empty{}
+// setTenant sets a tenant for a node and for its own dependents/sofDependents.
+func (o *objectGraph) setTenant(node, tenant *node, isGlobalHierarchy bool) {
+	node.tenant[tenant] = empty{}
+	node.isGlobalHierarchy = node.isGlobalHierarchy || isGlobalHierarchy
 	for _, other := range o.getNodes() {
 		if other.isOwnedBy(node) || other.isSoftOwnedBy(node) {
-			o.setClusterTenant(other, tenant)
+			o.setTenant(other, tenant, isGlobalHierarchy)
 		}
 	}
 }
 
-// setClusterTenants sets the ClusterResourceSet tenants for the ClusterResourceSet itself and all their dependent object tree.
-func (o *objectGraph) setCRSTenants() {
-	for _, crs := range o.getCRSs() {
-		o.setCRSTenant(crs, crs)
-	}
-}
-
-// setCRSTenant sets a ClusterResourceSet tenant for a node and for its own dependents/sofDependents.
-func (o *objectGraph) setCRSTenant(node, tenant *node) {
-	node.tenantCRSs[tenant] = empty{}
-	for _, other := range o.getNodes() {
-		if other.isOwnedBy(node) {
-			o.setCRSTenant(other, tenant)
-		}
-	}
-}
-
-// checkVirtualNode logs if nodes are still virtual
+// checkVirtualNode logs if nodes are still virtual.
 func (o *objectGraph) checkVirtualNode() {
 	log := logf.Log
 	for _, node := range o.uidToNode {

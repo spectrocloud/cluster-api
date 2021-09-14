@@ -21,11 +21,11 @@ import (
 
 	"github.com/blang/semver"
 	"github.com/pkg/errors"
-	"k8s.io/apimachinery/pkg/util/intstr"
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha3"
-	controlplanev1 "sigs.k8s.io/cluster-api/controlplane/kubeadm/api/v1alpha3"
+	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha4"
+	controlplanev1 "sigs.k8s.io/cluster-api/controlplane/kubeadm/api/v1alpha4"
 	"sigs.k8s.io/cluster-api/controlplane/kubeadm/internal"
 	"sigs.k8s.io/cluster-api/util"
+	"sigs.k8s.io/cluster-api/util/collections"
 	ctrl "sigs.k8s.io/controller-runtime"
 )
 
@@ -34,9 +34,13 @@ func (r *KubeadmControlPlaneReconciler) upgradeControlPlane(
 	cluster *clusterv1.Cluster,
 	kcp *controlplanev1.KubeadmControlPlane,
 	controlPlane *internal.ControlPlane,
-	machinesRequireUpgrade internal.FilterableMachineCollection,
+	machinesRequireUpgrade collections.Machines,
 ) (ctrl.Result, error) {
 	logger := controlPlane.Logger()
+
+	if kcp.Spec.RolloutStrategy == nil || kcp.Spec.RolloutStrategy.RollingUpdate == nil {
+		return ctrl.Result{}, errors.New("rolloutStrategy is not set")
+	}
 
 	// TODO: handle reconciliation of etcd members and kubeadm config in case they get out of sync with cluster
 
@@ -71,48 +75,39 @@ func (r *KubeadmControlPlaneReconciler) upgradeControlPlane(
 
 	if kcp.Spec.KubeadmConfigSpec.ClusterConfiguration != nil {
 		imageRepository := kcp.Spec.KubeadmConfigSpec.ClusterConfiguration.ImageRepository
-		if err := workloadCluster.UpdateImageRepositoryInKubeadmConfigMap(ctx, imageRepository); err != nil {
+		if err := workloadCluster.UpdateImageRepositoryInKubeadmConfigMap(ctx, imageRepository, parsedVersion); err != nil {
 			return ctrl.Result{}, errors.Wrap(err, "failed to update the image repository in the kubeadm config map")
 		}
 	}
 
 	if kcp.Spec.KubeadmConfigSpec.ClusterConfiguration != nil && kcp.Spec.KubeadmConfigSpec.ClusterConfiguration.Etcd.Local != nil {
 		meta := kcp.Spec.KubeadmConfigSpec.ClusterConfiguration.Etcd.Local.ImageMeta
-		if err := workloadCluster.UpdateEtcdVersionInKubeadmConfigMap(ctx, meta.ImageRepository, meta.ImageTag); err != nil {
+		if err := workloadCluster.UpdateEtcdVersionInKubeadmConfigMap(ctx, meta.ImageRepository, meta.ImageTag, parsedVersion); err != nil {
 			return ctrl.Result{}, errors.Wrap(err, "failed to update the etcd version in the kubeadm config map")
+		}
+
+		extraArgs := kcp.Spec.KubeadmConfigSpec.ClusterConfiguration.Etcd.Local.ExtraArgs
+		if err := workloadCluster.UpdateEtcdExtraArgsInKubeadmConfigMap(ctx, extraArgs, parsedVersion); err != nil {
+			return ctrl.Result{}, errors.Wrap(err, "failed to update the etcd extra args in the kubeadm config map")
 		}
 	}
 
 	if kcp.Spec.KubeadmConfigSpec.ClusterConfiguration != nil {
-		if err := workloadCluster.UpdateAPIServerInKubeadmConfigMap(ctx, kcp.Spec.KubeadmConfigSpec.ClusterConfiguration.APIServer); err != nil {
+		if err := workloadCluster.UpdateAPIServerInKubeadmConfigMap(ctx, kcp.Spec.KubeadmConfigSpec.ClusterConfiguration.APIServer, parsedVersion); err != nil {
 			return ctrl.Result{}, errors.Wrap(err, "failed to update api server in the kubeadm config map")
 		}
 
-		if err := workloadCluster.UpdateControllerManagerInKubeadmConfigMap(ctx, kcp.Spec.KubeadmConfigSpec.ClusterConfiguration.ControllerManager); err != nil {
+		if err := workloadCluster.UpdateControllerManagerInKubeadmConfigMap(ctx, kcp.Spec.KubeadmConfigSpec.ClusterConfiguration.ControllerManager, parsedVersion); err != nil {
 			return ctrl.Result{}, errors.Wrap(err, "failed to update controller manager in the kubeadm config map")
 		}
 
-		if err := workloadCluster.UpdateSchedulerInKubeadmConfigMap(ctx, kcp.Spec.KubeadmConfigSpec.ClusterConfiguration.Scheduler); err != nil {
+		if err := workloadCluster.UpdateSchedulerInKubeadmConfigMap(ctx, kcp.Spec.KubeadmConfigSpec.ClusterConfiguration.Scheduler, parsedVersion); err != nil {
 			return ctrl.Result{}, errors.Wrap(err, "failed to update scheduler in the kubeadm config map")
 		}
 	}
 
 	if err := workloadCluster.UpdateKubeletConfigMap(ctx, parsedVersion); err != nil {
 		return ctrl.Result{}, errors.Wrap(err, "failed to upgrade kubelet config map")
-	}
-
-	// this should be already handled by the defaulting webhook, but during rolling upgrade it is possible that
-	// kcp version got updated first before the webhook pod update, then the new kcp does not have the default value
-	// then later on when webhook pod updated, kcp.spec have no updates, so the value not set and controller will have nil pointer
-	// so do a quick hack here to set the default if it's empty
-	if kcp.Spec.RolloutStrategy == nil {
-		ios1 := intstr.FromInt(1)
-		kcp.Spec.RolloutStrategy = &controlplanev1.RolloutStrategy{
-			Type: controlplanev1.RollingUpdateStrategyType,
-			RollingUpdate: &controlplanev1.RollingUpdate{
-				MaxSurge: &ios1,
-			},
-		}
 	}
 
 	switch kcp.Spec.RolloutStrategy.Type {
@@ -126,6 +121,7 @@ func (r *KubeadmControlPlaneReconciler) upgradeControlPlane(
 		}
 		return r.scaleDownControlPlane(ctx, cluster, kcp, controlPlane, machinesRequireUpgrade)
 	default:
-		return ctrl.Result{}, errors.New("rolloutStrategy type is not set to rollingupdatestrategytype, unable to determine the strategy for rolling out machines")
+		logger.Info("RolloutStrategy type is not set to RollingUpdateStrategyType, unable to determine the strategy for rolling out machines")
+		return ctrl.Result{}, nil
 	}
 }

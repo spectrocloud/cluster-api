@@ -38,6 +38,7 @@ const (
 	features      = ":sparkles: New Features"
 	bugs          = ":bug: Bug Fixes"
 	documentation = ":book: Documentation"
+	proposals     = ":memo: Proposals"
 	warning       = ":warning: Breaking Changes"
 	other         = ":seedling: Others"
 	unknown       = ":question: Sort these by hand"
@@ -45,11 +46,12 @@ const (
 
 var (
 	outputOrder = []string{
+		proposals,
 		warning,
 		features,
 		bugs,
-		documentation,
 		other,
+		documentation,
 		unknown,
 	}
 
@@ -134,6 +136,9 @@ func run() int {
 			key = documentation
 			body = strings.TrimPrefix(body, ":book:")
 			body = strings.TrimPrefix(body, "📖")
+			if strings.Contains(body, "CAEP") || strings.Contains(body, "proposal") {
+				key = proposals
+			}
 		case strings.HasPrefix(body, ":seedling:"), strings.HasPrefix(body, "🌱"):
 			key = other
 			body = strings.TrimPrefix(body, ":seedling:")
@@ -142,11 +147,6 @@ func run() int {
 			key = warning
 			body = strings.TrimPrefix(body, ":warning:")
 			body = strings.TrimPrefix(body, "⚠️")
-		case strings.HasPrefix(body, ":running:"), strings.HasPrefix(body, "🏃"):
-			// This has been deprecated in favor of :seedling:
-			key = other
-			body = strings.TrimPrefix(body, ":running:")
-			body = strings.TrimPrefix(body, "🏃")
 		default:
 			key = unknown
 		}
@@ -157,6 +157,10 @@ func run() int {
 		}
 		body = fmt.Sprintf("- %s", body)
 		fmt.Sscanf(c.merge, "Merge pull request %s from %s", &prNumber, &fork)
+		if key == documentation {
+			merges[key] = append(merges[key], prNumber)
+			continue
+		}
 		merges[key] = append(merges[key], formatMerge(body, prNumber))
 	}
 
@@ -165,16 +169,27 @@ func run() int {
 
 	for _, key := range outputOrder {
 		mergeslice := merges[key]
-		if len(mergeslice) > 0 {
+		if len(mergeslice) == 0 {
+			continue
+		}
+
+		switch key {
+		case documentation:
+			fmt.Printf(
+				":book: Additionally, there have been %d contributions to our documentation and book. (%s) \n\n",
+				len(mergeslice),
+				strings.Join(mergeslice, ", "),
+			)
+		default:
 			fmt.Println("## " + key)
 			for _, merge := range mergeslice {
 				fmt.Println(merge)
 			}
 			fmt.Println()
 		}
+
 	}
 
-	fmt.Println("The image for this release is: `<ADD_IMAGE_HERE>`.")
 	fmt.Println("")
 	fmt.Println("_Thanks to all our contributors!_ 😊")
 

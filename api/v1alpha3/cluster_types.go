@@ -29,12 +29,14 @@ import (
 )
 
 const (
+	// ClusterFinalizer is the finalizer used by the cluster controller to
+	// cleanup the cluster resources when a Cluster is being deleted.
 	ClusterFinalizer = "cluster.cluster.x-k8s.io"
 )
 
 // ANCHOR: ClusterSpec
 
-// ClusterSpec defines the desired state of Cluster
+// ClusterSpec defines the desired state of Cluster.
 type ClusterSpec struct {
 	// Paused can be used to prevent controllers from processing the Cluster and all its associated objects.
 	// +optional
@@ -87,6 +89,7 @@ type ClusterNetwork struct {
 // ANCHOR_END: ClusterNetwork
 
 // ANCHOR: NetworkRanges
+
 // NetworkRanges represents ranges of network addresses.
 type NetworkRanges struct {
 	CIDRBlocks []string `json:"cidrBlocks"`
@@ -103,7 +106,7 @@ func (n *NetworkRanges) String() string {
 
 // ANCHOR: ClusterStatus
 
-// ClusterStatus defines the observed state of Cluster
+// ClusterStatus defines the observed state of Cluster.
 type ClusterStatus struct {
 	// FailureDomains is a slice of failure domain objects synced from the infrastructure provider.
 	FailureDomains FailureDomains `json:"failureDomains,omitempty"`
@@ -198,11 +201,10 @@ func (v APIEndpoint) String() string {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:resource:path=clusters,shortName=cl,scope=Namespaced,categories=cluster-api
-// +kubebuilder:storageversion
 // +kubebuilder:subresource:status
 // +kubebuilder:printcolumn:name="Phase",type="string",JSONPath=".status.phase",description="Cluster status such as Pending/Provisioning/Provisioned/Deleting/Failed"
 
-// Cluster is the Schema for the clusters API
+// Cluster is the Schema for the clusters API.
 type Cluster struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
@@ -211,17 +213,19 @@ type Cluster struct {
 	Status ClusterStatus `json:"status,omitempty"`
 }
 
+// GetConditions returns the set of conditions for this object.
 func (c *Cluster) GetConditions() Conditions {
 	return c.Status.Conditions
 }
 
+// SetConditions sets the conditions on this object.
 func (c *Cluster) SetConditions(conditions Conditions) {
 	c.Status.Conditions = conditions
 }
 
 // +kubebuilder:object:root=true
 
-// ClusterList contains a list of Cluster
+// ClusterList contains a list of Cluster.
 type ClusterList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
@@ -247,7 +251,7 @@ func (in FailureDomains) FilterControlPlane() FailureDomains {
 	return res
 }
 
-// GetIDs returns a slice containing the ids for failure domains
+// GetIDs returns a slice containing the ids for failure domains.
 func (in FailureDomains) GetIDs() []*string {
 	ids := make([]*string, 0, len(in))
 	for id := range in {

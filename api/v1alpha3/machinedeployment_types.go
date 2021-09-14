@@ -21,14 +21,15 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 )
 
+// MachineDeploymentStrategyType defines the type of MachineDeployment rollout strategies.
 type MachineDeploymentStrategyType string
 
 const (
-	// Replace the old MachineSet by new one using rolling update
+	// RollingUpdateMachineDeploymentStrategyType replaces the old MachineSet by new one using rolling update
 	// i.e. gradually scale down the old MachineSet and scale up the new one.
 	RollingUpdateMachineDeploymentStrategyType MachineDeploymentStrategyType = "RollingUpdate"
 
-	// RevisionAnnotation is the revision annotation of a machine deployment's machine sets which records its rollout sequence
+	// RevisionAnnotation is the revision annotation of a machine deployment's machine sets which records its rollout sequence.
 	RevisionAnnotation = "machinedeployment.clusters.x-k8s.io/revision"
 	// RevisionHistoryAnnotation maintains the history of all old revisions that a machine set has served for a machine deployment.
 	RevisionHistoryAnnotation = "machinedeployment.clusters.x-k8s.io/revision-history"
@@ -44,7 +45,7 @@ const (
 
 // ANCHOR: MachineDeploymentSpec
 
-// MachineDeploymentSpec defines the desired state of MachineDeployment
+// MachineDeploymentSpec defines the desired state of MachineDeployment.
 type MachineDeploymentSpec struct {
 	// ClusterName is the name of the Cluster this object belongs to.
 	// +kubebuilder:validation:MinLength=1
@@ -153,7 +154,7 @@ type MachineRollingUpdateDeployment struct {
 
 // ANCHOR: MachineDeploymentStatus
 
-// MachineDeploymentStatus defines the observed state of MachineDeployment
+// MachineDeploymentStatus defines the observed state of MachineDeployment.
 type MachineDeploymentStatus struct {
 	// The generation observed by the deployment controller.
 	// +optional
@@ -199,7 +200,7 @@ type MachineDeploymentStatus struct {
 
 // ANCHOR_END: MachineDeploymentStatus
 
-// MachineDeploymentPhase indicates the progress of the machine deployment
+// MachineDeploymentPhase indicates the progress of the machine deployment.
 type MachineDeploymentPhase string
 
 const (
@@ -241,7 +242,6 @@ func (md *MachineDeploymentStatus) GetTypedPhase() MachineDeploymentPhase {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:resource:path=machinedeployments,shortName=md,scope=Namespaced,categories=cluster-api
-// +kubebuilder:storageversion
 // +kubebuilder:subresource:status
 // +kubebuilder:subresource:scale:specpath=.spec.replicas,statuspath=.status.replicas,selectorpath=.status.selector
 // +kubebuilder:printcolumn:name="Phase",type="string",JSONPath=".status.phase",description="MachineDeployment status such as ScalingUp/ScalingDown/Running/Failed/Unknown"
@@ -250,7 +250,7 @@ func (md *MachineDeploymentStatus) GetTypedPhase() MachineDeploymentPhase {
 // +kubebuilder:printcolumn:name="Updated",type=integer,JSONPath=".status.updatedReplicas",description="Total number of non-terminated machines targeted by this deployment that have the desired template spec"
 // +kubebuilder:printcolumn:name="Unavailable",type=integer,JSONPath=".status.unavailableReplicas",description="Total number of unavailable machines targeted by this MachineDeployment"
 
-// MachineDeployment is the Schema for the machinedeployments API
+// MachineDeployment is the Schema for the machinedeployments API.
 type MachineDeployment struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
@@ -261,7 +261,7 @@ type MachineDeployment struct {
 
 // +kubebuilder:object:root=true
 
-// MachineDeploymentList contains a list of MachineDeployment
+// MachineDeploymentList contains a list of MachineDeployment.
 type MachineDeploymentList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`

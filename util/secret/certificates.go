@@ -34,9 +34,8 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/util/cert"
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha3"
-	bootstrapv1 "sigs.k8s.io/cluster-api/bootstrap/kubeadm/api/v1alpha3"
-	"sigs.k8s.io/cluster-api/bootstrap/kubeadm/types/v1beta1"
+	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha4"
+	bootstrapv1 "sigs.k8s.io/cluster-api/bootstrap/kubeadm/api/v1alpha4"
 	"sigs.k8s.io/cluster-api/util/certs"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -44,25 +43,26 @@ import (
 const (
 	rootOwnerValue = "root:root"
 
+	// DefaultCertificatesDir is the default directory where Kubernetes stores its PKI information.
 	DefaultCertificatesDir = "/etc/kubernetes/pki"
 )
 
 var (
-	// ErrMissingCertificate is an error indicating a certificate is entirely missing
+	// ErrMissingCertificate is an error indicating a certificate is entirely missing.
 	ErrMissingCertificate = errors.New("missing certificate")
 
-	// ErrMissingCrt is an error indicating the crt file is missing from the certificate
+	// ErrMissingCrt is an error indicating the crt file is missing from the certificate.
 	ErrMissingCrt = errors.New("missing crt data")
 
-	// ErrMissingKey is an error indicating the key file is missing from the certificate
+	// ErrMissingKey is an error indicating the key file is missing from the certificate.
 	ErrMissingKey = errors.New("missing key data")
 )
 
 // Certificates are the certificates necessary to bootstrap a cluster.
 type Certificates []*Certificate
 
-// NewCertificatesForInitialControlPlane returns a list of certificates configured for a control plane node
-func NewCertificatesForInitialControlPlane(config *v1beta1.ClusterConfiguration) Certificates {
+// NewCertificatesForInitialControlPlane returns a list of certificates configured for a control plane node.
+func NewCertificatesForInitialControlPlane(config *bootstrapv1.ClusterConfiguration) Certificates {
 	certificatesDir := DefaultCertificatesDir
 	if config != nil && config.CertificatesDir != "" {
 		certificatesDir = config.CertificatesDir
@@ -112,16 +112,8 @@ func NewCertificatesForInitialControlPlane(config *v1beta1.ClusterConfiguration)
 	return certificates
 }
 
-// NewCertificatesForJoiningControlPlane gets any certs that exist and writes them to disk
-//
-// Deprecated: this method is deprecated in favor of NewControlPlaneJoinCerts that
-// provides full support for the external etcd scenario.
-func NewCertificatesForJoiningControlPlane() Certificates {
-	return NewControlPlaneJoinCerts(nil)
-}
-
-// NewControlPlaneJoinCerts gets any certs that exist and writes them to disk
-func NewControlPlaneJoinCerts(config *v1beta1.ClusterConfiguration) Certificates {
+// NewControlPlaneJoinCerts gets any certs that exist and writes them to disk.
+func NewControlPlaneJoinCerts(config *bootstrapv1.ClusterConfiguration) Certificates {
 	certificatesDir := DefaultCertificatesDir
 	if config != nil && config.CertificatesDir != "" {
 		certificatesDir = config.CertificatesDir
@@ -223,7 +215,7 @@ func (c Certificates) Lookup(ctx context.Context, ctrlclient client.Client, clus
 	return nil
 }
 
-// EnsureAllExist ensure that there is some data present for every certificate
+// EnsureAllExist ensure that there is some data present for every certificate.
 func (c Certificates) EnsureAllExist() error {
 	for _, certificate := range c {
 		if certificate.KeyPair == nil {
@@ -241,29 +233,14 @@ func (c Certificates) EnsureAllExist() error {
 	return nil
 }
 
-// TODO: consider moving a generating function into the Certificate object itself?
-type certGenerator func() (*certs.KeyPair, error)
-
 // Generate will generate any certificates that do not have KeyPair data.
 func (c Certificates) Generate() error {
 	for _, certificate := range c {
 		if certificate.KeyPair == nil {
-			var generator certGenerator
-			switch certificate.Purpose {
-			case APIServerEtcdClient: // Do not generate the APIServerEtcdClient key pair. It is user supplied
-				continue
-			case ServiceAccount:
-				generator = generateServiceAccountKeys
-			default:
-				generator = generateCACert
-			}
-
-			kp, err := generator()
+			err := certificate.Generate()
 			if err != nil {
 				return err
 			}
-			certificate.KeyPair = kp
-			certificate.Generated = true
 		}
 	}
 	return nil
@@ -296,11 +273,7 @@ func (c Certificates) LookupOrGenerate(ctx context.Context, ctrlclient client.Cl
 	}
 
 	// Save any certificates that have been generated
-	if err := c.SaveGenerated(ctx, ctrlclient, clusterName, owner); err != nil {
-		return err
-	}
-
-	return nil
+	return c.SaveGenerated(ctx, ctrlclient, clusterName, owner)
 }
 
 // Certificate represents a single certificate CA.
@@ -345,6 +318,7 @@ func (c *Certificate) AsSecret(clusterName client.ObjectKey, owner metav1.OwnerR
 			TLSKeyDataName: c.KeyPair.Key,
 			TLSCrtDataName: c.KeyPair.Cert,
 		},
+		Type: clusterv1.ClusterSecretType,
 	}
 
 	if c.Generated {
@@ -375,30 +349,46 @@ func (c *Certificate) AsFiles() []bootstrapv1.File {
 	return out
 }
 
+// Generate generates a certificate.
+func (c *Certificate) Generate() error {
+	// Do not generate the APIServerEtcdClient key pair. It is user supplied
+	if c.Purpose == APIServerEtcdClient {
+		return nil
+	}
+
+	generator := generateCACert
+	if c.Purpose == ServiceAccount {
+		generator = generateServiceAccountKeys
+	}
+
+	kp, err := generator()
+	if err != nil {
+		return err
+	}
+	c.KeyPair = kp
+	c.Generated = true
+
+	return nil
+}
+
 // AsFiles converts a slice of certificates into bootstrap files.
 func (c Certificates) AsFiles() []bootstrapv1.File {
-	clusterCA := c.GetByPurpose(ClusterCA)
-	etcdCA := c.GetByPurpose(EtcdCA)
-	frontProxyCA := c.GetByPurpose(FrontProxyCA)
-	serviceAccountKey := c.GetByPurpose(ServiceAccount)
-
 	certFiles := make([]bootstrapv1.File, 0)
-	if clusterCA != nil {
+	if clusterCA := c.GetByPurpose(ClusterCA); clusterCA != nil {
 		certFiles = append(certFiles, clusterCA.AsFiles()...)
 	}
-	if etcdCA != nil {
+	if etcdCA := c.GetByPurpose(EtcdCA); etcdCA != nil {
 		certFiles = append(certFiles, etcdCA.AsFiles()...)
 	}
-	if frontProxyCA != nil {
+	if frontProxyCA := c.GetByPurpose(FrontProxyCA); frontProxyCA != nil {
 		certFiles = append(certFiles, frontProxyCA.AsFiles()...)
 	}
-	if serviceAccountKey != nil {
+	if serviceAccountKey := c.GetByPurpose(ServiceAccount); serviceAccountKey != nil {
 		certFiles = append(certFiles, serviceAccountKey.AsFiles()...)
 	}
 
 	// these will only exist if external etcd was defined and supplied by the user
-	apiserverEtcdClientCert := c.GetByPurpose(APIServerEtcdClient)
-	if apiserverEtcdClientCert != nil {
+	if apiserverEtcdClientCert := c.GetByPurpose(APIServerEtcdClient); apiserverEtcdClientCert != nil {
 		certFiles = append(certFiles, apiserverEtcdClientCert.AsFiles()...)
 	}
 
@@ -450,7 +440,7 @@ func generateServiceAccountKeys() (*certs.KeyPair, error) {
 	}, nil
 }
 
-// newCertificateAuthority creates new certificate and private key for the certificate authority
+// newCertificateAuthority creates new certificate and private key for the certificate authority.
 func newCertificateAuthority() (*x509.Certificate, *rsa.PrivateKey, error) {
 	key, err := certs.NewPrivateKey()
 	if err != nil {

@@ -44,7 +44,7 @@ func Test_metadataClient_Get(t *testing.T) {
 			fields: fields{
 				provider: config.NewProvider("p1", "", clusterctlv1.CoreProviderType),
 				version:  "v1.0.0",
-				repository: test.NewFakeRepository().
+				repository: NewMemoryRepository().
 					WithPaths("root", "").
 					WithDefaultVersion("v1.0.0").
 					WithMetadata("v1.0.0", &clusterctlv1.Metadata{
@@ -69,32 +69,11 @@ func Test_metadataClient_Get(t *testing.T) {
 			wantErr: false,
 		},
 		{
-			name: "Pass with embedded metadata",
-			fields: fields{
-				provider: config.NewProvider(config.ClusterAPIProviderName, "", clusterctlv1.CoreProviderType),
-				version:  "v1.0.0",
-				repository: test.NewFakeRepository(). //repository without a metadata file
-									WithPaths("root", "").
-									WithDefaultVersion("v1.0.0"),
-			},
-			want: &clusterctlv1.Metadata{
-				TypeMeta: metav1.TypeMeta{
-					APIVersion: clusterctlv1.GroupVersion.String(),
-					Kind:       "Metadata",
-				},
-				ReleaseSeries: []clusterctlv1.ReleaseSeries{
-					{Major: 0, Minor: 3, Contract: "v1alpha3"},
-					{Major: 0, Minor: 2, Contract: "v1alpha2"},
-				},
-			},
-			wantErr: false,
-		},
-		{
 			name: "Fails if the file does not exists",
 			fields: fields{
 				provider: config.NewProvider("p1", "", clusterctlv1.CoreProviderType),
 				version:  "v1.0.0",
-				repository: test.NewFakeRepository(). //repository without a metadata file
+				repository: NewMemoryRepository(). // repository without a metadata file
 									WithPaths("root", "").
 									WithDefaultVersion("v1.0.0"),
 			},
@@ -106,7 +85,7 @@ func Test_metadataClient_Get(t *testing.T) {
 			fields: fields{
 				provider: config.NewProvider("p1", "", clusterctlv1.CoreProviderType),
 				version:  "v1.0.0",
-				repository: test.NewFakeRepository().
+				repository: NewMemoryRepository().
 					WithPaths("root", "").
 					WithDefaultVersion("v2.0.0").
 					WithMetadata("v2.0.0", &clusterctlv1.Metadata{ // metadata file exists for version 2.0.0, while we are checking metadata for v1.0.0
@@ -123,7 +102,7 @@ func Test_metadataClient_Get(t *testing.T) {
 			fields: fields{
 				provider: config.NewProvider("p1", "", clusterctlv1.CoreProviderType),
 				version:  "v1.0.0",
-				repository: test.NewFakeRepository().
+				repository: NewMemoryRepository().
 					WithPaths("root", "").
 					WithDefaultVersion("v2.0.0").
 					WithFile("v2.0.0", "metadata.yaml", []byte("not a valid metadata file!")), // metadata file exists but is invalid

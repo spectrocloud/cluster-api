@@ -23,19 +23,18 @@ import (
 	"sort"
 	"time"
 
-	"github.com/go-logr/logr"
 	"github.com/pkg/errors"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	kerrors "k8s.io/apimachinery/pkg/util/errors"
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha3"
+	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha4"
 	"sigs.k8s.io/cluster-api/controllers/remote"
-	addonsv1 "sigs.k8s.io/cluster-api/exp/addons/api/v1alpha3"
+	addonsv1 "sigs.k8s.io/cluster-api/exp/addons/api/v1alpha4"
+	resourcepredicates "sigs.k8s.io/cluster-api/exp/addons/controllers/predicates"
 	"sigs.k8s.io/cluster-api/util"
 	"sigs.k8s.io/cluster-api/util/conditions"
 	"sigs.k8s.io/cluster-api/util/patch"
@@ -51,53 +50,58 @@ import (
 )
 
 var (
+	// ErrSecretTypeNotSupported signals that a Secret is not supported.
 	ErrSecretTypeNotSupported = errors.New("unsupported secret type")
 )
 
 // +kubebuilder:rbac:groups=core,resources=secrets,verbs=get;list;watch;patch
 // +kubebuilder:rbac:groups=core,resources=configmaps,verbs=get;list;watch;patch
 // +kubebuilder:rbac:groups=addons.cluster.x-k8s.io,resources=*,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=addons.cluster.x-k8s.io,resources=clusterresourcesets/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=addons.cluster.x-k8s.io,resources=clusterresourcesets/status;clusterresourcesets/finalizers,verbs=get;update;patch
 
-// ClusterResourceSetReconciler reconciles a ClusterResourceSet object
+// ClusterResourceSetReconciler reconciles a ClusterResourceSet object.
 type ClusterResourceSetReconciler struct {
-	Client  client.Client
-	Log     logr.Logger
-	Tracker *remote.ClusterCacheTracker
-
-	scheme *runtime.Scheme
+	Client           client.Client
+	Tracker          *remote.ClusterCacheTracker
+	WatchFilterValue string
 }
 
-func (r *ClusterResourceSetReconciler) SetupWithManager(mgr ctrl.Manager, options controller.Options) error {
+func (r *ClusterResourceSetReconciler) SetupWithManager(ctx context.Context, mgr ctrl.Manager, options controller.Options) error {
 	err := ctrl.NewControllerManagedBy(mgr).
 		For(&addonsv1.ClusterResourceSet{}).
 		Watches(
 			&source.Kind{Type: &clusterv1.Cluster{}},
-			&handler.EnqueueRequestsFromMapFunc{ToRequests: handler.ToRequestsFunc(r.clusterToClusterResourceSet)},
+			handler.EnqueueRequestsFromMapFunc(r.clusterToClusterResourceSet),
 		).
-		Watches(&source.Kind{Type: builder.OnlyMetadata(&corev1.ConfigMap{})},
-			&handler.EnqueueRequestsFromMapFunc{
-				ToRequests: handler.ToRequestsFunc(r.resourceToClusterResourceSet),
-			},
+		Watches(
+			&source.Kind{Type: &corev1.ConfigMap{}},
+			handler.EnqueueRequestsFromMapFunc(r.resourceToClusterResourceSet),
+			builder.OnlyMetadata,
+			builder.WithPredicates(
+				resourcepredicates.ResourceCreate(ctrl.LoggerFrom(ctx)),
+			),
 		).
-		Watches(&source.Kind{Type: builder.OnlyMetadata(&corev1.Secret{})},
-			&handler.EnqueueRequestsFromMapFunc{
-				ToRequests: handler.ToRequestsFunc(r.resourceToClusterResourceSet),
-			},
+		Watches(
+			&source.Kind{Type: &corev1.Secret{}},
+			handler.EnqueueRequestsFromMapFunc(r.resourceToClusterResourceSet),
+			builder.OnlyMetadata,
+			builder.WithPredicates(
+				resourcepredicates.ResourceCreate(ctrl.LoggerFrom(ctx)),
+			),
 		).
 		WithOptions(options).
-		WithEventFilter(predicates.ResourceNotPaused(r.Log)).
+		WithEventFilter(predicates.ResourceNotPausedAndHasFilterLabel(ctrl.LoggerFrom(ctx), r.WatchFilterValue)).
 		Complete(r)
+
 	if err != nil {
 		return errors.Wrap(err, "failed setting up with a controller manager")
 	}
 
-	r.scheme = mgr.GetScheme()
 	return nil
 }
 
-func (r *ClusterResourceSetReconciler) Reconcile(req ctrl.Request) (_ ctrl.Result, reterr error) {
-	ctx := context.Background()
+func (r *ClusterResourceSetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (_ ctrl.Result, reterr error) {
+	log := ctrl.LoggerFrom(ctx)
 
 	// Fetch the ClusterResourceSet instance.
 	clusterResourceSet := &addonsv1.ClusterResourceSet{}
@@ -124,11 +128,9 @@ func (r *ClusterResourceSetReconciler) Reconcile(req ctrl.Request) (_ ctrl.Resul
 		}
 	}()
 
-	logger := r.Log.WithValues("clusterresourceset", clusterResourceSet.Name, "namespace", clusterResourceSet.Namespace)
-
 	clusters, err := r.getClustersByClusterResourceSetSelector(ctx, clusterResourceSet)
 	if err != nil {
-		logger.Error(err, "Failed fetching clusters that matches ClusterResourceSet labels", "ClusterResourceSet", clusterResourceSet.Name)
+		log.Error(err, "Failed fetching clusters that matches ClusterResourceSet labels", "ClusterResourceSet", clusterResourceSet.Name)
 		conditions.MarkFalse(clusterResourceSet, addonsv1.ResourcesAppliedCondition, addonsv1.ClusterMatchFailedReason, clusterv1.ConditionSeverityWarning, err.Error())
 		return ctrl.Result{}, err
 	}
@@ -155,7 +157,7 @@ func (r *ClusterResourceSetReconciler) Reconcile(req ctrl.Request) (_ ctrl.Resul
 
 // reconcileDelete removes the deleted ClusterResourceSet from all the ClusterResourceSetBindings it is added to.
 func (r *ClusterResourceSetReconciler) reconcileDelete(ctx context.Context, clusters []*clusterv1.Cluster, crs *addonsv1.ClusterResourceSet) (ctrl.Result, error) {
-	logger := r.Log.WithValues("clusterresourceset", crs.Name, "namespace", crs.Namespace)
+	log := ctrl.LoggerFrom(ctx)
 
 	for _, cluster := range clusters {
 		clusterResourceSetBinding := &addonsv1.ClusterResourceSetBinding{}
@@ -183,10 +185,10 @@ func (r *ClusterResourceSetReconciler) reconcileDelete(ctx context.Context, clus
 		// attempt to Patch the ClusterResourceSetBinding object after delete reconciliation if there is at least 1 binding left.
 		if len(clusterResourceSetBinding.Spec.Bindings) == 0 {
 			if r.Client.Delete(ctx, clusterResourceSetBinding) != nil {
-				logger.Error(err, "failed to delete empty ClusterResourceSetBinding")
+				log.Error(err, "failed to delete empty ClusterResourceSetBinding")
 			}
 		} else if err := patchHelper.Patch(ctx, clusterResourceSetBinding); err != nil {
-			logger.Error(err, "failed to patch ClusterResourceSetBinding")
+			log.Error(err, "failed to patch ClusterResourceSetBinding")
 			return ctrl.Result{}, err
 		}
 	}
@@ -197,7 +199,7 @@ func (r *ClusterResourceSetReconciler) reconcileDelete(ctx context.Context, clus
 
 // getClustersByClusterResourceSetSelector fetches Clusters matched by the ClusterResourceSet's label selector that are in the same namespace as the ClusterResourceSet object.
 func (r *ClusterResourceSetReconciler) getClustersByClusterResourceSetSelector(ctx context.Context, clusterResourceSet *addonsv1.ClusterResourceSet) ([]*clusterv1.Cluster, error) {
-	logger := r.Log.WithValues("clusterresourceset", clusterResourceSet.Name, "namespace", clusterResourceSet.Namespace)
+	log := ctrl.LoggerFrom(ctx)
 
 	clusterList := &clusterv1.ClusterList{}
 	selector, err := metav1.LabelSelectorAsSelector(&clusterResourceSet.Spec.ClusterSelector)
@@ -207,7 +209,7 @@ func (r *ClusterResourceSetReconciler) getClustersByClusterResourceSetSelector(c
 
 	// If a ClusterResourceSet has a nil or empty selector, it should match nothing, not everything.
 	if selector.Empty() {
-		logger.Info("Empty ClusterResourceSet selector: No clusters are selected.")
+		log.Info("Empty ClusterResourceSet selector: No clusters are selected.")
 		return nil, nil
 	}
 
@@ -231,7 +233,7 @@ func (r *ClusterResourceSetReconciler) getClustersByClusterResourceSetSelector(c
 // It applies resources best effort and continue on scenarios like: unsupported resource types, failure during creation, missing resources.
 // TODO: If a resource already exists in the cluster but not applied by ClusterResourceSet, the resource will be updated ?
 func (r *ClusterResourceSetReconciler) ApplyClusterResourceSet(ctx context.Context, cluster *clusterv1.Cluster, clusterResourceSet *addonsv1.ClusterResourceSet) error {
-	logger := r.Log.WithValues("clusterresourceset", clusterResourceSet.Name, "namespace", clusterResourceSet.Namespace, "cluster-name", cluster.Name)
+	log := ctrl.LoggerFrom(ctx, "cluster", cluster.Name)
 
 	remoteClient, err := r.Tracker.GetClient(ctx, util.ObjectKey(cluster))
 	if err != nil {
@@ -254,7 +256,7 @@ func (r *ClusterResourceSetReconciler) ApplyClusterResourceSet(ctx context.Conte
 	defer func() {
 		// Always attempt to Patch the ClusterResourceSetBinding object after each reconciliation.
 		if err := patchHelper.Patch(ctx, clusterResourceSetBinding); err != nil {
-			r.Log.Error(err, "failed to patch config")
+			log.Error(err, "failed to patch config")
 		}
 	}()
 
@@ -268,7 +270,7 @@ func (r *ClusterResourceSetReconciler) ApplyClusterResourceSet(ctx context.Conte
 			continue
 		}
 
-		unstructuredObj, err := r.getResource(resource, cluster.GetNamespace())
+		unstructuredObj, err := r.getResource(ctx, resource, cluster.GetNamespace())
 		if err != nil {
 			if err == ErrSecretTypeNotSupported {
 				conditions.MarkFalse(clusterResourceSet, addonsv1.ResourcesAppliedCondition, addonsv1.WrongSecretTypeReason, clusterv1.ConditionSeverityWarning, err.Error())
@@ -276,7 +278,7 @@ func (r *ClusterResourceSetReconciler) ApplyClusterResourceSet(ctx context.Conte
 				conditions.MarkFalse(clusterResourceSet, addonsv1.ResourcesAppliedCondition, addonsv1.RetrievingResourceFailedReason, clusterv1.ConditionSeverityWarning, err.Error())
 
 				// Continue without adding the error to the aggregate if we can't find the resource.
-				if apierrors.IsNotFound(errors.Cause(err)) {
+				if apierrors.IsNotFound(err) {
 					continue
 				}
 			}
@@ -294,7 +296,7 @@ func (r *ClusterResourceSetReconciler) ApplyClusterResourceSet(ctx context.Conte
 		})
 
 		if err := r.patchOwnerRefToResource(ctx, clusterResourceSet, unstructuredObj); err != nil {
-			logger.Error(err, "Failed to patch ClusterResourceSet as resource owner reference",
+			log.Error(err, "Failed to patch ClusterResourceSet as resource owner reference",
 				"Resource type", unstructuredObj.GetKind(), "Resource name", unstructuredObj.GetName())
 			errList = append(errList, err)
 		}
@@ -338,7 +340,7 @@ func (r *ClusterResourceSetReconciler) ApplyClusterResourceSet(ctx context.Conte
 
 			if err := apply(ctx, remoteClient, data); err != nil {
 				isSuccessful = false
-				logger.Error(err, "failed to apply ClusterResourceSet resource", "Resource kind", resource.Kind, "Resource name", resource.Name)
+				log.Error(err, "failed to apply ClusterResourceSet resource", "Resource kind", resource.Kind, "Resource name", resource.Name)
 				conditions.MarkFalse(clusterResourceSet, addonsv1.ResourcesAppliedCondition, addonsv1.ApplyFailedReason, clusterv1.ConditionSeverityWarning, err.Error())
 				errList = append(errList, err)
 			}
@@ -363,20 +365,20 @@ func (r *ClusterResourceSetReconciler) ApplyClusterResourceSet(ctx context.Conte
 // getResource retrieves the requested resource and convert it to unstructured type.
 // Unsupported resource kinds are not denied by validation webhook, hence no need to check here.
 // Only supports Secrets/Configmaps as resource types and allow using resources in the same namespace with the cluster.
-func (r *ClusterResourceSetReconciler) getResource(resourceRef addonsv1.ResourceRef, namespace string) (*unstructured.Unstructured, error) {
+func (r *ClusterResourceSetReconciler) getResource(ctx context.Context, resourceRef addonsv1.ResourceRef, namespace string) (*unstructured.Unstructured, error) {
 	resourceName := types.NamespacedName{Name: resourceRef.Name, Namespace: namespace}
 
 	var resourceInterface interface{}
 	switch resourceRef.Kind {
 	case string(addonsv1.ConfigMapClusterResourceSetResourceKind):
-		resourceConfigMap, err := getConfigMap(context.Background(), r.Client, resourceName)
+		resourceConfigMap, err := getConfigMap(ctx, r.Client, resourceName)
 		if err != nil {
 			return nil, err
 		}
 
 		resourceInterface = resourceConfigMap.DeepCopyObject()
 	case string(addonsv1.SecretClusterResourceSetResourceKind):
-		resourceSecret, err := getSecret(context.Background(), r.Client, resourceName)
+		resourceSecret, err := getSecret(ctx, r.Client, resourceName)
 		if err != nil {
 			return nil, err
 		}
@@ -388,7 +390,8 @@ func (r *ClusterResourceSetReconciler) getResource(resourceRef addonsv1.Resource
 	}
 
 	raw := &unstructured.Unstructured{}
-	if err := r.scheme.Convert(resourceInterface, raw, nil); err != nil {
+	err := r.Client.Scheme().Convert(resourceInterface, raw, nil)
+	if err != nil {
 		return nil, err
 	}
 
@@ -404,8 +407,8 @@ func (r *ClusterResourceSetReconciler) patchOwnerRefToResource(ctx context.Conte
 		UID:        clusterResourceSet.GetUID(),
 	}
 
-	refs := resource.GetOwnerReferences()
 	if !util.IsOwnedByObject(resource, clusterResourceSet) {
+		refs := resource.GetOwnerReferences()
 		patch := client.MergeFrom(resource.DeepCopy())
 		refs = append(refs, newRef)
 		resource.SetOwnerReferences(refs)
@@ -414,19 +417,17 @@ func (r *ClusterResourceSetReconciler) patchOwnerRefToResource(ctx context.Conte
 	return nil
 }
 
-// clusterToClusterResourceSet is mapper function that maps clusters to ClusterResourceSet
-func (r *ClusterResourceSetReconciler) clusterToClusterResourceSet(o handler.MapObject) []ctrl.Request {
+// clusterToClusterResourceSet is mapper function that maps clusters to ClusterResourceSet.
+func (r *ClusterResourceSetReconciler) clusterToClusterResourceSet(o client.Object) []ctrl.Request {
 	result := []ctrl.Request{}
 
-	cluster, ok := o.Object.(*clusterv1.Cluster)
+	cluster, ok := o.(*clusterv1.Cluster)
 	if !ok {
-		r.Log.Error(nil, fmt.Sprintf("Expected a Cluster but got a %T", o.Object))
-		return nil
+		panic(fmt.Sprintf("Expected a Cluster but got a %T", o))
 	}
 
 	resourceList := &addonsv1.ClusterResourceSetList{}
-	if err := r.Client.List(context.Background(), resourceList, client.InNamespace(cluster.Namespace)); err != nil {
-		r.Log.Error(err, "failed to list ClusterResourceSet")
+	if err := r.Client.List(context.TODO(), resourceList, client.InNamespace(cluster.Namespace)); err != nil {
 		return nil
 	}
 
@@ -436,7 +437,6 @@ func (r *ClusterResourceSetReconciler) clusterToClusterResourceSet(o handler.Map
 
 		selector, err := metav1.LabelSelectorAsSelector(&rs.Spec.ClusterSelector)
 		if err != nil {
-			r.Log.Error(err, "unable to convert ClusterSelector to selector")
 			return nil
 		}
 
@@ -455,14 +455,14 @@ func (r *ClusterResourceSetReconciler) clusterToClusterResourceSet(o handler.Map
 	return result
 }
 
-// resourceToClusterResourceSet is mapper function that maps resources to ClusterResourceSet
-func (r *ClusterResourceSetReconciler) resourceToClusterResourceSet(o handler.MapObject) []ctrl.Request {
+// resourceToClusterResourceSet is mapper function that maps resources to ClusterResourceSet.
+func (r *ClusterResourceSetReconciler) resourceToClusterResourceSet(o client.Object) []ctrl.Request {
 	result := []ctrl.Request{}
 
 	// Add all ClusterResourceSet owners.
-	for _, owner := range o.Meta.GetOwnerReferences() {
+	for _, owner := range o.GetOwnerReferences() {
 		if owner.Kind == "ClusterResourceSet" {
-			name := client.ObjectKey{Namespace: o.Meta.GetNamespace(), Name: owner.Name}
+			name := client.ObjectKey{Namespace: o.GetNamespace(), Name: owner.Name}
 			result = append(result, ctrl.Request{NamespacedName: name})
 		}
 	}
@@ -474,22 +474,22 @@ func (r *ClusterResourceSetReconciler) resourceToClusterResourceSet(o handler.Ma
 	}
 
 	// Only core group is accepted as resources group
-	if o.Object.GetObjectKind().GroupVersionKind().Group != "" {
+	if o.GetObjectKind().GroupVersionKind().Group != "" {
 		return result
 	}
 
 	crsList := &addonsv1.ClusterResourceSetList{}
-	if err := r.Client.List(context.Background(), crsList, client.InNamespace(o.Meta.GetNamespace())); err != nil {
+	if err := r.Client.List(context.TODO(), crsList, client.InNamespace(o.GetNamespace())); err != nil {
 		return nil
 	}
-	objKind, err := apiutil.GVKForObject(o.Object, r.scheme)
+	objKind, err := apiutil.GVKForObject(o, r.Client.Scheme())
 	if err != nil {
 		return nil
 	}
 	for _, crs := range crsList.Items {
 		for _, resource := range crs.Spec.Resources {
-			if resource.Kind == objKind.Kind && resource.Name == o.Meta.GetName() {
-				name := client.ObjectKey{Namespace: o.Meta.GetNamespace(), Name: crs.Name}
+			if resource.Kind == objKind.Kind && resource.Name == o.GetName() {
+				name := client.ObjectKey{Namespace: o.GetNamespace(), Name: crs.Name}
 				result = append(result, ctrl.Request{NamespacedName: name})
 				break
 			}

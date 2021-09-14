@@ -16,7 +16,7 @@ limitations under the License.
 
 // Package v1alpha3 contains API Schema definitions for the exp v1alpha3 API group
 // +kubebuilder:object:generate=true
-// +groupName=exp.cluster.x-k8s.io
+// +groupName=cluster.x-k8s.io
 package v1alpha3
 
 import (
@@ -25,12 +25,14 @@ import (
 )
 
 var (
-	// GroupVersion is group version used to register these objects
-	GroupVersion = schema.GroupVersion{Group: "exp.cluster.x-k8s.io", Version: "v1alpha3"}
+	// GroupVersion is group version used to register these objects.
+	GroupVersion = schema.GroupVersion{Group: "cluster.x-k8s.io", Version: "v1alpha3"}
 
-	// SchemeBuilder is used to add go types to the GroupVersionKind scheme
+	// SchemeBuilder is used to add go types to the GroupVersionKind scheme.
 	SchemeBuilder = &scheme.Builder{GroupVersion: GroupVersion}
 
 	// AddToScheme adds the types in this group-version to the given scheme.
 	AddToScheme = SchemeBuilder.AddToScheme
+
+	localSchemeBuilder = SchemeBuilder.SchemeBuilder
 )

@@ -21,7 +21,7 @@ limitations under the License.
 package v1alpha3
 
 import (
-	runtime "k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime"
 	cluster_apiapiv1alpha3 "sigs.k8s.io/cluster-api/api/v1alpha3"
 	apiv1alpha3 "sigs.k8s.io/cluster-api/test/infrastructure/docker/api/v1alpha3"
 )
@@ -141,13 +141,9 @@ func (in *DockerMachinePoolStatus) DeepCopyInto(out *DockerMachinePoolStatus) {
 	*out = *in
 	if in.Instances != nil {
 		in, out := &in.Instances, &out.Instances
-		*out = make([]*DockerMachinePoolInstanceStatus, len(*in))
+		*out = make([]DockerMachinePoolInstanceStatus, len(*in))
 		for i := range *in {
-			if (*in)[i] != nil {
-				in, out := &(*in)[i], &(*out)[i]
-				*out = new(DockerMachinePoolInstanceStatus)
-				(*in).DeepCopyInto(*out)
-			}
+			(*in)[i].DeepCopyInto(&(*out)[i])
 		}
 	}
 	if in.Conditions != nil {

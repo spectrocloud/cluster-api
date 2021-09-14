@@ -1,6 +1,6 @@
 # clusterctl generate yaml
 
-The `clusterctl generate yaml` command processes yaml using clusterct's yaml
+The `clusterctl generate yaml` command processes yaml using clusterctl's yaml
 processor.
 
 The intent of this command is to allow users who may have specific templates
@@ -9,7 +9,7 @@ example, this command can be leveraged in local and CI scripts or for
 development purposes.
 
 clusterctl ships with a simple yaml processor that performs variable
-substitution that takes into account of default values.
+substitution that takes into account default values.
 Under the hood, clusterctl's yaml processor uses
 [drone/envsubst][drone-envsubst] to replace variables and uses the defaults if
 necessary.

@@ -30,7 +30,7 @@ const (
 
 // ANCHOR: MachinePoolSpec
 
-// MachinePoolSpec defines the desired state of MachinePool
+// MachinePoolSpec defines the desired state of MachinePool.
 type MachinePoolSpec struct {
 	// ClusterName is the name of the Cluster this object belongs to.
 	// +kubebuilder:validation:MinLength=1
@@ -68,7 +68,7 @@ type MachinePoolSpec struct {
 
 // ANCHOR: MachinePoolStatus
 
-// MachinePoolStatus defines the observed state of MachinePool
+// MachinePoolStatus defines the observed state of MachinePool.
 type MachinePoolStatus struct {
 	// NodeRefs will point to the corresponding Nodes if it they exist.
 	// +optional
@@ -206,13 +206,12 @@ func (m *MachinePoolStatus) GetTypedPhase() MachinePoolPhase {
 // +kubebuilder:resource:path=machinepools,shortName=mp,scope=Namespaced,categories=cluster-api
 // +kubebuilder:subresource:status
 // +kubebuilder:subresource:scale:specpath=.spec.replicas,statuspath=.status.replicas
-// +kubebuilder:storageversion
 // +kubebuilder:printcolumn:name="Replicas",type="string",JSONPath=".status.replicas",description="MachinePool replicas count"
 // +kubebuilder:printcolumn:name="Phase",type="string",JSONPath=".status.phase",description="MachinePool status such as Terminating/Pending/Provisioning/Running/Failed etc"
 // +kubebuilder:printcolumn:name="Version",type="string",JSONPath=".spec.template.spec.version",description="Kubernetes version associated with this MachinePool"
 // +k8s:conversion-gen=false
 
-// MachinePool is the Schema for the machinepools API
+// MachinePool is the Schema for the machinepools API.
 type MachinePool struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
@@ -221,17 +220,19 @@ type MachinePool struct {
 	Status MachinePoolStatus `json:"status,omitempty"`
 }
 
+// GetConditions returns the set of conditions for this object.
 func (m *MachinePool) GetConditions() clusterv1.Conditions {
 	return m.Status.Conditions
 }
 
+// SetConditions sets the conditions on this object.
 func (m *MachinePool) SetConditions(conditions clusterv1.Conditions) {
 	m.Status.Conditions = conditions
 }
 
 // +kubebuilder:object:root=true
 
-// MachinePoolList contains a list of MachinePool
+// MachinePoolList contains a list of MachinePool.
 type MachinePoolList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`

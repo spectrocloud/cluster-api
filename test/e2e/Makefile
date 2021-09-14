@@ -44,7 +44,7 @@ $(GINKGO): # Build ginkgo from tools folder.
 	cd $(TOOLS_DIR) && go build -tags=tools -o $(BIN_DIR)/ginkgo github.com/onsi/ginkgo/ginkgo
 
 $(KUSTOMIZE): # Build kustomize from tools folder.
-	cd $(TOOLS_DIR) && go build -tags=tools -o $(BIN_DIR)/kustomize sigs.k8s.io/kustomize/kustomize/v3
+	$(REPO_ROOT)/hack/ensure-kustomize.sh
 
 ## --------------------------------------
 ## Templates
@@ -53,19 +53,29 @@ $(KUSTOMIZE): # Build kustomize from tools folder.
 DOCKER_TEMPLATES := $(REPO_ROOT)/test/e2e/data/infrastructure-docker
 
 .PHONY: cluster-templates
-cluster-templates: $(KUSTOMIZE) ## Generate cluster templates
-	$(KUSTOMIZE) build $(DOCKER_TEMPLATES)/cluster-template --load_restrictor none > $(DOCKER_TEMPLATES)/cluster-template.yaml
-	$(KUSTOMIZE) build $(DOCKER_TEMPLATES)/cluster-template-mhc --load_restrictor none > $(DOCKER_TEMPLATES)/cluster-template-mhc.yaml
-	$(KUSTOMIZE) build $(DOCKER_TEMPLATES)/cluster-template-kcp-adoption/step1 --load_restrictor none > $(DOCKER_TEMPLATES)/cluster-template-kcp-adoption.yaml
-	echo "---" >> $(DOCKER_TEMPLATES)/cluster-template-kcp-adoption.yaml
-	$(KUSTOMIZE) build $(DOCKER_TEMPLATES)/cluster-template-kcp-adoption/step2 --load_restrictor none >> $(DOCKER_TEMPLATES)/cluster-template-kcp-adoption.yaml
-	$(KUSTOMIZE) build $(DOCKER_TEMPLATES)/cluster-template-machine-pool --load_restrictor none > $(DOCKER_TEMPLATES)/cluster-template-machine-pool.yaml
+cluster-templates: $(KUSTOMIZE) cluster-templates-v1alpha3 cluster-templates-v1alpha4 ## Generate cluster templates for all versions
 
+cluster-templates-v1alpha3: $(KUSTOMIZE) ## Generate cluster templates for v1alpha3
+	$(KUSTOMIZE) build $(DOCKER_TEMPLATES)/v1alpha3/cluster-template --load_restrictor none > $(DOCKER_TEMPLATES)/v1alpha3/cluster-template.yaml
+
+cluster-templates-v1alpha4: $(KUSTOMIZE) ## Generate cluster templates for v1alpha4
+	$(KUSTOMIZE) build $(DOCKER_TEMPLATES)/v1alpha4/cluster-template --load_restrictor none > $(DOCKER_TEMPLATES)/v1alpha4/cluster-template.yaml
+	$(KUSTOMIZE) build $(DOCKER_TEMPLATES)/v1alpha4/cluster-template-md-remediation --load_restrictor none > $(DOCKER_TEMPLATES)/v1alpha4/cluster-template-md-remediation.yaml
+	$(KUSTOMIZE) build $(DOCKER_TEMPLATES)/v1alpha4/cluster-template-kcp-remediation --load_restrictor none > $(DOCKER_TEMPLATES)/v1alpha4/cluster-template-kcp-remediation.yaml
+	$(KUSTOMIZE) build $(DOCKER_TEMPLATES)/v1alpha4/cluster-template-kcp-adoption/step1 --load_restrictor none > $(DOCKER_TEMPLATES)/v1alpha4/cluster-template-kcp-adoption.yaml
+	echo "---" >> $(DOCKER_TEMPLATES)/v1alpha4/cluster-template-kcp-adoption.yaml
+	$(KUSTOMIZE) build $(DOCKER_TEMPLATES)/v1alpha4/cluster-template-kcp-adoption/step2 --load_restrictor none >> $(DOCKER_TEMPLATES)/v1alpha4/cluster-template-kcp-adoption.yaml
+	$(KUSTOMIZE) build $(DOCKER_TEMPLATES)/v1alpha4/cluster-template-machine-pool --load_restrictor none > $(DOCKER_TEMPLATES)/v1alpha4/cluster-template-machine-pool.yaml
+	$(KUSTOMIZE) build $(DOCKER_TEMPLATES)/v1alpha4/cluster-template-node-drain --load_restrictor none > $(DOCKER_TEMPLATES)/v1alpha4/cluster-template-node-drain.yaml
+	$(KUSTOMIZE) build $(DOCKER_TEMPLATES)/v1alpha4/cluster-template-upgrades --load_restrictor none > $(DOCKER_TEMPLATES)/v1alpha4/cluster-template-upgrades.yaml
+	$(KUSTOMIZE) build $(DOCKER_TEMPLATES)/v1alpha4/cluster-template-kcp-scale-in --load_restrictor none > $(DOCKER_TEMPLATES)/v1alpha4/cluster-template-kcp-scale-in.yaml
+	$(KUSTOMIZE) build $(DOCKER_TEMPLATES)/v1alpha4/cluster-template-ipv6 --load_restrictor none > $(DOCKER_TEMPLATES)/v1alpha4/cluster-template-ipv6.yaml
 ## --------------------------------------
 ## Testing
 ## --------------------------------------
 
 GINKGO_FOCUS  ?=
+GINKGO_SKIP ?=
 GINKGO_NODES  ?= 1
 E2E_CONF_FILE  ?= ${REPO_ROOT}/test/e2e/config/docker.yaml
 ARTIFACTS ?= ${REPO_ROOT}/_artifacts
@@ -73,9 +83,14 @@ SKIP_RESOURCE_CLEANUP ?= false
 USE_EXISTING_CLUSTER ?= false
 GINKGO_NOCOLOR ?= false
 
+# to set multiple ginkgo skip flags, if any
+ifneq ($(strip $(GINKGO_SKIP)),)
+_SKIP_ARGS := $(foreach arg,$(strip $(GINKGO_SKIP)),-skip="$(arg)")
+endif
+
 .PHONY: run
 run: $(GINKGO) cluster-templates ## Run the end-to-end tests
-	$(GINKGO) -v -trace -tags=e2e -focus="$(GINKGO_FOCUS)" -nodes=$(GINKGO_NODES) --noColor=$(GINKGO_NOCOLOR) $(GINKGO_ARGS) . -- \
+	$(GINKGO) -v -trace -tags=e2e -focus="$(GINKGO_FOCUS)" $(_SKIP_ARGS) -nodes=$(GINKGO_NODES) --noColor=$(GINKGO_NOCOLOR) $(GINKGO_ARGS) . -- \
 	    -e2e.artifacts-folder="$(ARTIFACTS)" \
 	    -e2e.config="$(E2E_CONF_FILE)" \
 	    -e2e.skip-resource-cleanup=$(SKIP_RESOURCE_CLEANUP) -e2e.use-existing-cluster=$(USE_EXISTING_CLUSTER)

@@ -21,7 +21,8 @@ import (
 
 	"github.com/pkg/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha3"
+	clusterv1old "sigs.k8s.io/cluster-api/api/v1alpha3"
+	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha4"
 	clusterctlv1 "sigs.k8s.io/cluster-api/cmd/clusterctl/api/v1alpha3"
 	"sigs.k8s.io/cluster-api/cmd/clusterctl/client/cluster"
 )
@@ -39,7 +40,8 @@ func (c *clusterctlClient) PlanCertManagerUpgrade(options PlanUpgradeOptions) (C
 		return CertManagerUpgradePlan{}, err
 	}
 
-	plan, err := cluster.CertManager().PlanUpgrade()
+	certManager := cluster.CertManager()
+	plan, err := certManager.PlanUpgrade()
 	return CertManagerUpgradePlan(plan), err
 }
 
@@ -50,8 +52,8 @@ func (c *clusterctlClient) PlanUpgrade(options PlanUpgradeOptions) ([]UpgradePla
 		return nil, err
 	}
 
-	// Ensure this command only runs against management clusters with the current Cluster API contract (default).
-	if err := clusterClient.ProviderInventory().CheckCAPIContract(); err != nil {
+	// Ensure this command only runs against management clusters with the current Cluster API contract (default) or the previous one.
+	if err := clusterClient.ProviderInventory().CheckCAPIContract(cluster.AllowCAPIContract{Contract: clusterv1old.GroupVersion.Version}); err != nil {
 		return nil, err
 	}
 
@@ -69,9 +71,8 @@ func (c *clusterctlClient) PlanUpgrade(options PlanUpgradeOptions) ([]UpgradePla
 	aliasUpgradePlan := make([]UpgradePlan, len(upgradePlans))
 	for i, plan := range upgradePlans {
 		aliasUpgradePlan[i] = UpgradePlan{
-			Contract:     plan.Contract,
-			CoreProvider: plan.CoreProvider,
-			Providers:    plan.Providers,
+			Contract:  plan.Contract,
+			Providers: plan.Providers,
 		}
 	}
 
@@ -83,10 +84,7 @@ type ApplyUpgradeOptions struct {
 	// Kubeconfig to use for accessing the management cluster. If empty, default discovery rules apply.
 	Kubeconfig Kubeconfig
 
-	// ManagementGroup that should be upgraded (e.g. capi-system/cluster-api).
-	ManagementGroup string
-
-	// Contract defines the API Version of Cluster API (contract e.g. v1alpha4) the management group should upgrade to.
+	// Contract defines the API Version of Cluster API (contract e.g. v1alpha4) the management cluster should upgrade to.
 	// When upgrading by contract, the latest versions available will be used for all the providers; if you want
 	// a more granular control on upgrade, use CoreProvider, BootstrapProviders, ControlPlaneProviders, InfrastructureProviders.
 	Contract string
@@ -115,8 +113,8 @@ func (c *clusterctlClient) ApplyUpgrade(options ApplyUpgradeOptions) error {
 		return err
 	}
 
-	// Ensure this command only runs against management clusters with the current Cluster API contract (default).
-	if err := clusterClient.ProviderInventory().CheckCAPIContract(); err != nil {
+	// Ensure this command only runs against management clusters with the current Cluster API contract (default) or the previous one.
+	if err := clusterClient.ProviderInventory().CheckCAPIContract(cluster.AllowCAPIContract{Contract: clusterv1old.GroupVersion.Version}); err != nil {
 		return err
 	}
 
@@ -125,19 +123,12 @@ func (c *clusterctlClient) ApplyUpgrade(options ApplyUpgradeOptions) error {
 		return err
 	}
 
-	// The management group name is derived from the core provider name, so now
-	// convert the reference back into a coreProvider.
-	coreUpgradeItem, err := parseUpgradeItem(options.ManagementGroup, clusterctlv1.CoreProviderType)
-	if err != nil {
-		return err
-	}
-	coreProvider := coreUpgradeItem.Provider
-
 	// Ensures the latest version of cert-manager.
 	// NOTE: it is safe to upgrade to latest version of cert-manager given that it provides
 	// conversion web-hooks around Issuer/Certificate kinds, so installing an older versions of providers
 	// should continue to work with the latest cert-manager.
-	if err := clusterClient.CertManager().EnsureLatestVersion(); err != nil {
+	certManager := clusterClient.CertManager()
+	if err := certManager.EnsureLatestVersion(); err != nil {
 		return err
 	}
 
@@ -172,19 +163,11 @@ func (c *clusterctlClient) ApplyUpgrade(options ApplyUpgradeOptions) error {
 		}
 
 		// Execute the upgrade using the custom upgrade items
-		if err := clusterClient.ProviderUpgrader().ApplyCustomPlan(coreProvider, upgradeItems...); err != nil {
-			return err
-		}
-
-		return nil
+		return clusterClient.ProviderUpgrader().ApplyCustomPlan(upgradeItems...)
 	}
 
-	// Otherwise we are upgrading a whole management group according to a clusterctl generated upgrade plan.
-	if err := clusterClient.ProviderUpgrader().ApplyPlan(coreProvider, options.Contract); err != nil {
-		return err
-	}
-
-	return nil
+	// Otherwise we are upgrading a whole management cluster according to a clusterctl generated upgrade plan.
+	return clusterClient.ProviderUpgrader().ApplyPlan(options.Contract)
 }
 
 func addUpgradeItems(upgradeItems []cluster.UpgradeItem, providerType clusterctlv1.ProviderType, providers ...string) ([]cluster.UpgradeItem, error) {

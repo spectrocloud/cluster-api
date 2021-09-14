@@ -23,10 +23,10 @@ import (
 	. "github.com/onsi/gomega"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
 	clusterctlv1 "sigs.k8s.io/cluster-api/cmd/clusterctl/api/v1alpha3"
 	"sigs.k8s.io/cluster-api/cmd/clusterctl/internal/test"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 func fakePollImmediateWaiter(interval, timeout time.Duration, condition wait.ConditionFunc) error {
@@ -67,7 +67,7 @@ func Test_inventoryClient_CheckInventoryCRDs(t *testing.T) {
 			proxy := test.NewFakeProxy()
 			p := newInventoryClient(proxy, fakePollImmediateWaiter)
 			if tt.fields.alreadyHasCRD {
-				//forcing creation of metadata before test
+				// forcing creation of metadata before test
 				g.Expect(p.EnsureCustomResourceDefinitions()).To(Succeed())
 			}
 
@@ -82,11 +82,11 @@ func Test_inventoryClient_CheckInventoryCRDs(t *testing.T) {
 	}
 }
 
-var fooProvider = clusterctlv1.Provider{ObjectMeta: metav1.ObjectMeta{Name: "foo", Namespace: "ns1"}}
+var fooProvider = clusterctlv1.Provider{ObjectMeta: metav1.ObjectMeta{Name: "foo", Namespace: "ns1", ResourceVersion: "999"}}
 
 func Test_inventoryClient_List(t *testing.T) {
 	type fields struct {
-		initObjs []runtime.Object
+		initObjs []client.Object
 	}
 	tests := []struct {
 		name    string
@@ -97,7 +97,7 @@ func Test_inventoryClient_List(t *testing.T) {
 		{
 			name: "Get list",
 			fields: fields{
-				initObjs: []runtime.Object{
+				initObjs: []client.Object{
 					&fooProvider,
 				},
 			},
@@ -131,8 +131,10 @@ func Test_inventoryClient_Create(t *testing.T) {
 	type args struct {
 		m clusterctlv1.Provider
 	}
-	providerV2 := fakeProvider("infra", clusterctlv1.InfrastructureProviderType, "v0.2.0", "", "")
-	providerV3 := fakeProvider("infra", clusterctlv1.InfrastructureProviderType, "v0.3.0", "", "")
+	providerV2 := fakeProvider("infra", clusterctlv1.InfrastructureProviderType, "v0.2.0", "")
+	// since this test object is used in a Create request, wherein setting ResourceVersion should no be set
+	providerV2.ResourceVersion = ""
+	providerV3 := fakeProvider("infra", clusterctlv1.InfrastructureProviderType, "v0.3.0", "")
 
 	tests := []struct {
 		name          string
@@ -331,6 +333,54 @@ func Test_CheckCAPIContract(t *testing.T) {
 				g.Expect(err).To(HaveOccurred())
 				return
 			}
+			g.Expect(err).NotTo(HaveOccurred())
+		})
+	}
+}
+
+func Test_inventoryClient_CheckSingleProviderInstance(t *testing.T) {
+	type fields struct {
+		initObjs []client.Object
+	}
+	tests := []struct {
+		name    string
+		fields  fields
+		wantErr bool
+	}{
+		{
+			name: "Returns error when there are multiple instances of the same provider",
+			fields: fields{
+				initObjs: []client.Object{
+					&clusterctlv1.Provider{Type: string(clusterctlv1.CoreProviderType), ProviderName: "foo", ObjectMeta: metav1.ObjectMeta{Name: "foo", Namespace: "ns1"}},
+					&clusterctlv1.Provider{Type: string(clusterctlv1.CoreProviderType), ProviderName: "foo", ObjectMeta: metav1.ObjectMeta{Name: "foo", Namespace: "ns2"}},
+					&clusterctlv1.Provider{Type: string(clusterctlv1.InfrastructureProviderType), ProviderName: "bar", ObjectMeta: metav1.ObjectMeta{Name: "bar", Namespace: "ns2"}},
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "Does not return error when there is only single instance of all providers",
+			fields: fields{
+				initObjs: []client.Object{
+					&clusterctlv1.Provider{Type: string(clusterctlv1.CoreProviderType), ProviderName: "foo", ObjectMeta: metav1.ObjectMeta{Name: "foo", Namespace: "ns1"}},
+					&clusterctlv1.Provider{Type: string(clusterctlv1.CoreProviderType), ProviderName: "foo-1", ObjectMeta: metav1.ObjectMeta{Name: "foo", Namespace: "ns2"}},
+					&clusterctlv1.Provider{Type: string(clusterctlv1.InfrastructureProviderType), ProviderName: "bar", ObjectMeta: metav1.ObjectMeta{Name: "bar", Namespace: "ns2"}},
+				},
+			},
+			wantErr: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			g := NewWithT(t)
+
+			p := newInventoryClient(test.NewFakeProxy().WithObjs(tt.fields.initObjs...), fakePollImmediateWaiter)
+			err := p.CheckSingleProviderInstance()
+			if tt.wantErr {
+				g.Expect(err).To(HaveOccurred())
+				return
+			}
+
 			g.Expect(err).NotTo(HaveOccurred())
 		})
 	}

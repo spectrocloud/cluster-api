@@ -19,11 +19,10 @@ package tree
 import (
 	"context"
 
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha3"
+	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha4"
 	"sigs.k8s.io/cluster-api/controllers/external"
 	"sigs.k8s.io/cluster-api/util"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 )
 
 // DiscoverOptions define options for the discovery process.
@@ -42,11 +41,7 @@ type DiscoverOptions struct {
 }
 
 func (d DiscoverOptions) toObjectTreeOptions() ObjectTreeOptions {
-	return ObjectTreeOptions{
-		ShowOtherConditions: d.ShowOtherConditions,
-		DisableNoEcho:       d.DisableNoEcho,
-		DisableGrouping:     d.DisableGrouping,
-	}
+	return ObjectTreeOptions(d)
 }
 
 // Discovery returns an object tree representing the status of a Cluster API cluster.
@@ -81,7 +76,7 @@ func Discovery(ctx context.Context, c client.Client, namespace, name string, opt
 		return nil, err
 	}
 	machineMap := map[string]bool{}
-	addMachineFunc := func(parent controllerutil.Object, m *clusterv1.Machine) {
+	addMachineFunc := func(parent client.Object, m *clusterv1.Machine) {
 		_, visible := tree.Add(parent, m)
 		machineMap[m.Name] = true
 
@@ -208,7 +203,7 @@ func selectControlPlaneMachines(machineList *clusterv1.MachineList) []*clusterv1
 	return machines
 }
 
-func selectMachinesSetsControlledBy(machineSetList *clusterv1.MachineSetList, controller controllerutil.Object) []*clusterv1.MachineSet {
+func selectMachinesSetsControlledBy(machineSetList *clusterv1.MachineSetList, controller client.Object) []*clusterv1.MachineSet {
 	machineSets := []*clusterv1.MachineSet{}
 	for i := range machineSetList.Items {
 		m := &machineSetList.Items[i]
@@ -219,7 +214,7 @@ func selectMachinesSetsControlledBy(machineSetList *clusterv1.MachineSetList, co
 	return machineSets
 }
 
-func selectMachinesControlledBy(machineList *clusterv1.MachineList, controller controllerutil.Object) []*clusterv1.Machine {
+func selectMachinesControlledBy(machineList *clusterv1.MachineList, controller client.Object) []*clusterv1.Machine {
 	machines := []*clusterv1.Machine{}
 	for i := range machineList.Items {
 		m := &machineList.Items[i]

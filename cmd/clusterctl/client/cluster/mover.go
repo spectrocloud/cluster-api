@@ -18,6 +18,9 @@ package cluster
 
 import (
 	"fmt"
+	"io/ioutil"
+	"os"
+	"path/filepath"
 
 	"github.com/pkg/errors"
 	corev1 "k8s.io/api/core/v1"
@@ -28,8 +31,10 @@ import (
 	kerrors "k8s.io/apimachinery/pkg/util/errors"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/util/version"
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha3"
+	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha4"
 	logf "sigs.k8s.io/cluster-api/cmd/clusterctl/log"
+	"sigs.k8s.io/cluster-api/util/conditions"
+	"sigs.k8s.io/cluster-api/util/yaml"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -37,6 +42,10 @@ import (
 type ObjectMover interface {
 	// Move moves all the Cluster API objects existing in a namespace (or from all the namespaces if empty) to a target management cluster.
 	Move(namespace string, toCluster Client, dryRun bool) error
+	// Backup saves all the Cluster API objects existing in a namespace (or from all the namespaces if empty) to a target management cluster.
+	Backup(namespace string, directory string) error
+	// Restore restores all the Cluster API objects existing in a configured directory to a target management cluster.
+	Restore(toCluster Client, directory string) error
 }
 
 // objectMover implements the ObjectMover interface.
@@ -59,38 +68,17 @@ func (o *objectMover) Move(namespace string, toCluster Client, dryRun bool) erro
 		log.Info("********************************************************")
 	}
 
-	objectGraph := newObjectGraph(o.fromProxy)
-
 	// checks that all the required providers in place in the target cluster.
 	if !o.dryRun {
-		if err := o.checkTargetProviders(namespace, toCluster.ProviderInventory()); err != nil {
-			return err
+		if err := o.checkTargetProviders(toCluster.ProviderInventory()); err != nil {
+			return errors.Wrap(err, "failed to check providers in target cluster")
 		}
 	}
 
-	// Gets all the types defines by the CRDs installed by clusterctl plus the ConfigMap/Secret core types.
-	err := objectGraph.getDiscoveryTypes()
+	objectGraph, err := o.getObjectGraph(namespace)
 	if err != nil {
-		return err
+		return errors.Wrap(err, "failed to get object graph")
 	}
-
-	// Discovery the object graph for the selected types:
-	// - Nodes are defined the Kubernetes objects (Clusters, Machines etc.) identified during the discovery process.
-	// - Edges are derived by the OwnerReferences between nodes.
-	if err := objectGraph.Discovery(namespace); err != nil {
-		return err
-	}
-
-	// Checks if Cluster API has already completed the provisioning of the infrastructure for the objects involved in the move operation.
-	// This is required because if the infrastructure is provisioned, then we can reasonably assume that the objects we are moving are
-	// not currently waiting for long-running reconciliation loops, and so we can safely rely on the pause field on the Cluster object
-	// for blocking any further object reconciliation on the source objects.
-	if err := o.checkProvisioningCompleted(objectGraph); err != nil {
-		return err
-	}
-
-	// Check whether nodes are not included in GVK considered for move
-	objectGraph.checkVirtualNode()
 
 	// Move the objects to the target cluster.
 	var proxy Proxy
@@ -98,11 +86,117 @@ func (o *objectMover) Move(namespace string, toCluster Client, dryRun bool) erro
 		proxy = toCluster.Proxy()
 	}
 
-	if err := o.move(objectGraph, proxy); err != nil {
-		return err
+	return o.move(objectGraph, proxy)
+}
+
+func (o *objectMover) Backup(namespace string, directory string) error {
+	log := logf.Log
+	log.Info("Performing backup...")
+
+	objectGraph, err := o.getObjectGraph(namespace)
+	if err != nil {
+		return errors.Wrap(err, "failed to get object graph")
 	}
 
-	return nil
+	return o.backup(objectGraph, directory)
+}
+
+func (o *objectMover) Restore(toCluster Client, directory string) error {
+	log := logf.Log
+	log.Info("Performing restore...")
+
+	// Build an empty object graph used for the restore sequence not tied to a specific namespace
+	objectGraph := newObjectGraph(o.fromProxy, o.fromProviderInventory)
+
+	// Gets all the types defined by the CRDs installed by clusterctl plus the ConfigMap/Secret core types.
+	err := objectGraph.getDiscoveryTypes()
+	if err != nil {
+		return errors.Wrap(err, "failed to retrieve discovery types")
+	}
+
+	objs, err := o.filesToObjs(directory)
+	if err != nil {
+		return errors.Wrap(err, "failed to process object files")
+	}
+
+	for i := range objs {
+		if err = objectGraph.addRestoredObj(&objs[i]); err != nil {
+			return err
+		}
+	}
+
+	// Completes rebuilding the graph from file by searching for soft ownership relations such as secrets linked to the cluster
+	// by a naming convention (without any explicit OwnerReference).
+	objectGraph.setSoftOwnership()
+
+	// Check whether nodes are not included in GVK considered for restore.
+	objectGraph.checkVirtualNode()
+
+	// Restore the objects to the target cluster.
+	proxy := toCluster.Proxy()
+
+	return o.restore(objectGraph, proxy)
+}
+
+func (o *objectMover) filesToObjs(dir string) ([]unstructured.Unstructured, error) {
+	log := logf.Log
+	log.Info("Restoring files from %s", dir)
+
+	files, err := ioutil.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+
+	rawYAMLs := make([][]byte, 0)
+	for i := range files {
+		path := filepath.Clean(filepath.Join(dir, files[i].Name()))
+
+		byObj, err := ioutil.ReadFile(path)
+		if err != nil {
+			return nil, err
+		}
+
+		rawYAMLs = append(rawYAMLs, byObj)
+	}
+
+	processedYAMLs := yaml.JoinYaml(rawYAMLs...)
+
+	objs, err := yaml.ToUnstructured(processedYAMLs)
+	if err != nil {
+		return nil, err
+	}
+
+	return objs, nil
+}
+
+func (o *objectMover) getObjectGraph(namespace string) (*objectGraph, error) {
+	objectGraph := newObjectGraph(o.fromProxy, o.fromProviderInventory)
+
+	// Gets all the types defined by the CRDs installed by clusterctl plus the ConfigMap/Secret core types.
+	err := objectGraph.getDiscoveryTypes()
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to retrieve discovery types")
+	}
+
+	// Discovery the object graph for the selected types:
+	// - Nodes are defined the Kubernetes objects (Clusters, Machines etc.) identified during the discovery process.
+	// - Edges are derived by the OwnerReferences between nodes.
+	if err := objectGraph.Discovery(namespace); err != nil {
+		return nil, errors.Wrap(err, "failed to discover the object graph")
+	}
+
+	// Checks if Cluster API has already completed the provisioning of the infrastructure for the objects involved in the move/backup operation.
+	// This is required because if the infrastructure is provisioned, then we can reasonably assume that the objects we are moving/backing up are
+	// not currently waiting for long-running reconciliation loops, and so we can safely rely on the pause field on the Cluster object
+	// for blocking any further object reconciliation on the source objects.
+	if err := o.checkProvisioningCompleted(objectGraph); err != nil {
+		return nil, errors.Wrap(err, "failed to check for provisioned infrastructure")
+	}
+
+	// Check whether nodes are not included in GVK considered for move
+	objectGraph.checkVirtualNode()
+
+	return objectGraph, nil
 }
 
 func newObjectMover(fromProxy Proxy, fromProviderInventory InventoryClient) *objectMover {
@@ -114,7 +208,6 @@ func newObjectMover(fromProxy Proxy, fromProviderInventory InventoryClient) *obj
 
 // checkProvisioningCompleted checks if Cluster API has already completed the provisioning of the infrastructure for the objects involved in the move operation.
 func (o *objectMover) checkProvisioningCompleted(graph *objectGraph) error {
-
 	if o.dryRun {
 		return nil
 	}
@@ -137,7 +230,8 @@ func (o *objectMover) checkProvisioningCompleted(graph *objectGraph) error {
 			continue
 		}
 
-		if !clusterObj.Status.ControlPlaneInitialized {
+		// Note: can't use IsFalse here because we need to handle the absence of the condition as well as false.
+		if !conditions.IsTrue(clusterObj, clusterv1.ControlPlaneInitializedCondition) {
 			errList = append(errList, errors.Errorf("cannot start the move operation while the control plane for %q %s/%s is not yet initialized", clusterObj.GroupVersionKind(), clusterObj.GetNamespace(), clusterObj.GetName()))
 			continue
 		}
@@ -181,8 +275,8 @@ func getClusterObj(proxy Proxy, cluster *node, clusterObj *clusterv1.Cluster) er
 	}
 
 	if err := c.Get(ctx, clusterObjKey, clusterObj); err != nil {
-		return errors.Wrapf(err, "error reading %q %s/%s",
-			clusterObj.GroupVersionKind(), clusterObj.GetNamespace(), clusterObj.GetName())
+		return errors.Wrapf(err, "error reading Cluster %s/%s",
+			clusterObj.GetNamespace(), clusterObj.GetName())
 	}
 	return nil
 }
@@ -199,13 +293,13 @@ func getMachineObj(proxy Proxy, machine *node, machineObj *clusterv1.Machine) er
 	}
 
 	if err := c.Get(ctx, machineObjKey, machineObj); err != nil {
-		return errors.Wrapf(err, "error reading %q %s/%s",
-			machineObj.GroupVersionKind(), machineObj.GetNamespace(), machineObj.GetName())
+		return errors.Wrapf(err, "error reading Machine %s/%s",
+			machineObj.GetNamespace(), machineObj.GetName())
 	}
 	return nil
 }
 
-// Move moves all the Cluster API objects existing in a namespace (or from all the namespaces if empty) to a target management cluster
+// Move moves all the Cluster API objects existing in a namespace (or from all the namespaces if empty) to a target management cluster.
 func (o *objectMover) move(graph *objectGraph, toProxy Proxy) error {
 	log := logf.Log
 
@@ -249,14 +343,75 @@ func (o *objectMover) move(graph *objectGraph, toProxy Proxy) error {
 
 	// Reset the pause field on the Cluster object in the target management cluster, so the controllers start reconciling it.
 	log.V(1).Info("Resuming the target cluster")
-	if err := setClusterPause(toProxy, clusters, false, o.dryRun); err != nil {
+	return setClusterPause(toProxy, clusters, false, o.dryRun)
+}
+
+func (o *objectMover) backup(graph *objectGraph, directory string) error {
+	log := logf.Log
+
+	clusters := graph.getClusters()
+	log.Info("Starting backup of Cluster API objects", "Clusters", len(clusters))
+
+	// Sets the pause field on the Cluster object in the source management cluster, so the controllers stop reconciling it.
+	log.V(1).Info("Pausing the source cluster")
+	if err := setClusterPause(o.fromProxy, clusters, true, o.dryRun); err != nil {
 		return err
 	}
 
-	return nil
+	// Define the move sequence by processing the ownerReference chain, so we ensure that a Kubernetes object is moved only after its owners.
+	// The sequence is bases on object graph nodes, each one representing a Kubernetes object; nodes are grouped, so bulk of nodes can be moved in parallel. e.g.
+	// - All the Clusters should be moved first (group 1, processed in parallel)
+	// - All the MachineDeployments should be moved second (group 1, processed in parallel)
+	// - then all the MachineSets, then all the Machines, etc.
+	moveSequence := getMoveSequence(graph)
+
+	// Save all objects group by group
+	log.Info(fmt.Sprintf("Saving files to %s", directory))
+	for groupIndex := 0; groupIndex < len(moveSequence.groups); groupIndex++ {
+		if err := o.backupGroup(moveSequence.getGroup(groupIndex), directory); err != nil {
+			return err
+		}
+	}
+
+	// Reset the pause field on the Cluster object in the target management cluster, so the controllers start reconciling it.
+	log.V(1).Info("Resuming the source cluster")
+	return setClusterPause(o.fromProxy, clusters, false, o.dryRun)
 }
 
-// moveSequence defines a list of group of moveGroups
+func (o *objectMover) restore(graph *objectGraph, toProxy Proxy) error {
+	log := logf.Log
+
+	// Get clusters from graph
+	clusters := graph.getClusters()
+
+	// Ensure all the expected target namespaces are in place before creating objects.
+	log.V(1).Info("Creating target namespaces, if missing")
+	if err := o.ensureNamespaces(graph, toProxy); err != nil {
+		return err
+	}
+
+	// Define the move sequence by processing the ownerReference chain, so we ensure that a Kubernetes object is moved only after its owners.
+	// The sequence is bases on object graph nodes, each one representing a Kubernetes object; nodes are grouped, so bulk of nodes can be moved in parallel. e.g.
+	// - All the Clusters should be moved first (group 1, processed in parallel)
+	// - All the MachineDeployments should be moved second (group 1, processed in parallel)
+	// - then all the MachineSets, then all the Machines, etc.
+	moveSequence := getMoveSequence(graph)
+
+	// Create all objects group by group, ensuring all the ownerReferences are re-created.
+	log.Info("Restoring objects into the target cluster")
+	for groupIndex := 0; groupIndex < len(moveSequence.groups); groupIndex++ {
+		if err := o.restoreGroup(moveSequence.getGroup(groupIndex), toProxy); err != nil {
+			return err
+		}
+	}
+
+	// Resume reconciling the Clusters after being restored from a backup.
+	// By default, during backup, Clusters are paused so they must be unpaused to be used again
+	log.V(1).Info("Resuming the target cluster")
+	return setClusterPause(toProxy, clusters, false, o.dryRun)
+}
+
+// moveSequence defines a list of group of moveGroups.
 type moveSequence struct {
 	groups   []moveGroup
 	nodesMap map[*node]empty
@@ -349,7 +504,7 @@ func setClusterPause(proxy Proxy, clusters []*node, value bool, dryRun bool) err
 		if err := retryWithExponentialBackoff(setClusterPauseBackoff, func() error {
 			return patchCluster(proxy, cluster, patch)
 		}); err != nil {
-			return err
+			return errors.Wrapf(err, "error setting Cluster.Spec.Paused=%t", value)
 		}
 	}
 	return nil
@@ -369,13 +524,13 @@ func patchCluster(proxy Proxy, cluster *node, patch client.Patch) error {
 	}
 
 	if err := cFrom.Get(ctx, clusterObjKey, clusterObj); err != nil {
-		return errors.Wrapf(err, "error reading %q %s/%s",
-			clusterObj.GroupVersionKind(), clusterObj.GetNamespace(), clusterObj.GetName())
+		return errors.Wrapf(err, "error reading Cluster %s/%s",
+			clusterObj.GetNamespace(), clusterObj.GetName())
 	}
 
 	if err := cFrom.Patch(ctx, clusterObj, patch); err != nil {
-		return errors.Wrapf(err, "error pausing reconciliation for %q %s/%s",
-			clusterObj.GroupVersionKind(), clusterObj.GetNamespace(), clusterObj.GetName())
+		return errors.Wrapf(err, "error patching Cluster %s/%s",
+			clusterObj.GetNamespace(), clusterObj.GetName())
 	}
 
 	return nil
@@ -383,7 +538,6 @@ func patchCluster(proxy Proxy, cluster *node, patch client.Patch) error {
 
 // ensureNamespaces ensures all the expected target namespaces are in place before creating objects.
 func (o *objectMover) ensureNamespaces(graph *objectGraph, toProxy Proxy) error {
-
 	if o.dryRun {
 		return nil
 	}
@@ -391,7 +545,6 @@ func (o *objectMover) ensureNamespaces(graph *objectGraph, toProxy Proxy) error 
 	ensureNamespaceBackoff := newWriteBackoff()
 	namespaces := sets.NewString()
 	for _, node := range graph.getMoveNodes() {
-
 		// ignore global/cluster-wide objects
 		if node.isGlobal {
 			continue
@@ -482,13 +635,56 @@ func (o *objectMover) ensureNamespace(toProxy Proxy, namespace string) error {
 func (o *objectMover) createGroup(group moveGroup, toProxy Proxy) error {
 	createTargetObjectBackoff := newWriteBackoff()
 	errList := []error{}
-	for i := range group {
-		nodeToCreate := group[i]
 
+	for _, nodeToCreate := range group {
 		// Creates the Kubernetes object corresponding to the nodeToCreate.
 		// Nb. The operation is wrapped in a retry loop to make move more resilient to unexpected conditions.
 		err := retryWithExponentialBackoff(createTargetObjectBackoff, func() error {
 			return o.createTargetObject(nodeToCreate, toProxy)
+		})
+		if err != nil {
+			errList = append(errList, err)
+		}
+	}
+
+	if len(errList) > 0 {
+		return kerrors.NewAggregate(errList)
+	}
+
+	return nil
+}
+
+func (o *objectMover) backupGroup(group moveGroup, directory string) error {
+	backupTargetObjectBackoff := newWriteBackoff()
+	errList := []error{}
+
+	for _, nodeToBackup := range group {
+		// Backs-up the Kubernetes object corresponding to the nodeToBackup.
+		// Nb. The operation is wrapped in a retry loop to make move more resilient to unexpected conditions.
+		err := retryWithExponentialBackoff(backupTargetObjectBackoff, func() error {
+			return o.backupTargetObject(nodeToBackup, directory)
+		})
+		if err != nil {
+			errList = append(errList, err)
+		}
+	}
+
+	if len(errList) > 0 {
+		return kerrors.NewAggregate(errList)
+	}
+
+	return nil
+}
+
+func (o *objectMover) restoreGroup(group moveGroup, toProxy Proxy) error {
+	restoreTargetObjectBackoff := newWriteBackoff()
+	errList := []error{}
+
+	for _, nodeToRestore := range group {
+		// Creates the Kubernetes object corresponding to the nodeToRestore.
+		// Nb. The operation is wrapped in a retry loop to make move more resilient to unexpected conditions.
+		err := retryWithExponentialBackoff(restoreTargetObjectBackoff, func() error {
+			return o.restoreTargetObject(nodeToRestore, toProxy)
 		})
 		if err != nil {
 			errList = append(errList, err)
@@ -536,28 +732,8 @@ func (o *objectMover) createTargetObject(nodeToCreate *node, toProxy Proxy) erro
 	// Removes current OwnerReferences
 	obj.SetOwnerReferences(nil)
 
-	// Recreate all the OwnerReferences using the newUID of the owner nodes.
-	if len(nodeToCreate.owners) > 0 {
-		ownerRefs := []metav1.OwnerReference{}
-		for ownerNode := range nodeToCreate.owners {
-			ownerRef := metav1.OwnerReference{
-				APIVersion: ownerNode.identity.APIVersion,
-				Kind:       ownerNode.identity.Kind,
-				Name:       ownerNode.identity.Name,
-				UID:        ownerNode.newUID, // Use the owner's newUID read from the target management cluster (instead of the UID read during discovery).
-			}
-
-			// Restores the attributes of the OwnerReference.
-			if attributes, ok := nodeToCreate.owners[ownerNode]; ok {
-				ownerRef.Controller = attributes.Controller
-				ownerRef.BlockOwnerDeletion = attributes.BlockOwnerDeletion
-			}
-
-			ownerRefs = append(ownerRefs, ownerRef)
-		}
-		obj.SetOwnerReferences(ownerRefs)
-
-	}
+	// Rebuild the owne reference chain
+	o.buildOwnerChain(obj, nodeToCreate)
 
 	// Creates the targetObj into the target management cluster.
 	cTo, err := toProxy.NewClient()
@@ -571,23 +747,131 @@ func (o *objectMover) createTargetObject(nodeToCreate *node, toProxy Proxy) erro
 				obj.GroupVersionKind(), obj.GetNamespace(), obj.GetName())
 		}
 
-		// If the object already exists, try to update it.
-		// Nb. This should not happen, but it is supported to make move more resilient to unexpected interrupt/restarts of the move process.
-		log.V(5).Info("Object already exists, updating", nodeToCreate.identity.Kind, nodeToCreate.identity.Name, "Namespace", nodeToCreate.identity.Namespace)
+		// If the object already exists, try to update it if it is node a global object / something belonging to a global object hierarchy (e.g. a secrets owned by a global identity object).
+		if nodeToCreate.isGlobal || nodeToCreate.isGlobalHierarchy {
+			log.V(5).Info("Object already exists, skipping upgrade because it is global/it is owned by a global object", nodeToCreate.identity.Kind, nodeToCreate.identity.Name, "Namespace", nodeToCreate.identity.Namespace)
+		} else {
+			// Nb. This should not happen, but it is supported to make move more resilient to unexpected interrupt/restarts of the move process.
+			log.V(5).Info("Object already exists, updating", nodeToCreate.identity.Kind, nodeToCreate.identity.Name, "Namespace", nodeToCreate.identity.Namespace)
 
-		// Retrieve the UID and the resource version for the update.
-		existingTargetObj := &unstructured.Unstructured{}
-		existingTargetObj.SetAPIVersion(obj.GetAPIVersion())
-		existingTargetObj.SetKind(obj.GetKind())
-		if err := cTo.Get(ctx, objKey, existingTargetObj); err != nil {
-			return errors.Wrapf(err, "error reading resource for %q %s/%s",
-				existingTargetObj.GroupVersionKind(), existingTargetObj.GetNamespace(), existingTargetObj.GetName())
+			// Retrieve the UID and the resource version for the update.
+			existingTargetObj := &unstructured.Unstructured{}
+			existingTargetObj.SetAPIVersion(obj.GetAPIVersion())
+			existingTargetObj.SetKind(obj.GetKind())
+			if err := cTo.Get(ctx, objKey, existingTargetObj); err != nil {
+				return errors.Wrapf(err, "error reading resource for %q %s/%s",
+					existingTargetObj.GroupVersionKind(), existingTargetObj.GetNamespace(), existingTargetObj.GetName())
+			}
+
+			obj.SetUID(existingTargetObj.GetUID())
+			obj.SetResourceVersion(existingTargetObj.GetResourceVersion())
+			if err := cTo.Update(ctx, obj); err != nil {
+				return errors.Wrapf(err, "error updating %q %s/%s",
+					obj.GroupVersionKind(), obj.GetNamespace(), obj.GetName())
+			}
 		}
+	}
 
-		obj.SetUID(existingTargetObj.GetUID())
-		obj.SetResourceVersion(existingTargetObj.GetResourceVersion())
-		if err := cTo.Update(ctx, obj); err != nil {
-			return errors.Wrapf(err, "error updating %q %s/%s",
+	// Stores the newUID assigned to the newly created object.
+	nodeToCreate.newUID = obj.GetUID()
+
+	return nil
+}
+
+func (o *objectMover) backupTargetObject(nodeToCreate *node, directory string) error {
+	log := logf.Log
+	log.V(1).Info("Saving", nodeToCreate.identity.Kind, nodeToCreate.identity.Name, "Namespace", nodeToCreate.identity.Namespace)
+
+	cFrom, err := o.fromProxy.NewClient()
+	if err != nil {
+		return err
+	}
+
+	// Get the source object
+	obj := &unstructured.Unstructured{}
+	obj.SetAPIVersion(nodeToCreate.identity.APIVersion)
+	obj.SetKind(nodeToCreate.identity.Kind)
+	objKey := client.ObjectKey{
+		Namespace: nodeToCreate.identity.Namespace,
+		Name:      nodeToCreate.identity.Name,
+	}
+
+	if err := cFrom.Get(ctx, objKey, obj); err != nil {
+		return errors.Wrapf(err, "error reading %q %s/%s",
+			obj.GroupVersionKind(), obj.GetNamespace(), obj.GetName())
+	}
+
+	// Get JSON for object and write it into the configured directory
+	byObj, err := obj.MarshalJSON()
+	if err != nil {
+		return err
+	}
+
+	filenameObj := nodeToCreate.getFilename()
+	objectFile := filepath.Join(directory, filenameObj)
+
+	// If file exists, then remove it to be written again
+	if _, err = os.Stat(objectFile); err == nil {
+		if err = os.Remove(objectFile); err != nil {
+			return err
+		}
+	}
+
+	err = ioutil.WriteFile(objectFile, byObj, 0600)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (o *objectMover) restoreTargetObject(nodeToCreate *node, toProxy Proxy) error {
+	log := logf.Log
+	log.V(1).Info("Restoring", nodeToCreate.identity.Kind, nodeToCreate.identity.Name, "Namespace", nodeToCreate.identity.Namespace)
+
+	// Creates the targetObj into the target management cluster.
+	cTo, err := toProxy.NewClient()
+	if err != nil {
+		return err
+	}
+
+	// Attempt to retrieve an existing object. If it exists, update the UID to rebuild the owner chain
+	objKey := client.ObjectKey{
+		Namespace: nodeToCreate.identity.Namespace,
+		Name:      nodeToCreate.identity.Name,
+	}
+
+	existingTargetObj := &unstructured.Unstructured{}
+	existingTargetObj.SetAPIVersion(nodeToCreate.restoreObject.GetAPIVersion())
+	existingTargetObj.SetKind(nodeToCreate.restoreObject.GetKind())
+	if err := cTo.Get(ctx, objKey, existingTargetObj); err == nil {
+		log.V(5).Info("Object already exists, skipping restore", nodeToCreate.identity.Kind, nodeToCreate.identity.Name, "Namespace", nodeToCreate.identity.Namespace)
+
+		// Update the nodes UID since it already exits. Any nodes owned by this existing node will be updated when the owner chain is rebuilt
+		nodeToCreate.newUID = existingTargetObj.GetUID()
+
+		// Return early since the object already exists
+		return nil
+	}
+
+	// Rebuild the source object
+	obj := nodeToCreate.restoreObject
+
+	obj.SetAPIVersion(nodeToCreate.identity.APIVersion)
+	obj.SetKind(nodeToCreate.identity.Kind)
+
+	// New objects cannot have a specified resource version. Clear it out.
+	obj.SetResourceVersion("")
+
+	// Removes current OwnerReferences
+	obj.SetOwnerReferences(nil)
+
+	// Rebuild the owner reference chain
+	o.buildOwnerChain(obj, nodeToCreate)
+
+	if err := cTo.Create(ctx, obj); err != nil {
+		if !apierrors.IsAlreadyExists(err) {
+			return errors.Wrapf(err, "error creating %q %s/%s",
 				obj.GroupVersionKind(), obj.GetNamespace(), obj.GetName())
 		}
 	}
@@ -598,17 +882,36 @@ func (o *objectMover) createTargetObject(nodeToCreate *node, toProxy Proxy) erro
 	return nil
 }
 
+// Recreate all the OwnerReferences using the newUID of the owner nodes.
+func (o *objectMover) buildOwnerChain(obj *unstructured.Unstructured, n *node) {
+	if len(n.owners) > 0 {
+		ownerRefs := []metav1.OwnerReference{}
+		for ownerNode := range n.owners {
+			ownerRef := metav1.OwnerReference{
+				APIVersion: ownerNode.identity.APIVersion,
+				Kind:       ownerNode.identity.Kind,
+				Name:       ownerNode.identity.Name,
+				UID:        ownerNode.newUID, // Use the owner's newUID read from the target management cluster (instead of the UID read during discovery).
+			}
+
+			// Restores the attributes of the OwnerReference.
+			if attributes, ok := n.owners[ownerNode]; ok {
+				ownerRef.Controller = attributes.Controller
+				ownerRef.BlockOwnerDeletion = attributes.BlockOwnerDeletion
+			}
+
+			ownerRefs = append(ownerRefs, ownerRef)
+		}
+		obj.SetOwnerReferences(ownerRefs)
+	}
+}
+
 // deleteGroup deletes all the Kubernetes objects from the source management cluster corresponding to the object graph nodes in a moveGroup.
 func (o *objectMover) deleteGroup(group moveGroup) error {
 	deleteSourceObjectBackoff := newWriteBackoff()
 	errList := []error{}
 	for i := range group {
 		nodeToDelete := group[i]
-
-		// Don't delete cluster-wide nodes
-		if nodeToDelete.isGlobal {
-			continue
-		}
 
 		// Delete the Kubernetes object corresponding to the current node.
 		// Nb. The operation is wrapped in a retry loop to make move more resilient to unexpected conditions.
@@ -631,6 +934,11 @@ var (
 // deleteSourceObject deletes the Kubernetes object corresponding to the node from the source management cluster, taking care of removing all the finalizers so
 // the objects gets immediately deleted (force delete).
 func (o *objectMover) deleteSourceObject(nodeToDelete *node) error {
+	// Don't delete cluster-wide nodes or nodes that are below a hierarchy that starts with a global object (e.g. a secrets owned by a global identity object).
+	if nodeToDelete.isGlobal || nodeToDelete.isGlobalHierarchy {
+		return nil
+	}
+
 	log := logf.Log
 	log.V(1).Info("Deleting", nodeToDelete.identity.Kind, nodeToDelete.identity.Name, "Namespace", nodeToDelete.identity.Namespace)
 
@@ -654,7 +962,7 @@ func (o *objectMover) deleteSourceObject(nodeToDelete *node) error {
 
 	if err := cFrom.Get(ctx, sourceObjKey, sourceObj); err != nil {
 		if apierrors.IsNotFound(err) {
-			//If the object is already deleted, move on.
+			// If the object is already deleted, move on.
 			log.V(5).Info("Object already deleted, skipping delete for", nodeToDelete.identity.Kind, nodeToDelete.identity.Name, "Namespace", nodeToDelete.identity.Namespace)
 			return nil
 		}
@@ -678,7 +986,7 @@ func (o *objectMover) deleteSourceObject(nodeToDelete *node) error {
 }
 
 // checkTargetProviders checks that all the providers installed in the source cluster exists in the target cluster as well (with a version >= of the current version).
-func (o *objectMover) checkTargetProviders(namespace string, toInventory InventoryClient) error {
+func (o *objectMover) checkTargetProviders(toInventory InventoryClient) error {
 	if o.dryRun {
 		return nil
 	}
@@ -697,11 +1005,6 @@ func (o *objectMover) checkTargetProviders(namespace string, toInventory Invento
 	// Checks all the providers installed in the source cluster
 	errList := []error{}
 	for _, sourceProvider := range fromProviders.Items {
-		// If we are moving objects in a namespace only, skip all the providers not watching such namespace.
-		if namespace != "" && !(sourceProvider.WatchedNamespace == "" || sourceProvider.WatchedNamespace == namespace) {
-			continue
-		}
-
 		sourceVersion, err := version.ParseSemantic(sourceProvider.Version)
 		if err != nil {
 			return errors.Wrapf(err, "unable to parse version %q for the %s provider in the source cluster", sourceProvider.Version, sourceProvider.InstanceName())
@@ -715,19 +1018,6 @@ func (o *objectMover) checkTargetProviders(namespace string, toInventory Invento
 				continue
 			}
 
-			// If we are moving objects in all the namespaces, skip all the providers with a different watching namespace.
-			// NB. This introduces a constraints for move all namespaces, that the configuration of source and target provider MUST match (except for the version);
-			// however this is acceptable because clusterctl supports only two models of multi-tenancy (n-Infra, n-Core).
-			if namespace == "" && !(targetProvider.WatchedNamespace == sourceProvider.WatchedNamespace) {
-				continue
-			}
-
-			// If we are moving objects in a namespace only, skip all the providers not watching such namespace.
-			// NB. This means that when moving a single namespace, we use a lazy matching (the watching namespace MUST overlap; exact match is not required).
-			if namespace != "" && !(targetProvider.WatchedNamespace == "" || targetProvider.WatchedNamespace == namespace) {
-				continue
-			}
-
 			targetVersion, err := version.ParseSemantic(targetProvider.Version)
 			if err != nil {
 				return errors.Wrapf(err, "unable to parse version %q for the %s provider in the target cluster", targetProvider.Version, targetProvider.InstanceName())
@@ -737,11 +1027,7 @@ func (o *objectMover) checkTargetProviders(namespace string, toInventory Invento
 			}
 		}
 		if maxTargetVersion == nil {
-			watching := sourceProvider.WatchedNamespace
-			if namespace != "" {
-				watching = namespace
-			}
-			errList = append(errList, errors.Errorf("provider %s watching namespace %s not found in the target cluster", sourceProvider.Name, watching))
+			errList = append(errList, errors.Errorf("provider %s not found in the target cluster", sourceProvider.Name))
 			continue
 		}
 

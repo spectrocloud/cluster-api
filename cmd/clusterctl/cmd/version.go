@@ -22,11 +22,11 @@ import (
 
 	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
-	"sigs.k8s.io/cluster-api/cmd/version"
+	"sigs.k8s.io/cluster-api/version"
 	"sigs.k8s.io/yaml"
 )
 
-// Version provides the version information of clusterctl
+// Version provides the version information of clusterctl.
 type Version struct {
 	ClientVersion *version.Info `json:"clusterctl"`
 }

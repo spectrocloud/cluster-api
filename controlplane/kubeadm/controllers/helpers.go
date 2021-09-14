@@ -28,30 +28,33 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	kerrors "k8s.io/apimachinery/pkg/util/errors"
 	"k8s.io/apiserver/pkg/storage/names"
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha3"
-	bootstrapv1 "sigs.k8s.io/cluster-api/bootstrap/kubeadm/api/v1alpha3"
+	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha4"
+	bootstrapv1 "sigs.k8s.io/cluster-api/bootstrap/kubeadm/api/v1alpha4"
 	"sigs.k8s.io/cluster-api/controllers/external"
-	controlplanev1 "sigs.k8s.io/cluster-api/controlplane/kubeadm/api/v1alpha3"
+	controlplanev1 "sigs.k8s.io/cluster-api/controlplane/kubeadm/api/v1alpha4"
 	"sigs.k8s.io/cluster-api/controlplane/kubeadm/internal"
-	capierrors "sigs.k8s.io/cluster-api/errors"
 	"sigs.k8s.io/cluster-api/util"
 	"sigs.k8s.io/cluster-api/util/certs"
+	"sigs.k8s.io/cluster-api/util/conditions"
 	"sigs.k8s.io/cluster-api/util/kubeconfig"
 	"sigs.k8s.io/cluster-api/util/patch"
 	"sigs.k8s.io/cluster-api/util/secret"
+	ctrl "sigs.k8s.io/controller-runtime"
 )
 
-func (r *KubeadmControlPlaneReconciler) reconcileKubeconfig(ctx context.Context, cluster *clusterv1.Cluster, kcp *controlplanev1.KubeadmControlPlane) error {
+func (r *KubeadmControlPlaneReconciler) reconcileKubeconfig(ctx context.Context, cluster *clusterv1.Cluster, kcp *controlplanev1.KubeadmControlPlane) (ctrl.Result, error) {
+	log := ctrl.LoggerFrom(ctx)
+
 	endpoint := cluster.Spec.ControlPlaneEndpoint
 	if endpoint.IsZero() {
-		return nil
+		return ctrl.Result{}, nil
 	}
 
 	controllerOwnerRef := *metav1.NewControllerRef(kcp, controlplanev1.GroupVersion.WithKind("KubeadmControlPlane"))
 	clusterName := util.ObjectKey(cluster)
 	configSecret, err := secret.GetFromNamespacedName(ctx, r.Client, clusterName, secret.Kubeconfig)
 	switch {
-	case apierrors.IsNotFound(errors.Cause(err)):
+	case apierrors.IsNotFound(err):
 		createErr := kubeconfig.CreateSecretWithOwner(
 			ctx,
 			r.Client,
@@ -60,47 +63,47 @@ func (r *KubeadmControlPlaneReconciler) reconcileKubeconfig(ctx context.Context,
 			controllerOwnerRef,
 		)
 		if errors.Is(createErr, kubeconfig.ErrDependentCertificateNotFound) {
-			return errors.Wrapf(&capierrors.RequeueAfterError{RequeueAfter: dependentCertRequeueAfter},
-				"could not find secret %q, requeuing", secret.ClusterCA)
+			return ctrl.Result{RequeueAfter: dependentCertRequeueAfter}, nil
 		}
 		// always return if we have just created in order to skip rotation checks
-		return createErr
+		return ctrl.Result{}, createErr
 	case err != nil:
-		return errors.Wrap(err, "failed to retrieve kubeconfig Secret")
+		return ctrl.Result{}, errors.Wrap(err, "failed to retrieve kubeconfig Secret")
 	}
 
 	// check if the kubeconfig secret was created by v1alpha2 controllers, and thus it has the Cluster as the owner instead of KCP;
 	// if yes, adopt it.
 	if util.IsOwnedByObject(configSecret, cluster) && !util.IsControlledBy(configSecret, kcp) {
 		if err := r.adoptKubeconfigSecret(ctx, cluster, configSecret, controllerOwnerRef); err != nil {
-			return err
+			return ctrl.Result{}, err
 		}
 	}
 
 	// only do rotation on owned secrets
 	if !util.IsControlledBy(configSecret, kcp) {
-		return nil
+		return ctrl.Result{}, nil
 	}
 
 	needsRotation, err := kubeconfig.NeedsClientCertRotation(configSecret, certs.ClientCertificateRenewalDuration)
 	if err != nil {
-		return err
+		return ctrl.Result{}, err
 	}
 
 	if needsRotation {
-		r.Log.Info("rotating kubeconfig secret")
+		log.Info("rotating kubeconfig secret")
 		if err := kubeconfig.RegenerateSecret(ctx, r.Client, configSecret); err != nil {
-			return errors.Wrap(err, "failed to regenerate kubeconfig")
+			return ctrl.Result{}, errors.Wrap(err, "failed to regenerate kubeconfig")
 		}
 	}
 
-	return nil
+	return ctrl.Result{}, nil
 }
 
 func (r *KubeadmControlPlaneReconciler) adoptKubeconfigSecret(ctx context.Context, cluster *clusterv1.Cluster, configSecret *corev1.Secret, controllerOwnerRef metav1.OwnerReference) error {
-	r.Log.Info("Adopting KubeConfig secret created by v1alpha2 controllers", "Name", configSecret.Name)
+	log := ctrl.LoggerFrom(ctx)
+	log.Info("Adopting KubeConfig secret created by v1alpha2 controllers", "Name", configSecret.Name)
 
-	patchHelper, err := patch.NewHelper(configSecret, r.Client)
+	patch, err := patch.NewHelper(configSecret, r.Client)
 	if err != nil {
 		return errors.Wrap(err, "failed to create patch helper for the kubeconfig secret")
 	}
@@ -111,18 +114,18 @@ func (r *KubeadmControlPlaneReconciler) adoptKubeconfigSecret(ctx context.Contex
 		UID:        cluster.UID,
 	})
 	configSecret.OwnerReferences = util.EnsureOwnerRef(configSecret.OwnerReferences, controllerOwnerRef)
-	if err := patchHelper.Patch(ctx, configSecret); err != nil {
+	if err := patch.Patch(ctx, configSecret); err != nil {
 		return errors.Wrap(err, "failed to patch the kubeconfig secret")
 	}
 	return nil
 }
 
-func (r *KubeadmControlPlaneReconciler) reconcileExternalReference(ctx context.Context, cluster *clusterv1.Cluster, ref corev1.ObjectReference) error {
-	if !strings.HasSuffix(ref.Kind, external.TemplateSuffix) {
+func (r *KubeadmControlPlaneReconciler) reconcileExternalReference(ctx context.Context, cluster *clusterv1.Cluster, ref *corev1.ObjectReference) error {
+	if !strings.HasSuffix(ref.Kind, clusterv1.TemplateSuffix) {
 		return nil
 	}
 
-	obj, err := external.Get(ctx, r.Client, &ref, cluster.Namespace)
+	obj, err := external.Get(ctx, r.Client, ref, cluster.Namespace)
 	if err != nil {
 		return err
 	}
@@ -159,26 +162,33 @@ func (r *KubeadmControlPlaneReconciler) cloneConfigsAndGenerateMachine(ctx conte
 	// Clone the infrastructure template
 	infraRef, err := external.CloneTemplate(ctx, &external.CloneTemplateInput{
 		Client:      r.Client,
-		TemplateRef: &kcp.Spec.InfrastructureTemplate,
+		TemplateRef: &kcp.Spec.MachineTemplate.InfrastructureRef,
 		Namespace:   kcp.Namespace,
 		OwnerRef:    infraCloneOwner,
 		ClusterName: cluster.Name,
-		Labels:      internal.ControlPlaneLabelsForCluster(cluster.Name),
+		Labels:      internal.ControlPlaneMachineLabelsForCluster(kcp, cluster.Name),
+		Annotations: kcp.Spec.MachineTemplate.ObjectMeta.Annotations,
 	})
 	if err != nil {
 		// Safe to return early here since no resources have been created yet.
+		conditions.MarkFalse(kcp, controlplanev1.MachinesCreatedCondition, controlplanev1.InfrastructureTemplateCloningFailedReason,
+			clusterv1.ConditionSeverityError, err.Error())
 		return errors.Wrap(err, "failed to clone infrastructure template")
 	}
 
 	// Clone the bootstrap configuration
 	bootstrapRef, err := r.generateKubeadmConfig(ctx, kcp, cluster, bootstrapSpec)
 	if err != nil {
+		conditions.MarkFalse(kcp, controlplanev1.MachinesCreatedCondition, controlplanev1.BootstrapTemplateCloningFailedReason,
+			clusterv1.ConditionSeverityError, err.Error())
 		errs = append(errs, errors.Wrap(err, "failed to generate bootstrap config"))
 	}
 
 	// Only proceed to generating the Machine if we haven't encountered an error
 	if len(errs) == 0 {
 		if err := r.generateMachine(ctx, kcp, cluster, infraRef, bootstrapRef, failureDomain); err != nil {
+			conditions.MarkFalse(kcp, controlplanev1.MachinesCreatedCondition, controlplanev1.MachineGenerationFailedReason,
+				clusterv1.ConditionSeverityError, err.Error())
 			errs = append(errs, errors.Wrap(err, "failed to create Machine"))
 		}
 	}
@@ -228,7 +238,8 @@ func (r *KubeadmControlPlaneReconciler) generateKubeadmConfig(ctx context.Contex
 		ObjectMeta: metav1.ObjectMeta{
 			Name:            names.SimpleNameGenerator.GenerateName(kcp.Name + "-"),
 			Namespace:       kcp.Namespace,
-			Labels:          internal.ControlPlaneLabelsForCluster(cluster.Name),
+			Labels:          internal.ControlPlaneMachineLabelsForCluster(kcp, cluster.Name),
+			Annotations:     kcp.Spec.MachineTemplate.ObjectMeta.Annotations,
 			OwnerReferences: []metav1.OwnerReference{owner},
 		},
 		Spec: *spec,
@@ -252,9 +263,10 @@ func (r *KubeadmControlPlaneReconciler) generateKubeadmConfig(ctx context.Contex
 func (r *KubeadmControlPlaneReconciler) generateMachine(ctx context.Context, kcp *controlplanev1.KubeadmControlPlane, cluster *clusterv1.Cluster, infraRef, bootstrapRef *corev1.ObjectReference, failureDomain *string) error {
 	machine := &clusterv1.Machine{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      names.SimpleNameGenerator.GenerateName(kcp.Name + "-"),
-			Namespace: kcp.Namespace,
-			Labels:    internal.ControlPlaneLabelsForCluster(cluster.Name),
+			Name:        names.SimpleNameGenerator.GenerateName(kcp.Name + "-"),
+			Namespace:   kcp.Namespace,
+			Labels:      internal.ControlPlaneMachineLabelsForCluster(kcp, cluster.Name),
+			Annotations: kcp.Spec.MachineTemplate.ObjectMeta.Annotations,
 			OwnerReferences: []metav1.OwnerReference{
 				*metav1.NewControllerRef(kcp, controlplanev1.GroupVersion.WithKind("KubeadmControlPlane")),
 			},
@@ -267,7 +279,7 @@ func (r *KubeadmControlPlaneReconciler) generateMachine(ctx context.Context, kcp
 				ConfigRef: bootstrapRef,
 			},
 			FailureDomain:    failureDomain,
-			NodeDrainTimeout: kcp.Spec.NodeDrainTimeout,
+			NodeDrainTimeout: kcp.Spec.MachineTemplate.NodeDrainTimeout,
 		},
 	}
 

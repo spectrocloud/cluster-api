@@ -20,15 +20,15 @@ import (
 	"strings"
 
 	"github.com/go-logr/logr"
-	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/cluster-api/util/annotations"
+	"sigs.k8s.io/cluster-api/util/labels"
 
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 )
 
-// All returns a predicate that returns true only if all given predicates return true
+// All returns a predicate that returns true only if all given predicates return true.
 func All(logger logr.Logger, predicates ...predicate.Funcs) predicate.Funcs {
 	return predicate.Funcs{
 		UpdateFunc: func(e event.UpdateEvent) bool {
@@ -78,7 +78,7 @@ func All(logger logr.Logger, predicates ...predicate.Funcs) predicate.Funcs {
 	}
 }
 
-// Any returns a predicate that returns true only if any given predicate returns true
+// Any returns a predicate that returns true only if any given predicate returns true.
 func Any(logger logr.Logger, predicates ...predicate.Funcs) predicate.Funcs {
 	return predicate.Funcs{
 		UpdateFunc: func(e event.UpdateEvent) bool {
@@ -128,6 +128,25 @@ func Any(logger logr.Logger, predicates ...predicate.Funcs) predicate.Funcs {
 	}
 }
 
+// ResourceHasFilterLabel returns a predicate that returns true only if the provided resource contains
+// a label with the WatchLabel key and the configured label value exactly.
+func ResourceHasFilterLabel(logger logr.Logger, labelValue string) predicate.Funcs {
+	return predicate.Funcs{
+		UpdateFunc: func(e event.UpdateEvent) bool {
+			return processIfLabelMatch(logger.WithValues("predicate", "updateEvent"), e.ObjectNew, labelValue)
+		},
+		CreateFunc: func(e event.CreateEvent) bool {
+			return processIfLabelMatch(logger.WithValues("predicate", "createEvent"), e.Object, labelValue)
+		},
+		DeleteFunc: func(e event.DeleteEvent) bool {
+			return processIfLabelMatch(logger.WithValues("predicate", "deleteEvent"), e.Object, labelValue)
+		},
+		GenericFunc: func(e event.GenericEvent) bool {
+			return processIfLabelMatch(logger.WithValues("predicate", "genericEvent"), e.Object, labelValue)
+		},
+	}
+}
+
 // ResourceNotPaused returns a Predicate that returns true only if the provided resource does not contain the
 // paused annotation.
 // This implements a common requirement for all cluster-api and provider controllers skip reconciliation when the paused
@@ -144,27 +163,81 @@ func Any(logger logr.Logger, predicates ...predicate.Funcs) predicate.Funcs {
 func ResourceNotPaused(logger logr.Logger) predicate.Funcs {
 	return predicate.Funcs{
 		UpdateFunc: func(e event.UpdateEvent) bool {
-			return processIfNotPaused(logger.WithValues("predicate", "updateEvent"), e.ObjectNew, e.MetaNew)
+			return processIfNotPaused(logger.WithValues("predicate", "updateEvent"), e.ObjectNew)
 		},
 		CreateFunc: func(e event.CreateEvent) bool {
-			return processIfNotPaused(logger.WithValues("predicate", "createEvent"), e.Object, e.Meta)
+			return processIfNotPaused(logger.WithValues("predicate", "createEvent"), e.Object)
 		},
 		DeleteFunc: func(e event.DeleteEvent) bool {
-			return processIfNotPaused(logger.WithValues("predicate", "deleteEvent"), e.Object, e.Meta)
+			return processIfNotPaused(logger.WithValues("predicate", "deleteEvent"), e.Object)
 		},
 		GenericFunc: func(e event.GenericEvent) bool {
-			return processIfNotPaused(logger.WithValues("predicate", "genericEvent"), e.Object, e.Meta)
+			return processIfNotPaused(logger.WithValues("predicate", "genericEvent"), e.Object)
 		},
 	}
 }
 
-func processIfNotPaused(logger logr.Logger, obj runtime.Object, meta v1.Object) bool {
+// ResourceNotPausedAndHasFilterLabel returns a predicate that returns true only if the
+// ResourceNotPaused and ResourceHasFilterLabel predicates return true.
+func ResourceNotPausedAndHasFilterLabel(logger logr.Logger, labelValue string) predicate.Funcs {
+	return All(logger, ResourceNotPaused(logger), ResourceHasFilterLabel(logger, labelValue))
+}
+
+func processIfNotPaused(logger logr.Logger, obj client.Object) bool {
 	kind := strings.ToLower(obj.GetObjectKind().GroupVersionKind().Kind)
-	log := logger.WithValues("namespace", meta.GetNamespace(), kind, meta.GetName())
-	if annotations.HasPausedAnnotation(meta) {
+	log := logger.WithValues("namespace", obj.GetNamespace(), kind, obj.GetName())
+	if annotations.HasPausedAnnotation(obj) {
 		log.V(4).Info("Resource is paused, will not attempt to map resource")
 		return false
 	}
 	log.V(4).Info("Resource is not paused, will attempt to map resource")
+	return true
+}
+
+func processIfLabelMatch(logger logr.Logger, obj client.Object, labelValue string) bool {
+	// Return early if no labelValue was set.
+	if labelValue == "" {
+		return true
+	}
+
+	kind := strings.ToLower(obj.GetObjectKind().GroupVersionKind().Kind)
+	log := logger.WithValues("namespace", obj.GetNamespace(), kind, obj.GetName())
+	if labels.HasWatchLabel(obj, labelValue) {
+		log.V(4).Info("Resource matches label, will attempt to map resource")
+		return true
+	}
+	log.V(4).Info("Resource does not match label, will not attempt to map resource")
+	return false
+}
+
+// ResourceIsNotExternallyManaged returns a predicate that returns true only if the resource does not contain
+// the externally managed annotation.
+// This implements a requirement for InfraCluster providers to be able to ignore externally managed
+// cluster infrastructure.
+func ResourceIsNotExternallyManaged(logger logr.Logger) predicate.Funcs {
+	return predicate.Funcs{
+		UpdateFunc: func(e event.UpdateEvent) bool {
+			return processIfNotExternallyManaged(logger.WithValues("predicate", "updateEvent"), e.ObjectNew)
+		},
+		CreateFunc: func(e event.CreateEvent) bool {
+			return processIfNotExternallyManaged(logger.WithValues("predicate", "createEvent"), e.Object)
+		},
+		DeleteFunc: func(e event.DeleteEvent) bool {
+			return processIfNotExternallyManaged(logger.WithValues("predicate", "deleteEvent"), e.Object)
+		},
+		GenericFunc: func(e event.GenericEvent) bool {
+			return processIfNotExternallyManaged(logger.WithValues("predicate", "genericEvent"), e.Object)
+		},
+	}
+}
+
+func processIfNotExternallyManaged(logger logr.Logger, obj client.Object) bool {
+	kind := strings.ToLower(obj.GetObjectKind().GroupVersionKind().Kind)
+	log := logger.WithValues("namespace", obj.GetNamespace(), kind, obj.GetName())
+	if annotations.IsExternallyManaged(obj) {
+		log.V(4).Info("Resource is externally managed, will not attempt to map resource")
+		return false
+	}
+	log.V(4).Info("Resource is managed, will attempt to map resource")
 	return true
 }

@@ -17,21 +17,15 @@ limitations under the License.
 package kubeconfig
 
 import (
-	"context"
 	"fmt"
 
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/client-go/tools/clientcmd/api"
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha3"
-	"sigs.k8s.io/controller-runtime/pkg/client"
+	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha4"
 )
 
-// Deprecated: use test/helpers/envtest
-func CreateEnvTestSecret(client client.Client, cfg *rest.Config, cluster *clusterv1.Cluster) error {
-	return client.Create(context.TODO(), GenerateSecret(cluster, FromEnvTestConfig(cfg, cluster)))
-}
-
+// FromEnvTestConfig returns a new Kubeconfig in byte form when running in envtest.
 func FromEnvTestConfig(cfg *rest.Config, cluster *clusterv1.Cluster) []byte {
 	contextName := fmt.Sprintf("%s@%s", cfg.Username, cluster.Name)
 	c := api.Config{

@@ -16,12 +16,12 @@
 
 ###################
 
-# local-overrides.py takes in input a list of provider and, for each of them, generates the components YAML from the
+# create-local-repository.py takes in input a list of provider and, for each of them, generates the components YAML from the
 # local repositories (the GitHub repositories clone), and finally stores it in the clusterctl local override folder
 
 # prerequisites:
 
-# - the script should be executed from sigs.k8s.io/cluster-api/ by calling cmd/clusterctl/hack/local-overrides.py
+# - the script should be executed from sigs.k8s.io/cluster-api/ by calling cmd/clusterctl/hack/create-local-repository.py
 # - there should be a sigs.k8s.io/cluster-api/clusterctl-settings.json file with the list of provider for which
 #   the local overrides should be generated and the list of provider repositories to be included (on top of cluster-api).
 # {
@@ -53,26 +53,26 @@ settings = {}
 providers = {
       'cluster-api': {
               'componentsFile': 'core-components.yaml',
-              'nextVersion': 'v0.3.99',
+              'nextVersion': 'v0.4.99',
               'type': 'CoreProvider',
       },
       'bootstrap-kubeadm': {
             'componentsFile': 'bootstrap-components.yaml',
-            'nextVersion': 'v0.3.99',
+            'nextVersion': 'v0.4.99',
             'type': 'BootstrapProvider',
-            'configFolder': 'bootstrap/kubeadm/config',
+            'configFolder': 'bootstrap/kubeadm/config/default',
       },
       'control-plane-kubeadm': {
             'componentsFile': 'control-plane-components.yaml',
-            'nextVersion': 'v0.3.99',
+            'nextVersion': 'v0.4.99',
             'type': 'ControlPlaneProvider',
-            'configFolder': 'controlplane/kubeadm/config',
+            'configFolder': 'controlplane/kubeadm/config/default',
       },
       'infrastructure-docker': {
           'componentsFile': 'infrastructure-components.yaml',
-          'nextVersion': 'v0.3.99',
+          'nextVersion': 'v0.4.99',
           'type': 'InfrastructureProvider',
-          'configFolder': 'test/infrastructure/docker/config',
+          'configFolder': 'test/infrastructure/docker/config/default',
       },
 }
 
@@ -150,7 +150,7 @@ def create_local_repositories():
         assert p is not None, 'invalid configuration: please specify the configuration for the {} provider'.format(provider)
 
         repo = p.get('repo', '.')
-        config_folder = p.get('configFolder', 'config')
+        config_folder = p.get('configFolder', 'config/default')
         metadata_file = repo+'/metadata.yaml'
 
         next_version = p.get('nextVersion')

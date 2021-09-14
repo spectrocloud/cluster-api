@@ -19,7 +19,6 @@ limitations under the License.
 package e2e
 
 import (
-	"context"
 	"flag"
 	"fmt"
 	"os"
@@ -28,11 +27,12 @@ import (
 	"testing"
 
 	. "github.com/onsi/ginkgo"
-	"github.com/onsi/ginkgo/config"
-	"github.com/onsi/ginkgo/reporters"
 	. "github.com/onsi/gomega"
+	ctrl "sigs.k8s.io/controller-runtime"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha4"
 	"sigs.k8s.io/cluster-api/test/framework"
 	"sigs.k8s.io/cluster-api/test/framework/bootstrap"
 	"sigs.k8s.io/cluster-api/test/framework/clusterctl"
@@ -55,6 +55,8 @@ var (
 
 // Test suite global vars
 var (
+	ctx = ctrl.SetupSignalHandler()
+
 	// e2eConfig to be used for this test, read from configPath.
 	e2eConfig *clusterctl.E2EConfig
 
@@ -84,8 +86,8 @@ func TestE2E(t *testing.T) {
 	}
 
 	RegisterFailHandler(Fail)
-	junitPath := filepath.Join(artifactFolder, fmt.Sprintf("junit.e2e_suite.%d.xml", config.GinkgoConfig.ParallelNode))
-	junitReporter := reporters.NewJUnitReporter(junitPath)
+
+	junitReporter := framework.CreateJUnitReporterForProw(artifactFolder)
 	RunSpecsWithDefaultAndCustomReporters(t, "capi-e2e", []Reporter{junitReporter})
 }
 
@@ -143,6 +145,9 @@ var _ = SynchronizedAfterSuite(func() {
 }, func() {
 	// After all ParallelNodes.
 
+	By("Dumping logs from the bootstrap cluster")
+	dumpBootstrapClusterLogs(bootstrapClusterProxy)
+
 	By("Tearing down the management cluster")
 	if !skipCleanup {
 		tearDown(bootstrapClusterProvider, bootstrapClusterProxy)
@@ -156,7 +161,7 @@ func initScheme() *runtime.Scheme {
 }
 
 func loadE2EConfig(configPath string) *clusterctl.E2EConfig {
-	config := clusterctl.LoadE2EConfig(context.TODO(), clusterctl.LoadE2EConfigInput{ConfigPath: configPath})
+	config := clusterctl.LoadE2EConfig(ctx, clusterctl.LoadE2EConfigInput{ConfigPath: configPath})
 	Expect(config).ToNot(BeNil(), "Failed to load E2E config from %s", configPath)
 
 	return config
@@ -168,14 +173,14 @@ func createClusterctlLocalRepository(config *clusterctl.E2EConfig, repositoryFol
 		RepositoryFolder: repositoryFolder,
 	}
 
-	// Ensuring a CNI file is defined in the config and register a FileTransformation to inject the referenced file as in place of the CNI_RESOURCES envSubst variable.
+	// Ensuring a CNI file is defined in the config and register a FileTransformation to inject the referenced file in place of the CNI_RESOURCES envSubst variable.
 	Expect(config.Variables).To(HaveKey(CNIPath), "Missing %s variable in the config", CNIPath)
 	cniPath := config.GetVariable(CNIPath)
 	Expect(cniPath).To(BeAnExistingFile(), "The %s variable should resolve to an existing file", CNIPath)
 
 	createRepositoryInput.RegisterClusterResourceSetConfigMapTransformation(cniPath, CNIResources)
 
-	clusterctlConfig := clusterctl.CreateRepository(context.TODO(), createRepositoryInput)
+	clusterctlConfig := clusterctl.CreateRepository(ctx, createRepositoryInput)
 	Expect(clusterctlConfig).To(BeAnExistingFile(), "The clusterctl config file does not exists in the local repository %s", repositoryFolder)
 	return clusterctlConfig
 }
@@ -184,15 +189,14 @@ func setupBootstrapCluster(config *clusterctl.E2EConfig, scheme *runtime.Scheme,
 	var clusterProvider bootstrap.ClusterProvider
 	kubeconfigPath := ""
 	if !useExistingCluster {
-		By("CreateKindBootstrapClusterAndLoadImages")
-		clusterProvider = bootstrap.CreateKindBootstrapClusterAndLoadImages(context.TODO(), bootstrap.CreateKindBootstrapClusterAndLoadImagesInput{
+		clusterProvider = bootstrap.CreateKindBootstrapClusterAndLoadImages(ctx, bootstrap.CreateKindBootstrapClusterAndLoadImagesInput{
 			Name:               config.ManagementClusterName,
+			KubernetesVersion:  config.GetVariable(KubernetesVersionManagement),
 			RequiresDockerSock: config.HasDockerProvider(),
 			Images:             config.Images,
+			IPFamily:           config.GetVariable(IPFamily),
 		})
 		Expect(clusterProvider).ToNot(BeNil(), "Failed to create a bootstrap cluster")
-
-		By("Done")
 
 		kubeconfigPath = clusterProvider.GetKubeconfigPath()
 		Expect(kubeconfigPath).To(BeAnExistingFile(), "Failed to get the kubeconfig file for the bootstrap cluster")
@@ -205,7 +209,7 @@ func setupBootstrapCluster(config *clusterctl.E2EConfig, scheme *runtime.Scheme,
 }
 
 func initBootstrapCluster(bootstrapClusterProxy framework.ClusterProxy, config *clusterctl.E2EConfig, clusterctlConfig, artifactFolder string) {
-	clusterctl.InitManagementClusterAndWatchControllerLogs(context.TODO(), clusterctl.InitManagementClusterAndWatchControllerLogsInput{
+	clusterctl.InitManagementClusterAndWatchControllerLogs(ctx, clusterctl.InitManagementClusterAndWatchControllerLogsInput{
 		ClusterProxy:            bootstrapClusterProxy,
 		ClusterctlConfigPath:    clusterctlConfig,
 		InfrastructureProviders: config.InfrastructureProviders(),
@@ -213,11 +217,48 @@ func initBootstrapCluster(bootstrapClusterProxy framework.ClusterProxy, config *
 	}, config.GetIntervals(bootstrapClusterProxy.GetName(), "wait-controllers")...)
 }
 
+func dumpBootstrapClusterLogs(bootstrapClusterProxy framework.ClusterProxy) {
+	if bootstrapClusterProxy == nil {
+		return
+	}
+
+	clusterLogCollector := bootstrapClusterProxy.GetLogCollector()
+	if clusterLogCollector == nil {
+		return
+	}
+
+	nodes, err := bootstrapClusterProxy.GetClientSet().CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+	if err != nil {
+		fmt.Printf("Failed to get nodes for the bootstrap cluster: %v\n", err)
+		return
+	}
+
+	for i := range nodes.Items {
+		nodeName := nodes.Items[i].GetName()
+		err = clusterLogCollector.CollectMachineLog(
+			ctx,
+			bootstrapClusterProxy.GetClient(),
+			// The bootstrap cluster is not expected to be a CAPI cluster, so in order to re-use the logCollector,
+			// we create a fake machine that wraps the node.
+			// NOTE: This assumes a naming convention between machines and nodes, which e.g. applies to the bootstrap clusters generated with kind.
+			//       This might not work if you are using an existing bootstrap cluster provided by other means.
+			&clusterv1.Machine{
+				Spec:       clusterv1.MachineSpec{ClusterName: nodeName},
+				ObjectMeta: metav1.ObjectMeta{Name: nodeName},
+			},
+			filepath.Join(artifactFolder, "clusters", bootstrapClusterProxy.GetName(), "machines", nodeName),
+		)
+		if err != nil {
+			fmt.Printf("Failed to get logs for the bootstrap cluster node %s: %v\n", nodeName, err)
+		}
+	}
+}
+
 func tearDown(bootstrapClusterProvider bootstrap.ClusterProvider, bootstrapClusterProxy framework.ClusterProxy) {
 	if bootstrapClusterProxy != nil {
-		bootstrapClusterProxy.Dispose(context.TODO())
+		bootstrapClusterProxy.Dispose(ctx)
 	}
 	if bootstrapClusterProvider != nil {
-		bootstrapClusterProvider.Dispose(context.TODO())
+		bootstrapClusterProvider.Dispose(ctx)
 	}
 }

@@ -44,8 +44,8 @@ func (o *ObjectTracker) Watch(log logr.Logger, obj runtime.Object, handler handl
 	}
 
 	gvk := obj.GetObjectKind().GroupVersionKind()
-	_, loaded := o.m.LoadOrStore(gvk.GroupKind().String(), struct{}{})
-	if loaded {
+	key := gvk.GroupKind().String()
+	if _, loaded := o.m.LoadOrStore(key, struct{}{}); loaded {
 		return nil
 	}
 
@@ -59,7 +59,7 @@ func (o *ObjectTracker) Watch(log logr.Logger, obj runtime.Object, handler handl
 		predicates.ResourceNotPaused(log),
 	)
 	if err != nil {
-		o.m.Delete(obj)
+		o.m.Delete(key)
 		return errors.Wrapf(err, "failed to add watcher on external object %q", gvk.String())
 	}
 	return nil

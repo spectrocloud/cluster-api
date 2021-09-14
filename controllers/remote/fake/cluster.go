@@ -14,17 +14,17 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// Package fake implements testing fakes.
 package fake
 
 import (
 	"context"
 
-	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 // NewClusterClient returns the same client passed as input, as output. It is assumed that the client is a
-// fake controller-runtime client
-func NewClusterClient(_ context.Context, c client.Client, _ client.ObjectKey, _ *runtime.Scheme) (client.Client, error) {
+// fake controller-runtime client.
+func NewClusterClient(_ context.Context, sourceName string, c client.Client, _ client.ObjectKey) (client.Client, error) {
 	return c, nil
 }

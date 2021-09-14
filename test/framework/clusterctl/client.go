@@ -19,7 +19,10 @@ package clusterctl
 import (
 	"context"
 	"fmt"
+	"io/ioutil"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 
 	. "github.com/onsi/ginkgo"
@@ -54,13 +57,13 @@ type InitInput struct {
 	InfrastructureProviders []string
 }
 
-// Init calls clusterctl init with the list of providers defined in the local repository
+// Init calls clusterctl init with the list of providers defined in the local repository.
 func Init(ctx context.Context, input InitInput) {
 	log.Logf("clusterctl init --core %s --bootstrap %s --control-plane %s --infrastructure %s",
 		input.CoreProvider,
-		strings.Join(input.BootstrapProviders, ", "),
-		strings.Join(input.ControlPlaneProviders, ", "),
-		strings.Join(input.InfrastructureProviders, ", "),
+		strings.Join(input.BootstrapProviders, ","),
+		strings.Join(input.ControlPlaneProviders, ","),
+		strings.Join(input.InfrastructureProviders, ","),
 	)
 
 	initOpt := clusterctlclient.InitOptions{
@@ -80,6 +83,58 @@ func Init(ctx context.Context, input InitInput) {
 
 	_, err := clusterctlClient.Init(initOpt)
 	Expect(err).ToNot(HaveOccurred(), "failed to run clusterctl init")
+}
+
+// InitWithBinary uses clusterctl binary to run init with the list of providers defined in the local repository.
+func InitWithBinary(_ context.Context, binary string, input InitInput) {
+	log.Logf("clusterctl init --core %s --bootstrap %s --control-plane %s --infrastructure %s",
+		input.CoreProvider,
+		strings.Join(input.BootstrapProviders, ","),
+		strings.Join(input.ControlPlaneProviders, ","),
+		strings.Join(input.InfrastructureProviders, ","),
+	)
+
+	cmd := exec.Command(binary, "init", //nolint:gosec // We don't care about command injection here.
+		"--core", input.CoreProvider,
+		"--bootstrap", strings.Join(input.BootstrapProviders, ","),
+		"--control-plane", strings.Join(input.ControlPlaneProviders, ","),
+		"--infrastructure", strings.Join(input.InfrastructureProviders, ","),
+		"--config", input.ClusterctlConfigPath,
+		"--kubeconfig", input.KubeconfigPath,
+	)
+
+	out, err := cmd.CombinedOutput()
+	_ = ioutil.WriteFile(filepath.Join(input.LogFolder, "clusterctl-init.log"), out, 0644) //nolint:gosec // this is a log file to be shared via prow artifacts
+	Expect(err).ToNot(HaveOccurred(), "failed to run clusterctl init")
+}
+
+// UpgradeInput is the input for Upgrade.
+type UpgradeInput struct {
+	LogFolder            string
+	ClusterctlConfigPath string
+	KubeconfigPath       string
+	Contract             string
+}
+
+// Upgrade calls clusterctl upgrade apply with the list of providers defined in the local repository.
+func Upgrade(ctx context.Context, input UpgradeInput) {
+	log.Logf("clusterctl upgrade apply --contract %s",
+		input.Contract,
+	)
+
+	upgradeOpt := clusterctlclient.ApplyUpgradeOptions{
+		Kubeconfig: clusterctlclient.Kubeconfig{
+			Path:    input.KubeconfigPath,
+			Context: "",
+		},
+		Contract: input.Contract,
+	}
+
+	clusterctlClient, log := getClusterctlClientWithLogger(input.ClusterctlConfigPath, "clusterctl-upgrade.log", input.LogFolder)
+	defer log.Close()
+
+	err := clusterctlClient.ApplyUpgrade(upgradeOpt)
+	Expect(err).ToNot(HaveOccurred(), "failed to run clusterctl upgrade")
 }
 
 // ConfigClusterInput is the input for ConfigCluster.
@@ -132,9 +187,38 @@ func ConfigCluster(ctx context.Context, input ConfigClusterInput) []byte {
 	yaml, err := template.Yaml()
 	Expect(err).ToNot(HaveOccurred(), "Failed to generate yaml for the workload cluster template")
 
-	log.WriteString(string(yaml))
-
+	_, _ = log.WriteString(string(yaml))
 	return yaml
+}
+
+// ConfigClusterWithBinary uses clusterctl binary to run config cluster.
+func ConfigClusterWithBinary(_ context.Context, clusterctlBinaryPath string, input ConfigClusterInput) []byte {
+	log.Logf("clusterctl config cluster %s --infrastructure %s --kubernetes-version %s --control-plane-machine-count %d --worker-machine-count %d --flavor %s",
+		input.ClusterName,
+		valueOrDefault(input.InfrastructureProvider),
+		input.KubernetesVersion,
+		*input.ControlPlaneMachineCount,
+		*input.WorkerMachineCount,
+		valueOrDefault(input.Flavor),
+	)
+
+	cmd := exec.Command(clusterctlBinaryPath, "config", "cluster", //nolint:gosec // We don't care about command injection here.
+		input.ClusterName,
+		"--infrastructure", input.InfrastructureProvider,
+		"--kubernetes-version", input.KubernetesVersion,
+		"--control-plane-machine-count", fmt.Sprint(*input.ControlPlaneMachineCount),
+		"--worker-machine-count", fmt.Sprint(*input.WorkerMachineCount),
+		"--flavor", input.Flavor,
+		"--target-namespace", input.Namespace,
+		"--config", input.ClusterctlConfigPath,
+		"--kubeconfig", input.KubeconfigPath,
+	)
+
+	out, err := cmd.Output()
+	_ = ioutil.WriteFile(filepath.Join(input.LogFolder, fmt.Sprintf("%s-cluster-template.yaml", input.ClusterName)), out, 0644) //nolint:gosec // this is a log file to be shared via prow artifacts
+	Expect(err).ToNot(HaveOccurred(), "failed to run clusterctl config cluster")
+
+	return out
 }
 
 // MoveInput is the input for ClusterctlMove.
@@ -152,7 +236,7 @@ func Move(ctx context.Context, input MoveInput) {
 	Expect(input.ClusterctlConfigPath).To(BeAnExistingFile(), "Invalid argument. input.ClusterctlConfigPath must be an existing file when calling Move")
 	Expect(input.FromKubeconfigPath).To(BeAnExistingFile(), "Invalid argument. input.FromKubeconfigPath must be an existing file when calling Move")
 	Expect(input.ToKubeconfigPath).To(BeAnExistingFile(), "Invalid argument. input.ToKubeconfigPath must be an existing file when calling Move")
-	Expect(os.MkdirAll(input.LogFolder, 0755)).To(Succeed(), "Invalid argument. input.LogFolder can't be created for Move")
+	Expect(os.MkdirAll(input.LogFolder, 0750)).To(Succeed(), "Invalid argument. input.LogFolder can't be created for Move")
 
 	By("Moving workload clusters")
 

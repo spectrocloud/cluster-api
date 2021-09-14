@@ -18,7 +18,6 @@ package client
 
 import (
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"strings"
@@ -29,6 +28,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/pointer"
+
 	clusterctlv1 "sigs.k8s.io/cluster-api/cmd/clusterctl/api/v1alpha3"
 	"sigs.k8s.io/cluster-api/cmd/clusterctl/client/cluster"
 	"sigs.k8s.io/cluster-api/cmd/clusterctl/client/config"
@@ -61,6 +61,7 @@ func Test_clusterctlClient_GetProvidersConfig(t *testing.T) {
 				config.TalosBootstrapProviderName,
 				config.AWSEKSControlPlaneProviderName,
 				config.KubeadmControlPlaneProviderName,
+				config.NestedControlPlaneProviderName,
 				config.TalosControlPlaneProviderName,
 				config.AWSProviderName,
 				config.AzureProviderName,
@@ -68,6 +69,7 @@ func Test_clusterctlClient_GetProvidersConfig(t *testing.T) {
 				config.DockerProviderName,
 				config.GCPProviderName,
 				config.Metal3ProviderName,
+				config.NestedProviderName,
 				config.OpenStackProviderName,
 				config.PacketProviderName,
 				config.SideroProviderName,
@@ -89,6 +91,7 @@ func Test_clusterctlClient_GetProvidersConfig(t *testing.T) {
 				config.TalosBootstrapProviderName,
 				config.AWSEKSControlPlaneProviderName,
 				config.KubeadmControlPlaneProviderName,
+				config.NestedControlPlaneProviderName,
 				config.TalosControlPlaneProviderName,
 				config.AWSProviderName,
 				config.AzureProviderName,
@@ -96,6 +99,7 @@ func Test_clusterctlClient_GetProvidersConfig(t *testing.T) {
 				config.DockerProviderName,
 				config.GCPProviderName,
 				config.Metal3ProviderName,
+				config.NestedProviderName,
 				config.OpenStackProviderName,
 				config.PacketProviderName,
 				config.SideroProviderName,
@@ -138,9 +142,8 @@ func Test_clusterctlClient_GetProviderComponents(t *testing.T) {
 		WithRepository(repository1)
 
 	type args struct {
-		provider          string
-		targetNameSpace   string
-		watchingNamespace string
+		provider        string
+		targetNameSpace string
 	}
 	type want struct {
 		provider config.Provider
@@ -155,9 +158,8 @@ func Test_clusterctlClient_GetProviderComponents(t *testing.T) {
 		{
 			name: "Pass",
 			args: args{
-				provider:          capiProviderConfig.Name(),
-				targetNameSpace:   "ns2",
-				watchingNamespace: "",
+				provider:        capiProviderConfig.Name(),
+				targetNameSpace: "ns2",
 			},
 			want: want{
 				provider: capiProviderConfig,
@@ -168,9 +170,8 @@ func Test_clusterctlClient_GetProviderComponents(t *testing.T) {
 		{
 			name: "Fail",
 			args: args{
-				provider:          fmt.Sprintf("%s:v0.2.0", capiProviderConfig.Name()),
-				targetNameSpace:   "ns2",
-				watchingNamespace: "",
+				provider:        fmt.Sprintf("%s:v0.2.0", capiProviderConfig.Name()),
+				targetNameSpace: "ns2",
 			},
 			wantErr: true,
 		},
@@ -180,8 +181,7 @@ func Test_clusterctlClient_GetProviderComponents(t *testing.T) {
 			g := NewWithT(t)
 
 			options := ComponentsOptions{
-				TargetNamespace:   tt.args.targetNameSpace,
-				WatchingNamespace: tt.args.watchingNamespace,
+				TargetNamespace: tt.args.targetNameSpace,
 			}
 			got, err := client.GetProviderComponents(tt.args.provider, capiProviderConfig.Type(), options)
 			if tt.wantErr {
@@ -225,9 +225,8 @@ func Test_getComponentsByName_withEmptyVariables(t *testing.T) {
 		WithCluster(cluster1)
 
 	options := ComponentsOptions{
-		TargetNamespace:   "ns1",
-		WatchingNamespace: "",
-		SkipVariables:     true,
+		TargetNamespace:     "ns1",
+		SkipTemplateProcess: true,
 	}
 	components, err := client.GetProviderComponents(repository1Config.Name(), repository1Config.Type(), options)
 	g.Expect(err).NotTo(HaveOccurred())
@@ -438,12 +437,12 @@ func Test_clusterctlClient_GetClusterTemplate(t *testing.T) {
 	rawTemplate := templateYAML("ns3", "${ CLUSTER_NAME }")
 
 	// Template on a file
-	tmpDir, err := ioutil.TempDir("", "cc")
+	tmpDir, err := os.MkdirTemp("", "cc")
 	g.Expect(err).NotTo(HaveOccurred())
 	defer os.RemoveAll(tmpDir)
 
 	path := filepath.Join(tmpDir, "cluster-template.yaml")
-	g.Expect(ioutil.WriteFile(path, rawTemplate, 0600)).To(Succeed())
+	g.Expect(os.WriteFile(path, rawTemplate, 0600)).To(Succeed())
 
 	// Template on a repository & in a ConfigMap
 	configMap := &corev1.ConfigMap{
@@ -469,7 +468,7 @@ func Test_clusterctlClient_GetClusterTemplate(t *testing.T) {
 		WithFile("v3.0.0", "cluster-template.yaml", rawTemplate)
 
 	cluster1 := newFakeCluster(cluster.Kubeconfig{Path: "kubeconfig", Context: "mgmt-context"}, config1).
-		WithProviderInventory(infraProviderConfig.Name(), infraProviderConfig.Type(), "v3.0.0", "foo", "bar").
+		WithProviderInventory(infraProviderConfig.Name(), infraProviderConfig.Type(), "v3.0.0", "foo").
 		WithObjs(configMap).
 		WithObjs(test.FakeCAPISetupObjects()...)
 
@@ -621,12 +620,12 @@ func Test_clusterctlClient_GetClusterTemplate_onEmptyCluster(t *testing.T) {
 	rawTemplate := templateYAML("ns3", "${ CLUSTER_NAME }")
 
 	// Template on a file
-	tmpDir, err := ioutil.TempDir("", "cc")
+	tmpDir, err := os.MkdirTemp("", "cc")
 	g.Expect(err).NotTo(HaveOccurred())
 	defer os.RemoveAll(tmpDir)
 
 	path := filepath.Join(tmpDir, "cluster-template.yaml")
-	g.Expect(ioutil.WriteFile(path, rawTemplate, 0600)).To(Succeed())
+	g.Expect(os.WriteFile(path, rawTemplate, 0600)).To(Succeed())
 
 	// Template in a ConfigMap in a cluster not initialized
 	configMap := &corev1.ConfigMap{
@@ -888,12 +887,12 @@ func Test_clusterctlClient_ProcessYAML(t *testing.T) {
 	template := `v1: ${VAR1:=default1}
 v2: ${VAR2=default2}
 v3: ${VAR3:-default3}`
-	dir, err := ioutil.TempDir("", "clusterctl")
+	dir, err := os.MkdirTemp("", "clusterctl")
 	g.Expect(err).NotTo(HaveOccurred())
 	defer os.RemoveAll(dir)
 
 	templateFile := filepath.Join(dir, "template.yaml")
-	g.Expect(ioutil.WriteFile(templateFile, []byte(template), 0600)).To(Succeed())
+	g.Expect(os.WriteFile(templateFile, []byte(template), 0600)).To(Succeed())
 
 	inputReader := strings.NewReader(template)
 
@@ -910,7 +909,7 @@ v3: ${VAR3:-default3}`
 				URLSource: &URLSourceOptions{
 					URL: templateFile,
 				},
-				ListVariablesOnly: false,
+				SkipTemplateProcess: false,
 			},
 			expectErr: false,
 			expectedYaml: `v1: default1
@@ -919,12 +918,12 @@ v3: default3`,
 			expectedVars: []string{"VAR1", "VAR2", "VAR3"},
 		},
 		{
-			name: "returns the expected variables only if ListVariablesOnly is set",
+			name: "returns the expected variables only if SkipTemplateProcess is set",
 			options: ProcessYAMLOptions{
 				URLSource: &URLSourceOptions{
 					URL: templateFile,
 				},
-				ListVariablesOnly: true,
+				SkipTemplateProcess: true,
 			},
 			expectErr:    false,
 			expectedYaml: ``,
@@ -941,7 +940,7 @@ v3: default3`,
 				ReaderSource: &ReaderSourceOptions{
 					Reader: inputReader,
 				},
-				ListVariablesOnly: false,
+				SkipTemplateProcess: false,
 			},
 			expectErr: false,
 			expectedYaml: `v1: default1
@@ -955,7 +954,7 @@ v3: default3`,
 				ReaderSource: &ReaderSourceOptions{
 					Reader: &errReader{},
 				},
-				ListVariablesOnly: false,
+				SkipTemplateProcess: false,
 			},
 			expectErr: true,
 		},
@@ -981,10 +980,8 @@ v3: default3`,
 
 			expectedVars := printer.Variables()
 			g.Expect(expectedVars).To(ConsistOf(tt.expectedVars))
-
 		})
 	}
-
 }
 
 // errReader returns a non-EOF error on the first read.

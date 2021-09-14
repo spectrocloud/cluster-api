@@ -18,6 +18,7 @@ package client
 
 import (
 	clusterctlv1 "sigs.k8s.io/cluster-api/cmd/clusterctl/api/v1alpha3"
+	"sigs.k8s.io/cluster-api/cmd/clusterctl/client/alpha"
 	"sigs.k8s.io/cluster-api/cmd/clusterctl/client/cluster"
 	"sigs.k8s.io/cluster-api/cmd/clusterctl/client/config"
 	"sigs.k8s.io/cluster-api/cmd/clusterctl/client/repository"
@@ -29,7 +30,7 @@ type Client interface {
 	// GetProvidersConfig returns the list of providers configured for this instance of clusterctl.
 	GetProvidersConfig() ([]Provider, error)
 
-	// GetProviderComponents returns the provider components for a given provider with options including targetNamespace, watchingNamespace.
+	// GetProviderComponents returns the provider components for a given provider with options including targetNamespace.
 	GetProviderComponents(provider string, providerType clusterctlv1.ProviderType, options ComponentsOptions) (Components, error)
 
 	// Init initializes a management cluster by adding the requested list of providers.
@@ -50,11 +51,15 @@ type Client interface {
 	// Move moves all the Cluster API objects existing in a namespace (or from all the namespaces if empty) to a target management cluster.
 	Move(options MoveOptions) error
 
+	// Backup saves all the Cluster API objects existing in a namespace (or from all the namespaces if empty) to a target management cluster.
+	Backup(options BackupOptions) error
+
+	// Restore restores all the Cluster API objects existing in a configured directory based on a glob to a target management cluster.
+	Restore(options RestoreOptions) error
+
 	// PlanUpgrade returns a set of suggested Upgrade plans for the cluster, and more specifically:
-	// - Each management group gets separated upgrade plans.
-	// - For each management group, an upgrade plan is generated for each API Version of Cluster API (contract) available, e.g.
-	//   - Upgrade to the latest version in the the v1alpha2 series: ....
-	//   - Upgrade to the latest version in the the v1alpha3 series: ....
+	// - Upgrade to the latest version in the the v1alpha3 series: ....
+	// - Upgrade to the latest version in the the v1alpha4 series: ....
 	PlanUpgrade(options PlanUpgradeOptions) ([]UpgradePlan, error)
 
 	// PlanCertManagerUpgrade returns a CertManagerUpgradePlan.
@@ -69,6 +74,21 @@ type Client interface {
 
 	// DescribeCluster returns the object tree representing the status of a Cluster API cluster.
 	DescribeCluster(options DescribeClusterOptions) (*tree.ObjectTree, error)
+
+	// Interface for alpha features in clusterctl
+	AlphaClient
+}
+
+// AlphaClient exposes the alpha features in clusterctl high-level client library.
+type AlphaClient interface {
+	// RolloutRestart provides rollout restart of cluster-api resources
+	RolloutRestart(options RolloutOptions) error
+	// RolloutPause provides rollout pause of cluster-api resources
+	RolloutPause(options RolloutOptions) error
+	// RolloutResume provides rollout resume of paused cluster-api resources
+	RolloutResume(options RolloutOptions) error
+	// RolloutUndo provides rollout rollback of cluster-api resources
+	RolloutUndo(options RolloutOptions) error
 }
 
 // YamlPrinter exposes methods that prints the processed template and
@@ -86,28 +106,31 @@ type clusterctlClient struct {
 	configClient            config.Client
 	repositoryClientFactory RepositoryClientFactory
 	clusterClientFactory    ClusterClientFactory
+	alphaClient             alpha.Client
 }
 
-// RepositoryClientFactoryInput represents the inputs required by the
-// RepositoryClientFactory
+// RepositoryClientFactoryInput represents the inputs required by the factory.
 type RepositoryClientFactoryInput struct {
 	Provider  Provider
 	Processor Processor
 }
+
+// RepositoryClientFactory is a factory of repository.Client from a given input.
 type RepositoryClientFactory func(RepositoryClientFactoryInput) (repository.Client, error)
 
-// ClusterClientFactoryInput reporesents the inputs required by the
-// ClusterClientFactory
+// ClusterClientFactoryInput reporesents the inputs required by the factory.
 type ClusterClientFactoryInput struct {
 	Kubeconfig Kubeconfig
 	Processor  Processor
 }
+
+// ClusterClientFactory is a factory of cluster.Client from a given input.
 type ClusterClientFactory func(ClusterClientFactoryInput) (cluster.Client, error)
 
 // Ensure clusterctlClient implements Client.
 var _ Client = &clusterctlClient{}
 
-// Option is a configuration option supplied to New
+// Option is a configuration option supplied to New.
 type Option func(*clusterctlClient)
 
 // InjectConfig allows to override the default configuration client used by clusterctl.
@@ -162,6 +185,12 @@ func newClusterctlClient(path string, options ...Option) (*clusterctlClient, err
 	// if there is an injected ClusterFactory, use it, otherwise use a default one.
 	if client.clusterClientFactory == nil {
 		client.clusterClientFactory = defaultClusterFactory(client.configClient)
+	}
+
+	// if there is an injected alphaClient, use it, otherwise use a default one.
+	if client.alphaClient == nil {
+		c := alpha.New()
+		client.alphaClient = c
 	}
 
 	return client, nil

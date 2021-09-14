@@ -18,7 +18,6 @@ package cmd
 
 import (
 	"fmt"
-	"io/ioutil"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -28,7 +27,7 @@ import (
 	. "github.com/onsi/gomega"
 	"k8s.io/client-go/util/homedir"
 	"sigs.k8s.io/cluster-api/cmd/clusterctl/internal/test"
-	"sigs.k8s.io/cluster-api/cmd/version"
+	"sigs.k8s.io/cluster-api/version"
 	"sigs.k8s.io/yaml"
 )
 
@@ -44,7 +43,6 @@ func TestVersionChecker_newVersionChecker(t *testing.T) {
 }
 
 func TestVersionChecker(t *testing.T) {
-
 	tests := []struct {
 		name           string
 		cliVersion     func() version.Info
@@ -282,7 +280,7 @@ func TestVersionChecker_WriteStateFile(t *testing.T) {
 	g.Expect(err).ToNot(HaveOccurred())
 	// ensure that the state file has been created
 	g.Expect(tmpVersionFile).Should(BeARegularFile())
-	fb, err := ioutil.ReadFile(tmpVersionFile)
+	fb, err := os.ReadFile(tmpVersionFile)
 	g.Expect(err).ToNot(HaveOccurred())
 	var actualVersionState VersionState
 	g.Expect(yaml.Unmarshal(fb, &actualVersionState)).To(Succeed())
@@ -314,7 +312,7 @@ func TestVersionChecker_ReadFromStateFile(t *testing.T) {
 	g.Expect(err).ToNot(HaveOccurred())
 
 	// override the github client with response to a new version v0.3.99
-	var githubCalled bool = false
+	var githubCalled bool
 	fakeGithubClient2, mux2, cleanup2 := test.NewFakeGitHub()
 	mux2.HandleFunc(
 		"/repos/kubernetes-sigs/cluster-api/releases/latest",
@@ -376,12 +374,13 @@ func TestVersionChecker_ReadFromStateFileWithin24Hrs(t *testing.T) {
 }
 
 func generateTempVersionFilePath(g *WithT) (string, func()) {
-	dir, err := ioutil.TempDir("", "clusterctl")
+	dir, err := os.MkdirTemp("", "clusterctl")
 	g.Expect(err).NotTo(HaveOccurred())
 	// don't create the state file, just have a path to the file
 	tmpVersionFile := filepath.Join(dir, "clusterctl", "state.yaml")
 
 	return tmpVersionFile, func() {
-		os.RemoveAll(dir)
+		// We don't want to fail if the deletion of the temp file fails, so we ignore the error here
+		_ = os.RemoveAll(dir)
 	}
 }

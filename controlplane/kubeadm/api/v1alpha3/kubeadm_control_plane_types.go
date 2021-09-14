@@ -35,15 +35,20 @@ const (
 )
 
 const (
+	// KubeadmControlPlaneFinalizer is the finalizer applied to KubeadmControlPlane resources
+	// by its managing controller.
 	KubeadmControlPlaneFinalizer = "kubeadm.controlplane.cluster.x-k8s.io"
 
-	// DEPRECATED: This label has been deprecated and it's not in use anymore.
+	// KubeadmControlPlaneHashLabelKey was used to determine the hash of the
+	// template used to generate a control plane machine.
+	//
+	// Deprecated: This label has been deprecated and it's not in use anymore.
 	KubeadmControlPlaneHashLabelKey = "kubeadm.controlplane.cluster.x-k8s.io/hash"
 
-	// SkipCoreDNSAnnotation annotation explicitly skips reconciling CoreDNS if set
+	// SkipCoreDNSAnnotation annotation explicitly skips reconciling CoreDNS if set.
 	SkipCoreDNSAnnotation = "controlplane.cluster.x-k8s.io/skip-coredns"
 
-	// SkipKubeProxyAnnotation annotation explicitly skips reconciling kube-proxy if set
+	// SkipKubeProxyAnnotation annotation explicitly skips reconciling kube-proxy if set.
 	SkipKubeProxyAnnotation = "controlplane.cluster.x-k8s.io/skip-kube-proxy"
 
 	// KubeadmClusterConfigurationAnnotation is a machine annotation that stores the json-marshalled string of KCP ClusterConfiguration.
@@ -179,7 +184,6 @@ type KubeadmControlPlaneStatus struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:resource:path=kubeadmcontrolplanes,shortName=kcp,scope=Namespaced,categories=cluster-api
-// +kubebuilder:storageversion
 // +kubebuilder:subresource:status
 // +kubebuilder:subresource:scale:specpath=.spec.replicas,statuspath=.status.replicas,selectorpath=.status.selector
 // +kubebuilder:printcolumn:name="Initialized",type=boolean,JSONPath=".status.initialized",description="This denotes whether or not the control plane has the uploaded kubeadm-config configmap"
@@ -199,10 +203,12 @@ type KubeadmControlPlane struct {
 	Status KubeadmControlPlaneStatus `json:"status,omitempty"`
 }
 
+// GetConditions returns the set of conditions for this object.
 func (in *KubeadmControlPlane) GetConditions() clusterv1.Conditions {
 	return in.Status.Conditions
 }
 
+// SetConditions sets the conditions on this object.
 func (in *KubeadmControlPlane) SetConditions(conditions clusterv1.Conditions) {
 	in.Status.Conditions = conditions
 }

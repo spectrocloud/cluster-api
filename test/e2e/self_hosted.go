@@ -28,7 +28,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/utils/pointer"
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha3"
+	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha4"
 	"sigs.k8s.io/cluster-api/test/e2e/internal/log"
 	"sigs.k8s.io/cluster-api/test/framework"
 	"sigs.k8s.io/cluster-api/test/framework/bootstrap"
@@ -66,18 +66,18 @@ func SelfHostedSpec(ctx context.Context, inputGetter func() SelfHostedSpecInput)
 		Expect(input.E2EConfig).ToNot(BeNil(), "Invalid argument. input.E2EConfig can't be nil when calling %s spec", specName)
 		Expect(input.ClusterctlConfigPath).To(BeAnExistingFile(), "Invalid argument. input.ClusterctlConfigPath must be an existing file when calling %s spec", specName)
 		Expect(input.BootstrapClusterProxy).ToNot(BeNil(), "Invalid argument. input.BootstrapClusterProxy can't be nil when calling %s spec", specName)
-		Expect(os.MkdirAll(input.ArtifactFolder, 0755)).To(Succeed(), "Invalid argument. input.ArtifactFolder can't be created for %s spec", specName)
+		Expect(os.MkdirAll(input.ArtifactFolder, 0750)).To(Succeed(), "Invalid argument. input.ArtifactFolder can't be created for %s spec", specName)
 		Expect(input.E2EConfig.Variables).To(HaveKey(KubernetesVersion))
 
 		// Setup a Namespace where to host objects for this spec and create a watcher for the namespace events.
-		namespace, cancelWatches = setupSpecNamespace(context.TODO(), specName, input.BootstrapClusterProxy, input.ArtifactFolder)
+		namespace, cancelWatches = setupSpecNamespace(ctx, specName, input.BootstrapClusterProxy, input.ArtifactFolder)
+		clusterResources = new(clusterctl.ApplyClusterTemplateAndWaitResult)
 	})
 
 	It("Should pivot the bootstrap cluster to a self-hosted cluster", func() {
-
 		By("Creating a workload cluster")
 
-		clusterResources = clusterctl.ApplyClusterTemplateAndWait(context.TODO(), clusterctl.ApplyClusterTemplateAndWaitInput{
+		clusterctl.ApplyClusterTemplateAndWait(ctx, clusterctl.ApplyClusterTemplateAndWaitInput{
 			ClusterProxy: input.BootstrapClusterProxy,
 			ConfigCluster: clusterctl.ConfigClusterInput{
 				LogFolder:                filepath.Join(input.ArtifactFolder, "clusters", input.BootstrapClusterProxy.GetName()),
@@ -94,7 +94,7 @@ func SelfHostedSpec(ctx context.Context, inputGetter func() SelfHostedSpecInput)
 			WaitForClusterIntervals:      input.E2EConfig.GetIntervals(specName, "wait-cluster"),
 			WaitForControlPlaneIntervals: input.E2EConfig.GetIntervals(specName, "wait-control-plane"),
 			WaitForMachineDeployments:    input.E2EConfig.GetIntervals(specName, "wait-worker-nodes"),
-		})
+		}, clusterResources)
 
 		By("Turning the workload cluster into a management cluster")
 
@@ -103,17 +103,17 @@ func SelfHostedSpec(ctx context.Context, inputGetter func() SelfHostedSpecInput)
 		// this approach because this allows to have a single source of truth for images, the e2e config
 		cluster := clusterResources.Cluster
 		if cluster.Spec.InfrastructureRef.Kind == "DockerCluster" {
-			Expect(bootstrap.LoadImagesToKindCluster(context.TODO(), bootstrap.LoadImagesToKindClusterInput{
+			Expect(bootstrap.LoadImagesToKindCluster(ctx, bootstrap.LoadImagesToKindClusterInput{
 				Name:   cluster.Name,
 				Images: input.E2EConfig.Images,
 			})).To(Succeed())
 		}
 
 		// Get a ClusterBroker so we can interact with the workload cluster
-		selfHostedClusterProxy = input.BootstrapClusterProxy.GetWorkloadCluster(context.TODO(), cluster.Namespace, cluster.Name)
+		selfHostedClusterProxy = input.BootstrapClusterProxy.GetWorkloadCluster(ctx, cluster.Namespace, cluster.Name)
 
 		Byf("Creating a namespace for hosting the %s test spec", specName)
-		selfHostedNamespace, selfHostedCancelWatches = framework.CreateNamespaceAndWatchEvents(context.TODO(), framework.CreateNamespaceAndWatchEventsInput{
+		selfHostedNamespace, selfHostedCancelWatches = framework.CreateNamespaceAndWatchEvents(ctx, framework.CreateNamespaceAndWatchEventsInput{
 			Creator:   selfHostedClusterProxy.GetClient(),
 			ClientSet: selfHostedClusterProxy.GetClientSet(),
 			Name:      namespace.Name,
@@ -121,7 +121,7 @@ func SelfHostedSpec(ctx context.Context, inputGetter func() SelfHostedSpecInput)
 		})
 
 		By("Initializing the workload cluster")
-		clusterctl.InitManagementClusterAndWatchControllerLogs(context.TODO(), clusterctl.InitManagementClusterAndWatchControllerLogsInput{
+		clusterctl.InitManagementClusterAndWatchControllerLogs(ctx, clusterctl.InitManagementClusterAndWatchControllerLogsInput{
 			ClusterProxy:            selfHostedClusterProxy,
 			ClusterctlConfigPath:    input.ClusterctlConfigPath,
 			InfrastructureProviders: input.E2EConfig.InfrastructureProviders(),
@@ -142,7 +142,7 @@ func SelfHostedSpec(ctx context.Context, inputGetter func() SelfHostedSpecInput)
 		}, "5s", "100ms").Should(BeNil(), "Failed to assert self-hosted API server stability")
 
 		By("Moving the cluster to self hosted")
-		clusterctl.Move(context.TODO(), clusterctl.MoveInput{
+		clusterctl.Move(ctx, clusterctl.MoveInput{
 			LogFolder:            filepath.Join(input.ArtifactFolder, "clusters", "bootstrap"),
 			ClusterctlConfigPath: input.ClusterctlConfigPath,
 			FromKubeconfigPath:   input.BootstrapClusterProxy.GetKubeconfigPath(),

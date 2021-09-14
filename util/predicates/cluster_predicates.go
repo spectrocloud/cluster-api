@@ -14,17 +14,18 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// Package predicates implements predicate utilities.
 package predicates
 
 import (
 	"github.com/go-logr/logr"
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha3"
+	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha4"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 )
 
 // ClusterCreateInfraReady returns a predicate that returns true for a create event when a cluster has Status.InfrastructureReady set as true
-// it also returns true if the resource provided is not a Cluster to allow for use with controller-runtime NewControllerManagedBy
+// it also returns true if the resource provided is not a Cluster to allow for use with controller-runtime NewControllerManagedBy.
 func ClusterCreateInfraReady(logger logr.Logger) predicate.Funcs {
 	return predicate.Funcs{
 		CreateFunc: func(e event.CreateEvent) bool {
@@ -32,7 +33,6 @@ func ClusterCreateInfraReady(logger logr.Logger) predicate.Funcs {
 
 			c, ok := e.Object.(*clusterv1.Cluster)
 			if !ok {
-
 				log.V(4).Info("Expected Cluster", "type", e.Object.GetObjectKind().GroupVersionKind().String())
 				return false
 			}
@@ -54,7 +54,7 @@ func ClusterCreateInfraReady(logger logr.Logger) predicate.Funcs {
 }
 
 // ClusterCreateNotPaused returns a predicate that returns true for a create event when a cluster has Spec.Paused set as false
-// it also returns true if the resource provided is not a Cluster to allow for use with controller-runtime NewControllerManagedBy
+// it also returns true if the resource provided is not a Cluster to allow for use with controller-runtime NewControllerManagedBy.
 func ClusterCreateNotPaused(logger logr.Logger) predicate.Funcs {
 	return predicate.Funcs{
 		CreateFunc: func(e event.CreateEvent) bool {
@@ -83,7 +83,7 @@ func ClusterCreateNotPaused(logger logr.Logger) predicate.Funcs {
 }
 
 // ClusterUpdateInfraReady returns a predicate that returns true for an update event when a cluster has Status.InfrastructureReady changed from false to true
-// it also returns true if the resource provided is not a Cluster to allow for use with controller-runtime NewControllerManagedBy
+// it also returns true if the resource provided is not a Cluster to allow for use with controller-runtime NewControllerManagedBy.
 func ClusterUpdateInfraReady(logger logr.Logger) predicate.Funcs {
 	return predicate.Funcs{
 		UpdateFunc: func(e event.UpdateEvent) bool {
@@ -91,7 +91,6 @@ func ClusterUpdateInfraReady(logger logr.Logger) predicate.Funcs {
 
 			oldCluster, ok := e.ObjectOld.(*clusterv1.Cluster)
 			if !ok {
-
 				log.V(4).Info("Expected Cluster", "type", e.ObjectOld.GetObjectKind().GroupVersionKind().String())
 				return false
 			}
@@ -114,7 +113,7 @@ func ClusterUpdateInfraReady(logger logr.Logger) predicate.Funcs {
 }
 
 // ClusterUpdateUnpaused returns a predicate that returns true for an update event when a cluster has Spec.Paused changed from true to false
-// it also returns true if the resource provided is not a Cluster to allow for use with controller-runtime NewControllerManagedBy
+// it also returns true if the resource provided is not a Cluster to allow for use with controller-runtime NewControllerManagedBy.
 func ClusterUpdateUnpaused(logger logr.Logger) predicate.Funcs {
 	return predicate.Funcs{
 		UpdateFunc: func(e event.UpdateEvent) bool {
@@ -122,7 +121,6 @@ func ClusterUpdateUnpaused(logger logr.Logger) predicate.Funcs {
 
 			oldCluster, ok := e.ObjectOld.(*clusterv1.Cluster)
 			if !ok {
-
 				log.V(4).Info("Expected Cluster", "type", e.ObjectOld.GetObjectKind().GroupVersionKind().String())
 				return false
 			}

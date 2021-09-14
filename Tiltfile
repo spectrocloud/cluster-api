@@ -71,20 +71,19 @@ providers = {
         "image": "gcr.io/k8s-staging-cluster-api/capd-manager",
         "live_reload_deps": [
             "main.go",
-            "go.mod",
-            "go.sum",
+            "../../go.mod",
+            "../../go.sum",
             "api",
             "cloudinit",
             "controllers",
             "docker",
+            "exp",
             "third_party",
         ],
         "additional_docker_helper_commands": """
-RUN wget -qO- https://dl.k8s.io/v1.14.4/kubernetes-client-linux-amd64.tar.gz | tar xvz
-RUN wget -qO- https://get.docker.com | sh
+RUN wget -qO- https://dl.k8s.io/v1.21.2/kubernetes-client-linux-amd64.tar.gz | tar xvz
 """,
         "additional_docker_build_commands": """
-COPY --from=tilt-helper /usr/bin/docker /usr/bin/docker
 COPY --from=tilt-helper /go/kubernetes/client/bin/kubectl /usr/bin/kubectl
 """,
     },
@@ -125,7 +124,7 @@ def load_provider_tiltfiles():
 
 tilt_helper_dockerfile_header = """
 # Tilt image
-FROM golang:1.13.15 as tilt-helper
+FROM golang:1.16.6 as tilt-helper
 # Support live reloading with Tilt
 RUN wget --output-document /restart.sh --quiet https://raw.githubusercontent.com/windmilleng/rerun-process-wrapper/master/restart.sh  && \
     wget --output-document /start.sh --quiet https://raw.githubusercontent.com/windmilleng/rerun-process-wrapper/master/start.sh && \
@@ -140,38 +139,11 @@ COPY --from=tilt-helper /restart.sh .
 COPY manager .
 """
 
-cert_manager_test_resources = """
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: cert-manager-test
----
-apiVersion: cert-manager.io/v1alpha2
-kind: Issuer
-metadata:
-  name: test-selfsigned
-  namespace: cert-manager-test
-spec:
-  selfSigned: {}
----
-apiVersion: cert-manager.io/v1alpha2
-kind: Certificate
-metadata:
-  name: selfsigned-cert
-  namespace: cert-manager-test
-spec:
-  dnsNames:
-    - example.com
-  secretName: selfsigned-cert-tls
-  issuerRef:
-    name: test-selfsigned
-"""
-
 # Configures a provider by doing the following:
 #
 # 1. Enables a local_resource go build of the provider's manager binary
 # 2. Configures a docker build for the provider, with live updating of the manager binary
-# 3. Runs kustomize for the provider's config/ and applies it
+# 3. Runs kustomize for the provider's config/default and applies it
 def enable_provider(name):
     p = providers.get(name)
 
@@ -231,41 +203,8 @@ def enable_provider(name):
         os.environ.update(substitutions)
 
         # Apply the kustomized yaml for this provider
-        yaml = str(kustomize_with_envsubst(context + "/config"))
+        yaml = str(kustomize_with_envsubst(context + "/config/default"))
         k8s_yaml(blob(yaml))
-
-# Prepull all the cert-manager images to your local environment and then load them directly into kind. This speeds up
-# setup if you're repeatedly destroying and recreating your kind cluster, as it doesn't have to pull the images over
-# the network each time.
-def deploy_cert_manager():
-    registry = settings.get("cert_manager_registry", "quay.io/jetstack")
-    version = settings.get("cert_manager_version", "v1.1.0")
-
-    # check if cert-mamager is already installed, otherwise pre-load images & apply the manifest
-    # NB. this is required until https://github.com/jetstack/cert-manager/issues/3121 is addressed otherwise
-    # when applying the manifest twice to same cluster kubectl get stuck
-    existsCheck = str(local("kubectl get namespaces"))
-    if existsCheck.find("cert-manager") == -1:
-        # pre-load cert-manager images in kind
-        images = ["cert-manager-controller", "cert-manager-cainjector", "cert-manager-webhook"]
-        if settings.get("preload_images_for_kind"):
-            for image in images:
-                local("docker pull {}/{}:{}".format(registry, image, version))
-                local("kind load docker-image --name {} {}/{}:{}".format(settings.get("kind_cluster_name"), registry, image, version))
-
-        # apply the cert-manager manifest
-        local("kubectl apply -f https://github.com/jetstack/cert-manager/releases/download/{}/cert-manager.yaml".format(version))
-
-    # verifies cert-manager is properly working (https://cert-manager.io/docs/installation/kubernetes/#verifying-the-installation)
-    # 1. wait for the cert-manager to be running
-    local("kubectl wait --for=condition=Available --timeout=300s -n cert-manager deployment/cert-manager")
-    local("kubectl wait --for=condition=Available --timeout=300s -n cert-manager deployment/cert-manager-cainjector")
-    local("kubectl wait --for=condition=Available --timeout=300s -n cert-manager deployment/cert-manager-webhook")
-
-    # 2. create a test certificate
-    local("cat << EOF | kubectl apply -f - " + cert_manager_test_resources + "EOF")
-    local("kubectl wait --for=condition=Ready --timeout=300s -n cert-manager-test certificate/selfsigned-cert ")
-    local("cat << EOF | kubectl delete -f - " + cert_manager_test_resources + "EOF")
 
 # Users may define their own Tilt customizations in tilt.d. This directory is excluded from git and these files will
 # not be checked in to version control.
@@ -292,7 +231,9 @@ include_user_tilt_files()
 
 load_provider_tiltfiles()
 
+load("ext://cert_manager", "deploy_cert_manager")
+
 if settings.get("deploy_cert_manager"):
-    deploy_cert_manager()
+    deploy_cert_manager(version = "v1.5.0")
 
 enable_providers()

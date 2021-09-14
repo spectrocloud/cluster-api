@@ -21,7 +21,7 @@ import (
 	"time"
 
 	"github.com/pkg/errors"
-	v1 "k8s.io/api/core/v1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	bootstrapapi "k8s.io/cluster-bootstrap/token/api"
 	bootstraputil "k8s.io/cluster-bootstrap/token/util"
@@ -29,12 +29,12 @@ import (
 )
 
 var (
-	// DefaultTokenTTL is the amount of time a bootstrap token (and therefore a KubeadmConfig) will be valid
+	// DefaultTokenTTL is the amount of time a bootstrap token (and therefore a KubeadmConfig) will be valid.
 	DefaultTokenTTL = 15 * time.Minute
 )
 
 // createToken attempts to create a token with the given ID.
-func createToken(c client.Client) (string, error) {
+func createToken(ctx context.Context, c client.Client) (string, error) {
 	token, err := bootstraputil.GenerateBootstrapToken()
 	if err != nil {
 		return "", errors.Wrap(err, "unable to generate bootstrap token")
@@ -48,7 +48,7 @@ func createToken(c client.Client) (string, error) {
 	tokenSecret := substrs[2]
 
 	secretName := bootstraputil.BootstrapTokenSecretName(tokenID)
-	secretToken := &v1.Secret{
+	secretToken := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      secretName,
 			Namespace: metav1.NamespaceSystem,
@@ -65,14 +65,14 @@ func createToken(c client.Client) (string, error) {
 		},
 	}
 
-	if err = c.Create(context.TODO(), secretToken); err != nil {
+	if err = c.Create(ctx, secretToken); err != nil {
 		return "", err
 	}
 	return token, nil
 }
 
 // getToken fetches the token Secret and returns an error if it is invalid.
-func getToken(c client.Client, token string) (*v1.Secret, error) {
+func getToken(ctx context.Context, c client.Client, token string) (*corev1.Secret, error) {
 	substrs := bootstraputil.BootstrapTokenRegexp.FindStringSubmatch(token)
 	if len(substrs) != 3 {
 		return nil, errors.Errorf("the bootstrap token %q was not of the form %q", token, bootstrapapi.BootstrapTokenPattern)
@@ -80,8 +80,8 @@ func getToken(c client.Client, token string) (*v1.Secret, error) {
 	tokenID := substrs[1]
 
 	secretName := bootstraputil.BootstrapTokenSecretName(tokenID)
-	secret := &v1.Secret{}
-	if err := c.Get(context.TODO(), client.ObjectKey{Name: secretName, Namespace: metav1.NamespaceSystem}, secret); err != nil {
+	secret := &corev1.Secret{}
+	if err := c.Get(ctx, client.ObjectKey{Name: secretName, Namespace: metav1.NamespaceSystem}, secret); err != nil {
 		return secret, err
 	}
 
@@ -92,19 +92,19 @@ func getToken(c client.Client, token string) (*v1.Secret, error) {
 }
 
 // refreshToken extends the TTL for an existing token.
-func refreshToken(c client.Client, token string) error {
-	secret, err := getToken(c, token)
+func refreshToken(ctx context.Context, c client.Client, token string) error {
+	secret, err := getToken(ctx, c, token)
 	if err != nil {
 		return err
 	}
 	secret.Data[bootstrapapi.BootstrapTokenExpirationKey] = []byte(time.Now().UTC().Add(DefaultTokenTTL).Format(time.RFC3339))
 
-	return c.Update(context.TODO(), secret)
+	return c.Update(ctx, secret)
 }
 
 // shouldRotate returns true if an existing token is past half of its TTL and should to be rotated.
-func shouldRotate(c client.Client, token string) (bool, error) {
-	secret, err := getToken(c, token)
+func shouldRotate(ctx context.Context, c client.Client, token string) (bool, error) {
+	secret, err := getToken(ctx, c, token)
 	if err != nil {
 		return false, err
 	}

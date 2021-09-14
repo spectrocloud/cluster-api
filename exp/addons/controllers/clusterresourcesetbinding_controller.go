@@ -18,11 +18,11 @@ package controllers
 
 import (
 	"context"
-	"github.com/go-logr/logr"
+
 	"github.com/pkg/errors"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha3"
-	addonsv1 "sigs.k8s.io/cluster-api/exp/addons/api/v1alpha3"
+	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha4"
+	addonsv1 "sigs.k8s.io/cluster-api/exp/addons/api/v1alpha4"
 	"sigs.k8s.io/cluster-api/util"
 	"sigs.k8s.io/cluster-api/util/predicates"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -35,21 +35,21 @@ import (
 
 // +kubebuilder:rbac:groups=addons.cluster.x-k8s.io,resources=*,verbs=get;list;watch;create;update;patch;delete
 
-// ClusterResourceSetBindingReconciler reconciles a ClusterResourceSetBinding object
+// ClusterResourceSetBindingReconciler reconciles a ClusterResourceSetBinding object.
 type ClusterResourceSetBindingReconciler struct {
-	Client client.Client
-	Log    logr.Logger
+	Client           client.Client
+	WatchFilterValue string
 }
 
-func (r *ClusterResourceSetBindingReconciler) SetupWithManager(mgr ctrl.Manager, options controller.Options) error {
+func (r *ClusterResourceSetBindingReconciler) SetupWithManager(ctx context.Context, mgr ctrl.Manager, options controller.Options) error {
 	_, err := ctrl.NewControllerManagedBy(mgr).
 		For(&addonsv1.ClusterResourceSetBinding{}).
 		Watches(
 			&source.Kind{Type: &clusterv1.Cluster{}},
-			&handler.EnqueueRequestsFromMapFunc{ToRequests: handler.ToRequestsFunc(r.clusterToClusterResourceSetBinding)},
+			handler.EnqueueRequestsFromMapFunc(r.clusterToClusterResourceSetBinding),
 		).
 		WithOptions(options).
-		WithEventFilter(predicates.ResourceNotPaused(r.Log)).
+		WithEventFilter(predicates.ResourceNotPausedAndHasFilterLabel(ctrl.LoggerFrom(ctx), r.WatchFilterValue)).
 		Build(r)
 	if err != nil {
 		return errors.Wrap(err, "failed setting up with a controller manager")
@@ -58,9 +58,8 @@ func (r *ClusterResourceSetBindingReconciler) SetupWithManager(mgr ctrl.Manager,
 	return nil
 }
 
-func (r *ClusterResourceSetBindingReconciler) Reconcile(req ctrl.Request) (_ ctrl.Result, reterr error) {
-	ctx := context.Background()
-	log := r.Log.WithValues("clusterresourcesetbinding", req.NamespacedName)
+func (r *ClusterResourceSetBindingReconciler) Reconcile(ctx context.Context, req ctrl.Request) (_ ctrl.Result, reterr error) {
+	log := ctrl.LoggerFrom(ctx)
 
 	// Fetch the ClusterResourceSetBinding instance.
 	binding := &addonsv1.ClusterResourceSetBinding{}
@@ -89,13 +88,13 @@ func (r *ClusterResourceSetBindingReconciler) Reconcile(req ctrl.Request) (_ ctr
 	return ctrl.Result{}, nil
 }
 
-// clusterToClusterResourceSetBinding is mapper function that maps clusters to ClusterResourceSetBinding
-func (r *ClusterResourceSetBindingReconciler) clusterToClusterResourceSetBinding(o handler.MapObject) []ctrl.Request {
+// clusterToClusterResourceSetBinding is mapper function that maps clusters to ClusterResourceSetBinding.
+func (r *ClusterResourceSetBindingReconciler) clusterToClusterResourceSetBinding(o client.Object) []ctrl.Request {
 	return []reconcile.Request{
 		{
 			NamespacedName: client.ObjectKey{
-				Namespace: o.Meta.GetNamespace(),
-				Name:      o.Meta.GetName(),
+				Namespace: o.GetNamespace(),
+				Name:      o.GetName(),
 			},
 		},
 	}

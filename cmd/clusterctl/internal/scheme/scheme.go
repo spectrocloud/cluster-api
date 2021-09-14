@@ -14,19 +14,23 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// Package scheme implements clusterctl scheme functionality.
 package scheme
 
 import (
+	admissionregistration "k8s.io/api/admissionregistration/v1"
+	admissionregistrationv1beta1 "k8s.io/api/admissionregistration/v1beta1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	apiextensionsv1beta1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1beta1"
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha3"
+	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha4"
 	clusterctlv1 "sigs.k8s.io/cluster-api/cmd/clusterctl/api/v1alpha3"
-	addonsv1alpha3 "sigs.k8s.io/cluster-api/exp/addons/api/v1alpha3"
+	addonsv1 "sigs.k8s.io/cluster-api/exp/addons/api/v1alpha4"
 )
 
 var (
-	// Scheme contains a set of API resources used by clusterctl
+	// Scheme contains a set of API resources used by clusterctl.
 	Scheme = runtime.NewScheme()
 )
 
@@ -35,5 +39,8 @@ func init() {
 	_ = clusterctlv1.AddToScheme(Scheme)
 	_ = clusterv1.AddToScheme(Scheme)
 	_ = apiextensionsv1.AddToScheme(Scheme)
-	_ = addonsv1alpha3.AddToScheme(Scheme)
+	_ = apiextensionsv1beta1.AddToScheme(Scheme)
+	_ = admissionregistration.AddToScheme(Scheme)
+	_ = admissionregistrationv1beta1.AddToScheme(Scheme)
+	_ = addonsv1.AddToScheme(Scheme)
 }

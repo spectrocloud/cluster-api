@@ -2,6 +2,14 @@
 
 In this tutorial we'll cover the basics of how to use Cluster API to create one or more Kubernetes clusters.
 
+<aside class="note warning">
+
+<h1>Warning</h1>
+
+If using a [provider] that does not yet support v1alpha4, please follow [the release 0.3 quickstart instructions](https://release-0-3.cluster-api.sigs.k8s.io/user/quick-start.html) instead.
+
+</aside>
+
 ## Installation
 
 ### Common Prerequisites
@@ -9,9 +17,9 @@ In this tutorial we'll cover the basics of how to use Cluster API to create one 
 - Install and setup [kubectl] in your local environment
 - Install [Kind] and [Docker]
 
-### Install and/or configure a kubernetes cluster
+### Install and/or configure a Kubernetes cluster
 
-Cluster API requires an existing Kubernetes cluster accessible via kubectl; during the installation process the
+Cluster API requires an existing Kubernetes cluster accessible via kubectl. During the installation process the
 Kubernetes cluster will be transformed into a [management cluster] by installing the Cluster API [provider components], so it
 is recommended to keep it separated from any application workload.
 
@@ -22,83 +30,77 @@ Choose one of the options below:
 
 1. **Existing Management Cluster**
 
-For production use-cases a "real" Kubernetes cluster should be used with appropriate backup and DR policies and procedures in place. The Kubernetes cluster must be at least v1.16+.
+   For production use-cases a "real" Kubernetes cluster should be used with appropriate backup and DR policies and procedures in place. The Kubernetes cluster must be at least v1.19.1.
 
-```bash
-export KUBECONFIG=<...>
-```
+   ```bash
+   export KUBECONFIG=<...>
+   ```
 
 2. **Kind**
 
-<aside class="note warning">
+   <aside class="note warning">
 
-<h1>Warning</h1>
+   <h1>Warning</h1>
 
-[kind] is not designed for production use.
+   [kind] is not designed for production use.
 
-**Minimum [kind] supported version**: v0.9.0
+   **Minimum [kind] supported version**: v0.9.0
 
-</aside>
+   Note for macOS users: you may need to [increase the memory available](https://docs.docker.com/docker-for-mac/#resources) for containers (recommend 6Gb for CAPD).
 
-[kind] can be used for creating a local Kubernetes cluster for development environments or for
-the creation of a temporary [bootstrap cluster] used to provision a target [management cluster] on the selected infrastructure provider.
+   </aside>
 
-The installation procedure depends on the version of kind; if you are planning to user the docker infrastructure provider (CAPD),
-please follow the additional instructions in the dedicated tab:
+   [kind] can be used for creating a local Kubernetes cluster for development environments or for
+   the creation of a temporary [bootstrap cluster] used to provision a target [management cluster] on the selected infrastructure provider.
 
-{{#tabs name:"install-kind" tabs:">=v0.9.x, Docker infrastructure provider - CAPD"}}
-{{#tab >=v0.9.x}}
+   The installation procedure depends on the version of kind; if you are planning to use the Docker infrastructure provider,
+   please follow the additional instructions in the dedicated tab:
 
-Create the kind cluster:
-```bash
-kind create cluster
-```
-Test to ensure the local kind cluster is ready:
-```
-kubectl cluster-info
-```
+   {{#tabs name:"install-kind" tabs:"Default,Docker"}}
+   {{#tab Default}}
 
-{{#/tab }}
-{{#tab Docker infrastructure provider - CAPD}}
+   Create the kind cluster:
+   ```bash
+   kind create cluster
+   ```
+   Test to ensure the local kind cluster is ready:
+   ```
+   kubectl cluster-info
+   ```
 
-Run the following command to create a kind config file for allowing the Docker provider to access Docker on the host:
+   {{#/tab }}
+   {{#tab Docker}}
 
-```bash
-cat > kind-cluster-with-extramounts.yaml <<EOF
-kind: Cluster
-apiVersion: kind.x-k8s.io/v1alpha4
-nodes:
-- role: control-plane
-  extraMounts:
-    - hostPath: /var/run/docker.sock
-      containerPath: /var/run/docker.sock
-EOF
-```
+   Run the following command to create a kind config file for allowing the Docker provider to access Docker on the host:
 
-If you are planning to use a CAPD version v0.3.15 or older, export the variable 
-**KIND_EXPERIMENTAL_DOCKER_NETWORK=bridge** to let kind run in the **bridge** network, the same used
-by older versions of the Docker infrastructure provider:
+   ```bash
+   cat > kind-cluster-with-extramounts.yaml <<EOF
+   kind: Cluster
+   apiVersion: kind.x-k8s.io/v1alpha4
+   nodes:
+   - role: control-plane
+     extraMounts:
+       - hostPath: /var/run/docker.sock
+         containerPath: /var/run/docker.sock
+   EOF
+   ```
 
-```bash
-export KIND_EXPERIMENTAL_DOCKER_NETWORK=bridge
-```
+   Then follow the instruction for your kind version using  `kind create cluster --config kind-cluster-with-extramounts.yaml`
+   to create the management cluster using the above file.
 
-Then follow the instruction for your kind version using  `kind create cluster --config kind-cluster-with-extramounts.yaml` 
-to create the management cluster using the above file.
-
-{{#/tab }}
-{{#/tabs }}
+   {{#/tab }}
+   {{#/tabs }}
 
 ### Install clusterctl
 The clusterctl CLI tool handles the lifecycle of a Cluster API management cluster.
 
-{{#tabs name:"install-clusterctl" tabs:"linux,macOS"}}
+{{#tabs name:"install-clusterctl" tabs:"linux,macOS,homebrew"}}
 {{#tab linux}}
 
 #### Install clusterctl binary with curl on linux
-Download the latest release; for example, to download version v0.3.0 on linux, type:
+Download the latest release; on linux, type:
 ```
-curl -L {{#releaselink gomodule:"sigs.k8s.io/cluster-api" asset:"clusterctl-linux-amd64" version:"0.3.x"}} -o clusterctl
+curl -L {{#releaselink gomodule:"sigs.k8s.io/cluster-api" asset:"clusterctl-linux-amd64" version:"0.4.x"}} -o clusterctl
 ```
 Make the clusterctl binary executable.
 ```
@@ -116,11 +118,17 @@ clusterctl version
 {{#/tab }}
 {{#tab macOS}}
 
-##### Install clusterctl binary with curl on macOS
-Download the latest release; for example, to download version v0.3.0 on macOS, type:
+#### Install clusterctl binary with curl on macOS
+Download the latest release; on macOS, type:
 ```
-curl -L {{#releaselink gomodule:"sigs.k8s.io/cluster-api" asset:"clusterctl-darwin-amd64" version:"0.3.x"}} -o clusterctl
+curl -L {{#releaselink gomodule:"sigs.k8s.io/cluster-api" asset:"clusterctl-darwin-amd64" version:"0.4.x"}} -o clusterctl
 ```
+
+Or if your Mac has an M1 CPU ("Apple Silicon"):
+```
+curl -L {{#releaselink gomodule:"sigs.k8s.io/cluster-api" asset:"clusterctl-darwin-arm64" version:"0.4.x"}} -o clusterctl
+```
+
 Make the clusterctl binary executable.
 ```
 chmod +x ./clusterctl
@@ -134,8 +142,23 @@ Test to ensure the version you installed is up-to-date:
 clusterctl version
 ```
 {{#/tab }}
-{{#/tabs }}
+{{#tab homebrew}}
 
+#### Install clusterctl with homebrew on macOS and linux
+
+Install the latest release using homebrew:
+
+```bash
+brew install clusterctl
+```
+
+Test to ensure the version you installed is up-to-date:
+```
+clusterctl version
+```
+
+{{#/tab }}
+{{#/tabs }}
 
 ### Initialize the management cluster
 
@@ -148,17 +171,15 @@ and `kubeadm` control-plane providers.
 
 #### Initialization for common providers
 
-
 Depending on the infrastructure provider you are planning to use, some additional prerequisites should be satisfied
 before getting started with Cluster API. See below for the expected settings for common providers.
 
-{{#tabs name:"tab-installation-infrastructure" tabs:"AWS,Azure,Docker,GCP,vSphere,OpenStack,Metal3,Packet"}}
+{{#tabs name:"tab-installation-infrastructure" tabs:"AWS,Azure,DigitalOcean,Docker,GCP,vSphere,OpenStack,Metal3,Packet"}}
 {{#tab AWS}}
 
-Download the latest binary of `clusterawsadm` from the [AWS provider releases] and make sure to place it in your path. You need at least version v0.5.5 for these instructions.
-Instructions for older versions of clusterawsadm are available in [Github][legacy-clusterawsadm].
+Download the latest binary of `clusterawsadm` from the [AWS provider releases] and make sure to place it in your path.
 
-The clusterawsadm command line utility assists with identity and access management (IAM) for Cluster API Provider AWS.
+The [clusterawsadm] command line utility assists with identity and access management (IAM) for [Cluster API Provider AWS][capa].
 
 ```bash
 export AWS_REGION=us-east-1 # This is used to help encode your environment variables
@@ -195,17 +216,34 @@ export AZURE_TENANT_ID="<Tenant>"
 export AZURE_CLIENT_ID="<AppId>"
 export AZURE_CLIENT_SECRET="<Password>"
 
-# Azure cloud settings
-# To use the default public cloud, otherwise set to AzureChinaCloud|AzureGermanCloud|AzureUSGovernmentCloud
-export AZURE_ENVIRONMENT="AzurePublicCloud"
-
+# Base64 encode the variables
 export AZURE_SUBSCRIPTION_ID_B64="$(echo -n "$AZURE_SUBSCRIPTION_ID" | base64 | tr -d '\n')"
 export AZURE_TENANT_ID_B64="$(echo -n "$AZURE_TENANT_ID" | base64 | tr -d '\n')"
 export AZURE_CLIENT_ID_B64="$(echo -n "$AZURE_CLIENT_ID" | base64 | tr -d '\n')"
 export AZURE_CLIENT_SECRET_B64="$(echo -n "$AZURE_CLIENT_SECRET" | base64 | tr -d '\n')"
 
+# Settings needed for AzureClusterIdentity used by the AzureCluster
+export AZURE_CLUSTER_IDENTITY_SECRET_NAME="cluster-identity-secret"
+export CLUSTER_IDENTITY_NAME="cluster-identity"
+export AZURE_CLUSTER_IDENTITY_SECRET_NAMESPACE="default"
+
+# Create a secret to include the password of the Service Principal identity created in Azure
+# This secret will be referenced by the AzureClusterIdentity used by the AzureCluster
+kubectl create secret generic "${AZURE_CLUSTER_IDENTITY_SECRET_NAME}" --from-literal=clientSecret="${AZURE_CLIENT_SECRET}"
+
 # Finally, initialize the management cluster
 clusterctl init --infrastructure azure
+```
+
+{{#/tab }}
+{{#tab DigitalOcean}}
+
+```bash
+export DIGITALOCEAN_ACCESS_TOKEN=<your-access-token>
+export DO_B64ENCODED_CREDENTIALS="$(echo -n "${DIGITALOCEAN_ACCESS_TOKEN}" | base64 | tr -d '\n')"
+
+# Initialize the management cluster
+clusterctl init --infrastructure digitalocean
 ```
 
 {{#/tab }}
@@ -219,8 +257,9 @@ The Docker provider is not designed for production use and is intended for devel
 
 </aside>
 
-The docker provider does not require additional prerequisites.
-You can run 
+The Docker provider does not require additional prerequisites.
+You can run:
+
 ```
 clusterctl init --infrastructure docker
 ```
@@ -287,30 +326,29 @@ clusterctl init --infrastructure packet
 
 {{#/tabs }}
 
-
 The output of `clusterctl init` is similar to this:
 
 ```shell
 Fetching providers
-Installing cert-manager
+Installing cert-manager Version="v1.5.0"
 Waiting for cert-manager to be available...
-Installing Provider="cluster-api" Version="v0.3.0" TargetNamespace="capi-system"
-Installing Provider="bootstrap-kubeadm" Version="v0.3.0" TargetNamespace="capi-kubeadm-bootstrap-system"
-Installing Provider="control-plane-kubeadm" Version="v0.3.0" TargetNamespace="capi-kubeadm-control-plane-system"
-Installing Provider="infrastructure-aws" Version="v0.5.0" TargetNamespace="capa-system"
+Installing Provider="cluster-api" Version="v0.4.0" TargetNamespace="capi-system"
+Installing Provider="bootstrap-kubeadm" Version="v0.4.0" TargetNamespace="capi-kubeadm-bootstrap-system"
+Installing Provider="control-plane-kubeadm" Version="v0.4.0" TargetNamespace="capi-kubeadm-control-plane-system"
+Installing Provider="infrastructure-docker" Version="v0.4.0" TargetNamespace="capd-system"
 
 Your management cluster has been initialized successfully!
 
 You can now create your first workload cluster by running the following:
 
-  clusterctl config cluster [name] --kubernetes-version [version] | kubectl apply -f -
+  clusterctl generate cluster [name] --kubernetes-version [version] | kubectl apply -f -
 ```
 
 <aside class="note">
 
 <h1>Alternatives to environment variables</h1>
 
-Throughout this quickstart guide, we've given instructions on setting parameters using environment variables. For most
+Throughout this quickstart guide we've given instructions on setting parameters using environment variables. For most
 environment variables in the rest of the guide, you can also set them in ~/.cluster-api/clusterctl.yaml
 
 See [`clusterctl init`](../clusterctl/commands/init.md) for more details.
@@ -323,14 +361,14 @@ Once the management cluster is ready, you can create your first workload cluster
 
 #### Preparing the workload cluster configuration
 
-The `clusterctl config cluster` command returns a YAML template for creating a [workload cluster].
+The `clusterctl generate cluster` command returns a YAML template for creating a [workload cluster].
 
 <aside class="note">
 
 <h1> Which provider will be used for my cluster? </h1>
 
-The `clusterctl config cluster` command uses smart defaults in order to simplify the user experience; in this example,
-it detects that there is only an `aws` infrastructure provider and so it uses that when creating the cluster.
+The `clusterctl generate cluster` command uses smart defaults in order to simplify the user experience; for example,
+if only the `aws` infrastructure provider is deployed, it detects and uses that when creating the cluster.
 
 </aside>
 
@@ -338,10 +376,10 @@ it detects that there is only an `aws` infrastructure provider and so it uses th
 
 <h1> What topology will be used for my cluster? </h1>
 
-The `clusterctl config cluster` command by default uses cluster templates which are provided by the infrastructure
+The `clusterctl generate cluster` command by default uses cluster templates which are provided by the infrastructure
 providers. See the provider's documentation for more information.
 
-See the `clusterctl config cluster` [command][clusterctl config cluster] documentation for
+See the `clusterctl generate cluster` [command][clusterctl generate cluster] documentation for
 details about how to use alternative sources. for cluster templates.
 
 </aside>
@@ -351,10 +389,10 @@ details about how to use alternative sources. for cluster templates.
 Depending on the infrastructure provider you are planning to use, some additional prerequisites should be satisfied
 before configuring a cluster with Cluster API. Instructions are provided for common providers below.
 
-Otherwise, you can look at the `clusterctl config cluster` [command][clusterctl config cluster] documentation for details about how to
+Otherwise, you can look at the `clusterctl generate cluster` [command][clusterctl generate cluster] documentation for details about how to
 discover the list of variables required by a cluster templates.
 
-{{#tabs name:"tab-configuration-infrastructure" tabs:"AWS,Azure,Docker,GCP,vSphere,OpenStack,Metal3,Packet"}}
+{{#tabs name:"tab-configuration-infrastructure" tabs:"AWS,Azure,DigitalOcean,Docker,GCP,vSphere,OpenStack,Metal3,Packet"}}
 {{#tab AWS}}
 
 ```bash
@@ -374,17 +412,32 @@ See the [AWS provider prerequisites] document for more details.
 
 <h1>Warning</h1>
 
-Make sure you choose a VM size which is available in the desired location for your subscription. To see available SKUs, use `az vm list-skus -l <your_location> -r virtualMachines -o table` 
+Make sure you choose a VM size which is available in the desired location for your subscription. To see available SKUs, use `az vm list-skus -l <your_location> -r virtualMachines -o table`
 
 </aside>
 
 ```bash
 # Name of the Azure datacenter location. Change this value to your desired location.
-export AZURE_LOCATION="centralus" 
+export AZURE_LOCATION="centralus"
 
 # Select VM types.
 export AZURE_CONTROL_PLANE_MACHINE_TYPE="Standard_D2s_v3"
 export AZURE_NODE_MACHINE_TYPE="Standard_D2s_v3"
+```
+
+{{#/tab }}
+{{#tab DigitalOcean}}
+
+A ClusterAPI compatible image must be available in your DigitalOcean account. For instructions on how to build a compatible image
+see [image-builder](https://image-builder.sigs.k8s.io/capi/capi.html).
+
+```bash
+export DO_REGION=nyc1
+export DO_SSH_KEY_FINGERPRINT=<your-ssh-key-fingerprint>
+export DO_CONTROL_PLANE_MACHINE_TYPE=s-2vcpu-2gb
+export DO_CONTROL_PLANE_MACHINE_IMAGE=<your-capi-image-id>
+export DO_NODE_MACHINE_TYPE=s-2vcpu-2gb
+export DO_NODE_MACHINE_IMAGE==<your-capi-image-id>
 ```
 
 {{#/tab }}
@@ -398,7 +451,7 @@ The Docker provider is not designed for production use and is intended for devel
 
 </aside>
 
-The docker provider does not require additional configurations for cluster templates.
+The Docker provider does not require additional configurations for cluster templates.
 
 However, if you require special network settings you can set the following environment variables:
 
@@ -415,6 +468,19 @@ export SERVICE_DOMAIN="k8s.test"
 
 {{#/tab }}
 {{#tab GCP}}
+
+
+```bash
+# Name of the GCP datacenter location. Change this value to your desired location
+export GCP_REGION="<GCP_REGION>"
+export GCP_PROJECT="<GCP_PROJECT>"
+# Make sure to use same kubernetes version here as building the GCE image
+export KUBERNETES_VERSION=1.20.9
+export GCP_CONTROL_PLANE_MACHINE_TYPE=n1-standard-2
+export GCP_NODE_MACHINE_TYPE=n1-standard-2
+export GCP_NETWORK_NAME=<GCP_NETWORK_NAME or default>
+export CLUSTER_NAME="<CLUSTER_NAME>"
+```
 
 See the [GCP provider] for more information.
 
@@ -459,7 +525,7 @@ Depending on your OpenStack and underlying hypervisor the following options migh
 
 To see all required OpenStack environment variables execute:
 ```bash
-clusterctl config cluster --infrastructure openstack --list-variables capi-quickstart
+clusterctl generate cluster --infrastructure openstack --list-variables capi-quickstart
 ```
 
 The following script can be used to export some of them:
@@ -485,7 +551,7 @@ export OPENSTACK_IMAGE_NAME=<image name>
 export OPENSTACK_SSH_KEY_NAME=<ssh key pair name>
 ```
 
-A full configuration reference can be found in [configuration.md](https://github.com/kubernetes-sigs/cluster-api-provider-openstack/blob/master/docs/configuration.md).
+A full configuration reference can be found in [configuration.md](https://github.com/kubernetes-sigs/cluster-api-provider-openstack/blob/master/docs/book/src/clusteropenstack/configuration.md).
 
 {{#/tab }}
 {{#tab Metal3}}
@@ -520,7 +586,7 @@ order to get a well tuned and function workload, they are all listed here:
 
 ```bash
 # The project where your cluster will be placed to.
-# You have to get out from Packet Portal if you don't have one already.
+# You have to get out from Packet Portal if you do not have one already.
 export PROJECT_ID="5yd4thd-5h35-5hwk-1111-125gjej40930"
 # The facility where you want your cluster to be provisioned
 export FACILITY="ewr1"
@@ -541,12 +607,12 @@ export WORKER_NODE_TYPE="t1.small"
 
 For the purpose of this tutorial, we'll name our cluster capi-quickstart.
 
-{{#tabs name:"tab-clusterctl-config-cluster" tabs:"Azure|AWS|GCP|vSphere|OpenStack|Metal3|Packet,Docker"}}
-{{#tab Azure|AWS|GCP|vSphere|OpenStack|Metal3|Packet}}
+{{#tabs name:"tab-clusterctl-config-cluster" tabs:"Azure|AWS|DigitalOcean|GCP|vSphere|OpenStack|Metal3|Packet,Docker"}}
+{{#tab Azure|AWS|DigitalOcean|GCP|vSphere|OpenStack|Metal3|Packet}}
 
 ```bash
-clusterctl config cluster capi-quickstart \
-  --kubernetes-version v1.18.16 \
+clusterctl generate cluster capi-quickstart \
+  --kubernetes-version v1.22.0 \
   --control-plane-machine-count=3 \
   --worker-machine-count=3 \
   > capi-quickstart.yaml
@@ -564,8 +630,8 @@ The Docker provider is not designed for production use and is intended for devel
 </aside>
 
 ```bash
-clusterctl config cluster capi-quickstart --flavor development \
-  --kubernetes-version v1.18.16 \
+clusterctl generate cluster capi-quickstart --flavor development \
+  --kubernetes-version v1.22.0 \
   --control-plane-machine-count=3 \
   --worker-machine-count=3 \
   > capi-quickstart.yaml
@@ -579,7 +645,7 @@ Machine Deployments, etc.
 
 The file can be eventually modified using your editor of choice.
 
-See [clusterctl config cluster] for more details.
+See [clusterctl generate cluster] for more details.
 
 #### Apply the workload cluster
 
@@ -606,7 +672,7 @@ kubeadmconfigtemplate.bootstrap.cluster.x-k8s.io/capi-quickstart-md-0 created
 The cluster will now start provisioning. You can check status with:
 
 ```bash
-kubectl get cluster --all-namespaces
+kubectl get cluster
 ```
 
 You can also get an "at glance" view of the cluster and its resources by running:
@@ -618,21 +684,21 @@ clusterctl describe cluster capi-quickstart
 To verify the first control plane is up:
 
 ```bash
-kubectl get kubeadmcontrolplane --all-namespaces
+kubectl get kubeadmcontrolplane
 ```
 
 You should see an output is similar to this:
 
 ```bash
-NAME                            INITIALIZED   API SERVER AVAILABLE   VERSION    REPLICAS   READY   UPDATED   UNAVAILABLE
-capi-quickstart-control-plane   true                                 v1.18.16   3                  3         3
+NAME                            INITIALIZED   API SERVER AVAILABLE   VERSION   REPLICAS   READY   UPDATED   UNAVAILABLE
+capi-quickstart-control-plane   true                                 v1.21.2   3                  3         3
 ```
 
 <aside class="note warning">
 
 <h1> Warning </h1>
 
-The control planes won't be `Ready` until we install a CNI in the next step.
+The control plane won't be `Ready` until we install a CNI in the next step.
 
 </aside>
 
@@ -646,18 +712,9 @@ clusterctl get kubeconfig capi-quickstart > capi-quickstart.kubeconfig
 
 <h1>Warning</h1>
 
-The `clusterctl get kubeconfig` command is available on for clusterctl v0.3.9 or newer. See [clusterctl get kubeconfig] for more details. If you are running older
-version you can use the following command: 
-
-```bash
-kubectl --namespace=default get secret capi-quickstart-kubeconfig \
-   -o jsonpath={.data.value} | base64 --decode \
-   > capi-quickstart.kubeconfig
-```
-
-If you are using docker on MacOS, you will need to do a couple of additional
-steps to get the correct kubeconfig for a workload cluster created with the docker provider.
-See [Additional Notes for the Docker Provider](../clusterctl/developers.md#additional-notes-for-the-docker-provider). 
+If you are using Docker on MacOS, you will need to do a couple of additional
+steps to get the correct kubeconfig for a workload cluster created with the Docker provider.
+See [Additional Notes for the Docker Provider](../clusterctl/developers.md#additional-notes-for-the-docker-provider).
 
 </aside>
 
@@ -665,12 +722,12 @@ See [Additional Notes for the Docker Provider](../clusterctl/developers.md#addit
 
 Calico is used here as an example.
 
-{{#tabs name:"tab-deploy-cni" tabs:"AWS|Docker|GCP|vSphere|OpenStack|Metal3|Packet,Azure"}}
-{{#tab AWS|Docker|GCP|vSphere|OpenStack|Metal3|Packet}}
+{{#tabs name:"tab-deploy-cni" tabs:"AWS|DigitalOcean|Docker|GCP|vSphere|OpenStack|Metal3|Packet,Azure"}}
+{{#tab AWS|DigitalOcean|Docker|GCP|vSphere|OpenStack|Metal3|Packet}}
 
 ```bash
 kubectl --kubeconfig=./capi-quickstart.kubeconfig \
-  apply -f https://docs.projectcalico.org/v3.15/manifests/calico.yaml
+  apply -f https://docs.projectcalico.org/v3.18/manifests/calico.yaml
 ```
 
 After a short while, our nodes should be running and in `Ready` state,
@@ -687,7 +744,7 @@ Azure [does not currently support Calico networking](https://docs.projectcalico.
 
 ```bash
 kubectl --kubeconfig=./capi-quickstart.kubeconfig \
-  apply -f https://raw.githubusercontent.com/kubernetes-sigs/cluster-api-provider-azure/master/templates/addons/calico.yaml
+  apply -f https://raw.githubusercontent.com/kubernetes-sigs/cluster-api-provider-azure/main/templates/addons/calico.yaml
 ```
 
 After a short while, our nodes should be running and in `Ready` state,
@@ -706,6 +763,10 @@ Delete workload cluster.
 ```bash
 kubectl delete cluster capi-quickstart
 ```
+<aside class="note warning">
+
+IMPORTANT: In order to ensure a proper cleanup of your infrastructure you must always delete the cluster object. Deleting the entire cluster template with `kubectl delete -f capi-quickstart.yaml` might lead to pending resources to be cleaned up manually.
+</aside>
 
 Delete management cluster
 ```bash
@@ -721,22 +782,23 @@ See the [clusterctl] documentation for more detail about clusterctl supported ac
 [AWS provider releases]: https://github.com/kubernetes-sigs/cluster-api-provider-aws/releases
 [Azure Provider Prerequisites]: https://capz.sigs.k8s.io/topics/getting-started.html#prerequisites
 [bootstrap cluster]: ../reference/glossary.md#bootstrap-cluster
+[capa]: https://cluster-api-aws.sigs.k8s.io
 [capv-upload-images]: https://github.com/kubernetes-sigs/cluster-api-provider-vsphere/blob/master/docs/getting_started.md#uploading-the-machine-images
-[clusterctl config cluster]: ../clusterctl/commands/config-cluster.md
+[clusterawsadm]: https://cluster-api-aws.sigs.k8s.io/clusterawsadm/clusterawsadm.html
+[clusterctl generate cluster]: ../clusterctl/commands/generate-cluster.md
 [clusterctl get kubeconfig]: ../clusterctl/commands/get-kubeconfig.md
 [clusterctl]: ../clusterctl/overview.md
 [Docker]: https://www.docker.com/
-[docker-provider]: ../clusterctl/developers.md#additional-steps-for-the-docker-provider
 [GCP provider]: https://github.com/kubernetes-sigs/cluster-api-provider-gcp
 [infrastructure provider]: ../reference/glossary.md#infrastructure-provider
 [kind]: https://kind.sigs.k8s.io/
 [KubeadmControlPlane]: ../developer/architecture/controllers/control-plane.md
 [kubectl]: https://kubernetes.io/docs/tasks/tools/install-kubectl/
 [management cluster]: ../reference/glossary.md#management-cluster
-[Metal3 provider]: https://github.com/metal3-io/cluster-api-provider-metal3/
 [Metal3 getting started guide]: https://github.com/metal3-io/cluster-api-provider-metal3/blob/master/docs/getting-started.md
+[Metal3 provider]: https://github.com/metal3-io/cluster-api-provider-metal3/
 [Packet getting started guide]: https://github.com/kubernetes-sigs/cluster-api-provider-packet#using
+[provider]:../reference/providers.md
 [provider components]: ../reference/glossary.md#provider-components
-[vSphere getting started guide]: https://github.com/kubernetes-sigs/cluster-api-provider-vsphere/
+[vSphere getting started guide]: https://github.com/kubernetes-sigs/cluster-api-provider-vsphere/blob/master/docs/getting_started.md
 [workload cluster]: ../reference/glossary.md#workload-cluster
-[legacy-clusterawsadm]: https://github.com/kubernetes-sigs/cluster-api/blob/v0.3.6/docs/book/src/user/quick-start.md#initialization-for-common-providers

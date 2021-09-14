@@ -22,24 +22,33 @@ import (
 	"sigs.k8s.io/yaml"
 )
 
-// FakeReader provider a reader implementation backed by a map
+// FakeReader provider a reader implementation backed by a map.
 type FakeReader struct {
 	initialized bool
 	variables   map[string]string
 	providers   []configProvider
+	certManager configCertManager
 	imageMetas  map[string]imageMeta
 }
 
 // configProvider is a mirror of config.Provider, re-implemented here in order to
-// avoid circular dependencies between pkg/client/config and pkg/internal/test
+// avoid circular dependencies between pkg/client/config and pkg/internal/test.
 type configProvider struct {
 	Name string                    `json:"name,omitempty"`
 	URL  string                    `json:"url,omitempty"`
 	Type clusterctlv1.ProviderType `json:"type,omitempty"`
 }
 
+// configCertManager is a mirror of config.CertManager, re-implemented here in order to
+// avoid circular dependencies between pkg/client/config and pkg/internal/test.
+type configCertManager struct {
+	URL     string `json:"url,omitempty"`
+	Version string `json:"version,omitempty"`
+	Timeout string `json:"timeout,omitempty"`
+}
+
 // imageMeta is a mirror of config.imageMeta, re-implemented here in order to
-// avoid circular dependencies between pkg/client/config and pkg/internal/test
+// avoid circular dependencies between pkg/client/config and pkg/internal/test.
 type imageMeta struct {
 	Repository string `json:"repository,omitempty"`
 	Tag        string `json:"tag,omitempty"`
@@ -64,7 +73,7 @@ func (f *FakeReader) Set(key, value string) {
 func (f *FakeReader) UnmarshalKey(key string, rawval interface{}) error {
 	data, err := f.Get(key)
 	if err != nil {
-		return nil
+		return nil // nolint:nilerr // We expect to not error if the key is not present
 	}
 	return yaml.Unmarshal([]byte(data), rawval)
 }
@@ -90,6 +99,19 @@ func (f *FakeReader) WithProvider(name string, ttype clusterctlv1.ProviderType, 
 
 	yaml, _ := yaml.Marshal(f.providers)
 	f.variables["providers"] = string(yaml)
+
+	return f
+}
+
+func (f *FakeReader) WithCertManager(url, version, timeout string) *FakeReader {
+	f.certManager = configCertManager{
+		URL:     url,
+		Version: version,
+		Timeout: timeout,
+	}
+
+	yaml, _ := yaml.Marshal(f.certManager)
+	f.variables["cert-manager"] = string(yaml)
 
 	return f
 }

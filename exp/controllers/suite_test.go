@@ -18,57 +18,44 @@ package controllers
 
 import (
 	"context"
+	"fmt"
+	"os"
 	"testing"
 
-	. "github.com/onsi/ginkgo"
-	. "github.com/onsi/gomega"
-
+	"sigs.k8s.io/cluster-api/api/v1alpha4/index"
+	"sigs.k8s.io/cluster-api/internal/envtest"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
-	"sigs.k8s.io/controller-runtime/pkg/envtest/printer"
-	"sigs.k8s.io/controller-runtime/pkg/log"
-
-	"sigs.k8s.io/cluster-api/test/helpers"
 	// +kubebuilder:scaffold:imports
 )
 
-// These tests use Ginkgo (BDD-style Go testing framework). Refer to
-// http://onsi.github.io/ginkgo/ to learn more about Ginkgo.
-
 var (
-	testEnv *helpers.TestEnvironment
-	ctx     = context.Background()
+	env *envtest.Environment
+	ctx = ctrl.SetupSignalHandler()
 )
 
-func TestAPIs(t *testing.T) {
-	RegisterFailHandler(Fail)
-
-	RunSpecsWithDefaultAndCustomReporters(t,
-		"Controller Suite",
-		[]Reporter{printer.NewlineReporter{}})
-}
-
-var _ = BeforeSuite(func(done Done) {
-	By("bootstrapping test environment")
-	testEnv = helpers.NewTestEnvironment()
-
-	Expect((&MachinePoolReconciler{
-		Client:   testEnv,
-		Log:      log.Log,
-		recorder: testEnv.GetEventRecorderFor("machinepool-controller"),
-	}).SetupWithManager(testEnv.Manager, controller.Options{MaxConcurrentReconciles: 1})).To(Succeed())
-
-	By("starting the manager")
-	go func() {
-		defer GinkgoRecover()
-		Expect(testEnv.StartManager()).To(Succeed())
-	}()
-
-	close(done)
-}, 60)
-
-var _ = AfterSuite(func() {
-	if testEnv != nil {
-		By("tearing down the test environment")
-		Expect(testEnv.Stop()).To(Succeed())
+func TestMain(m *testing.M) {
+	setupIndexes := func(ctx context.Context, mgr ctrl.Manager) {
+		if err := index.AddDefaultIndexes(ctx, mgr); err != nil {
+			panic(fmt.Sprintf("unable to setup index: %v", err))
+		}
 	}
-})
+
+	setupReconcilers := func(ctx context.Context, mgr ctrl.Manager) {
+		machinePoolReconciler := MachinePoolReconciler{
+			Client:   mgr.GetClient(),
+			recorder: mgr.GetEventRecorderFor("machinepool-controller"),
+		}
+		err := machinePoolReconciler.SetupWithManager(ctx, mgr, controller.Options{MaxConcurrentReconciles: 1})
+		if err != nil {
+			panic(fmt.Sprintf("Failed to set up machine pool reconciler: %v", err))
+		}
+	}
+
+	os.Exit(envtest.Run(ctx, envtest.RunInput{
+		M:                m,
+		SetupEnv:         func(e *envtest.Environment) { env = e },
+		SetupIndexes:     setupIndexes,
+		SetupReconcilers: setupReconcilers,
+	}))
+}

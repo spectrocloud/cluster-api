@@ -69,10 +69,9 @@ type APIEndpoint struct {
 
 // +kubebuilder:resource:path=dockerclusters,scope=Namespaced,categories=cluster-api
 // +kubebuilder:subresource:status
-// +kubebuilder:storageversion
 // +kubebuilder:object:root=true
 
-// DockerCluster is the Schema for the dockerclusters API
+// DockerCluster is the Schema for the dockerclusters API.
 type DockerCluster struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
@@ -81,17 +80,19 @@ type DockerCluster struct {
 	Status DockerClusterStatus `json:"status,omitempty"`
 }
 
+// GetConditions returns the set of conditions for this object.
 func (c *DockerCluster) GetConditions() clusterv1.Conditions {
 	return c.Status.Conditions
 }
 
+// SetConditions sets the conditions on this object.
 func (c *DockerCluster) SetConditions(conditions clusterv1.Conditions) {
 	c.Status.Conditions = conditions
 }
 
 // +kubebuilder:object:root=true
 
-// DockerClusterList contains a list of DockerCluster
+// DockerClusterList contains a list of DockerCluster.
 type DockerClusterList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`

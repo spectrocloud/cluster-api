@@ -14,6 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// Package util implements kubeadm utility functionality.
 package util
 
 import (
@@ -24,9 +25,9 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha3"
+	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha4"
 	"sigs.k8s.io/cluster-api/controllers/external"
-	expv1 "sigs.k8s.io/cluster-api/exp/api/v1alpha3"
+	expv1 "sigs.k8s.io/cluster-api/exp/api/v1alpha4"
 	"sigs.k8s.io/cluster-api/feature"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -81,7 +82,7 @@ func (co ConfigOwner) IsMachinePool() bool {
 	return co.GetKind() == "MachinePool"
 }
 
-// Returns the Kuberentes version for the config owner object
+// KubernetesVersion returns the Kuberentes version for the config owner object.
 func (co ConfigOwner) KubernetesVersion() string {
 	fields := []string{"spec", "version"}
 	if co.IsMachinePool() {

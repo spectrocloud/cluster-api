@@ -18,7 +18,7 @@ package cmd
 
 import (
 	"bytes"
-	"io/ioutil"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -30,19 +30,19 @@ func Test_runGetRepositories(t *testing.T) {
 	t.Run("prints output", func(t *testing.T) {
 		g := NewWithT(t)
 
-		tmpDir, err := ioutil.TempDir("", "cc")
+		tmpDir, err := os.MkdirTemp("", "cc")
 		g.Expect(err).NotTo(HaveOccurred())
 		defer os.RemoveAll(tmpDir)
 
 		path := filepath.Join(tmpDir, "clusterctl.yaml")
-		g.Expect(ioutil.WriteFile(path, []byte(template), 0600)).To(Succeed())
+		g.Expect(os.WriteFile(path, []byte(template), 0600)).To(Succeed())
 
 		buf := bytes.NewBufferString("")
 
 		for _, val := range RepositoriesOutputs {
 			cro.output = val
 			g.Expect(runGetRepositories(path, buf)).To(Succeed())
-			out, err := ioutil.ReadAll(buf)
+			out, err := io.ReadAll(buf)
 			g.Expect(err).ToNot(HaveOccurred())
 
 			if val == RepositoriesOutputText {
@@ -67,12 +67,12 @@ func Test_runGetRepositories(t *testing.T) {
 	t.Run("returns error for bad template", func(t *testing.T) {
 		g := NewWithT(t)
 
-		tmpDir, err := ioutil.TempDir("", "cc")
+		tmpDir, err := os.MkdirTemp("", "cc")
 		g.Expect(err).NotTo(HaveOccurred())
 		defer os.RemoveAll(tmpDir)
 
 		path := filepath.Join(tmpDir, "clusterctl.yaml")
-		g.Expect(ioutil.WriteFile(path, []byte("providers: foobar"), 0600)).To(Succeed())
+		g.Expect(os.WriteFile(path, []byte("providers: foobar"), 0600)).To(Succeed())
 
 		buf := bytes.NewBufferString("")
 		g.Expect(runGetRepositories(path, buf)).ToNot(Succeed())
@@ -107,6 +107,7 @@ kubeadm             BootstrapProvider        https://github.com/kubernetes-sigs/
 talos               BootstrapProvider        https://github.com/talos-systems/cluster-api-bootstrap-provider-talos/releases/latest/       bootstrap-components.yaml
 aws-eks             ControlPlaneProvider     https://github.com/kubernetes-sigs/cluster-api-provider-aws/releases/latest/                 eks-controlplane-components.yaml
 kubeadm             ControlPlaneProvider     https://github.com/kubernetes-sigs/cluster-api/releases/latest/                              control-plane-components.yaml
+nested              ControlPlaneProvider     https://github.com/kubernetes-sigs/cluster-api-provider-nested/releases/latest/              control-plane-components.yaml
 talos               ControlPlaneProvider     https://github.com/talos-systems/cluster-api-control-plane-provider-talos/releases/latest/   control-plane-components.yaml
 aws                 InfrastructureProvider                                                                                                my-aws-infrastructure-components.yaml
 azure               InfrastructureProvider   https://github.com/kubernetes-sigs/cluster-api-provider-azure/releases/latest/               infrastructure-components.yaml
@@ -115,6 +116,7 @@ docker              InfrastructureProvider   https://github.com/kubernetes-sigs/
 gcp                 InfrastructureProvider   https://github.com/kubernetes-sigs/cluster-api-provider-gcp/releases/latest/                 infrastructure-components.yaml
 metal3              InfrastructureProvider   https://github.com/metal3-io/cluster-api-provider-metal3/releases/latest/                    infrastructure-components.yaml
 my-infra-provider   InfrastructureProvider   /home/.cluster-api/overrides/infrastructure-docker/latest/                                   infrastructure-components.yaml
+nested              InfrastructureProvider   https://github.com/kubernetes-sigs/cluster-api-provider-nested/releases/latest/              infrastructure-components.yaml
 openstack           InfrastructureProvider   https://github.com/kubernetes-sigs/cluster-api-provider-openstack/releases/latest/           infrastructure-components.yaml
 packet              InfrastructureProvider   https://github.com/kubernetes-sigs/cluster-api-provider-packet/releases/latest/              infrastructure-components.yaml
 sidero              InfrastructureProvider   https://github.com/talos-systems/sidero/releases/latest/                                     infrastructure-components.yaml
@@ -150,6 +152,10 @@ var expectedOutputYaml = `- File: core_components.yaml
   ProviderType: ControlPlaneProvider
   URL: https://github.com/kubernetes-sigs/cluster-api/releases/latest/
 - File: control-plane-components.yaml
+  Name: nested
+  ProviderType: ControlPlaneProvider
+  URL: https://github.com/kubernetes-sigs/cluster-api-provider-nested/releases/latest/
+- File: control-plane-components.yaml
   Name: talos
   ProviderType: ControlPlaneProvider
   URL: https://github.com/talos-systems/cluster-api-control-plane-provider-talos/releases/latest/
@@ -181,6 +187,10 @@ var expectedOutputYaml = `- File: core_components.yaml
   Name: my-infra-provider
   ProviderType: InfrastructureProvider
   URL: /home/.cluster-api/overrides/infrastructure-docker/latest/
+- File: infrastructure-components.yaml
+  Name: nested
+  ProviderType: InfrastructureProvider
+  URL: https://github.com/kubernetes-sigs/cluster-api-provider-nested/releases/latest/
 - File: infrastructure-components.yaml
   Name: openstack
   ProviderType: InfrastructureProvider

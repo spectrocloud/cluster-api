@@ -14,16 +14,21 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// Package noderefutil implements NodeRef utils.
 package noderefutil
 
 import (
 	"errors"
+	"fmt"
 	"regexp"
 	"strings"
 )
 
 var (
-	ErrEmptyProviderID   = errors.New("providerID is empty")
+	// ErrEmptyProviderID means that the provider id is empty.
+	ErrEmptyProviderID = errors.New("providerID is empty")
+
+	// ErrInvalidProviderID means that the provider id has an invalid form.
 	ErrInvalidProviderID = errors.New("providerID must be of the form <cloudProvider>://<optional>/<segments>/<provider id>")
 )
 
@@ -95,4 +100,12 @@ func (p *ProviderID) String() string {
 // Validate returns true if the provider id is valid.
 func (p *ProviderID) Validate() bool {
 	return p.CloudProvider() != "" && p.ID() != ""
+}
+
+// IndexKey returns a string concatenating the cloudProvider and the ID parts of the providerID.
+// E.g Format: cloudProvider://optional/segments/etc/id. IndexKey: cloudProvider/id
+// This is useful to use the providerID as a reliable index between nodes and machines
+// as it guarantees the infra Providers contract.
+func (p *ProviderID) IndexKey() string {
+	return fmt.Sprintf("%s/%s", p.CloudProvider(), p.ID())
 }

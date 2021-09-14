@@ -14,6 +14,7 @@ Other providers may have additional steps you need to follow to get up and runni
 [capi-manager]: https://github.com/kubernetes-sigs/cluster-api/blob/master/main.go
 [capa-manager]: https://github.com/kubernetes-sigs/cluster-api-provider-aws/blob/master/main.go
 [Docker]: https://github.com/kubernetes-sigs/cluster-api/tree/master/test/infrastructure/docker
+[CAPD]: https://github.com/kubernetes-sigs/cluster-api/blob/master/test/infrastructure/docker/README.md
 
 ## Prerequisites
 
@@ -32,14 +33,12 @@ The easiest way to do this is with [kind] v0.9 or newer, as explained in the qui
 Make sure your cluster is set as the default for `kubectl`.
 If it's not, you will need to modify subsequent `kubectl` commands below.
 
-[clusterctl]: https://github.com/kubernetes-sigs/cluster-api/tree/master/cmd/clusterctl
-[pivot]: https://cluster-api.sigs.k8s.io/reference/glossary.html#pivot
 [mcluster]: https://cluster-api.sigs.k8s.io/reference/glossary.html#management-cluster
 [kind]: https://github.com/kubernetes-sigs/kind
 
 ### A container registry
 
-If you're using [kind], you'll need a way to push your images to a registry to they can be pulled.
+If you're using [kind], you'll need a way to push your images to a registry so they can be pulled.
 You can instead [side-load] all images, but the registry workflow is lower-friction.
 
 Most users test with [GCR], but you could also use something like [Docker Hub][hub].
@@ -54,7 +53,7 @@ If you choose not to use GCR, you'll need to set the `REGISTRY` environment vari
 You'll need to [install `kustomize`][kustomize].
 There is a version of `kustomize` built into kubectl, but it does not have all the features of `kustomize` v3 and will not work.
 
-[kustomize]: https://github.com/kubernetes-sigs/kustomize/blob/master/docs/INSTALL.md
+[kustomize]: https://kubectl.docs.kubernetes.io/installation/kustomize/
 
 ### Kubebuilder
 
@@ -64,7 +63,7 @@ You'll need to [install `kubebuilder`][kubebuilder].
 
 ### Envsubst
 
-You'll need [`drone/envsubst`][envsubst] or similar to handle clusterctl var replacement. `envsubst` in GNU gettext package is insufficient and we've noticed some parsing differences, e.g. when parsing a YAML configuration file containing variables with default values. Note: drone/envsubst releases v1.0.2 and earlier do not have the binary packaged under cmd/envsubst. It is available in Go psuedo-version `v1.0.3-0.20200709231038-aa43e1c1a629`
+You'll need [`envsubst`][envsubst] or similar to handle clusterctl var replacement. Note: drone/envsubst releases v1.0.2 and earlier do not have the binary packaged under cmd/envsubst. It is available in Go pseudo-version `v1.0.3-0.20200709231038-aa43e1c1a629`
 
 We provide a make target to generate the `envsubst` binary if desired. See the [provider contract][provider-contract] for more details about how clusterctl uses variables.
 
@@ -82,12 +81,12 @@ The generated binary can be found at ./hack/tools/bin/envsubst
 You'll need to deploy [cert-manager] components on your [management cluster][mcluster], using `kubectl`
 
 ```bash
-kubectl apply -f https://github.com/jetstack/cert-manager/releases/download/v1.1.0/cert-manager.yaml
+kubectl apply -f https://github.com/jetstack/cert-manager/releases/download/v1.5.0/cert-manager.yaml
 ```
 
-Ensure the cert-manager webhook service is ready before creating the Cluster API components. 
+Ensure the cert-manager webhook service is ready before creating the Cluster API components.
 
-This can be done by running: 
+This can be done by running:
 
 ```bash
 kubectl wait --for=condition=Available --timeout=300s apiservice v1beta1.webhook.cert-manager.io
@@ -222,3 +221,15 @@ Now you can [create CAPI objects][qs]!
 To test another iteration, you'll need to follow the steps to build, push, update the manifests, and apply.
 
 [qs]: https://cluster-api.sigs.k8s.io/user/quick-start.html#usage
+
+## Videos explaining CAPI architecture and code walkthrough
+
+CAPI components and architecture
+
+* [Cluster API Deep Dive - Dec 2020 v1alpha3](https://youtu.be/npFO5Fixqcc)
+* [Cluster API Deep Dive - Sept 2020 v1alpha3](https://youtu.be/9SfuQQeeK6Q)
+* [Declarative Kubernetes Clusters with Cluster API - Oct 2020 v1alpha3](https://youtu.be/i6OWn2zRsZg)
+
+Code walkthrough
+
+* [Cluster API CAPD Deep Dive - March 2021 v1alpha4](https://youtu.be/67kEp471MPk)

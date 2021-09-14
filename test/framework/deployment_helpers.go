@@ -21,7 +21,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"os"
 	"path"
 	"path/filepath"
@@ -34,7 +33,12 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/kubernetes"
+
+	"k8s.io/api/policy/v1beta1"
+	"k8s.io/utils/pointer"
+	controlplanev1 "sigs.k8s.io/cluster-api/controlplane/kubeadm/api/v1alpha4"
 	"sigs.k8s.io/cluster-api/test/framework/internal/log"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -65,7 +69,6 @@ func WaitForDeploymentsAvailable(ctx context.Context, input WaitForDeploymentsAv
 			}
 		}
 		return false
-
 	}, intervals...).Should(BeTrue(), func() string { return DescribeFailedDeployment(input, deployment) })
 }
 
@@ -100,8 +103,7 @@ func WatchDeploymentLogs(ctx context.Context, input WatchDeploymentLogsInput) {
 	Expect(input.Deployment).NotTo(BeNil(), "input.Deployment is required for WatchControllerLogs")
 
 	deployment := &appsv1.Deployment{}
-	key, err := client.ObjectKeyFromObject(input.Deployment)
-	Expect(err).NotTo(HaveOccurred(), "Failed to get key for deployment %s/%s", input.Deployment.Namespace, input.Deployment.Name)
+	key := client.ObjectKeyFromObject(input.Deployment)
 	Expect(input.GetLister.Get(ctx, key, deployment)).To(Succeed(), "Failed to get deployment %s/%s", input.Deployment.Namespace, input.Deployment.Name)
 
 	selector, err := metav1.LabelSelectorAsMap(deployment.Spec.Selector)
@@ -118,10 +120,10 @@ func WatchDeploymentLogs(ctx context.Context, input WatchDeploymentLogsInput) {
 			go func(pod corev1.Pod, container corev1.Container) {
 				defer GinkgoRecover()
 
-				logFile := path.Join(input.LogPath, input.Deployment.Name, pod.Name, container.Name+".log")
-				Expect(os.MkdirAll(filepath.Dir(logFile), 0755)).To(Succeed())
+				logFile := filepath.Clean(path.Join(input.LogPath, input.Deployment.Name, pod.Name, container.Name+".log"))
+				Expect(os.MkdirAll(filepath.Dir(logFile), 0750)).To(Succeed())
 
-				f, err := os.OpenFile(logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+				f, err := os.OpenFile(logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
 				Expect(err).NotTo(HaveOccurred())
 				defer f.Close()
 
@@ -130,7 +132,7 @@ func WatchDeploymentLogs(ctx context.Context, input WatchDeploymentLogsInput) {
 					Follow:    true,
 				}
 
-				podLogs, err := input.ClientSet.CoreV1().Pods(input.Deployment.Namespace).GetLogs(pod.Name, opts).Stream()
+				podLogs, err := input.ClientSet.CoreV1().Pods(input.Deployment.Namespace).GetLogs(pod.Name, opts).Stream(ctx)
 				if err != nil {
 					// Failing to stream logs should not cause the test to fail
 					log.Logf("Error starting logs stream for pod %s/%s, container %s: %v", input.Deployment.Namespace, pod.Name, container.Name, err)
@@ -158,9 +160,6 @@ type WatchPodMetricsInput struct {
 }
 
 // WatchPodMetrics captures metrics from all pods every 5s. It expects to find port 8080 open on the controller.
-// Use replacements in an e2econfig to enable metrics scraping without kube-rbac-proxy, e.g:
-//     - new: --metrics-addr=:8080
-//       old: --metrics-addr=127.0.0.1:8080
 func WatchPodMetrics(ctx context.Context, input WatchPodMetricsInput) {
 	// Dump machine metrics every 5 seconds
 	ticker := time.NewTicker(time.Second * 5)
@@ -169,8 +168,7 @@ func WatchPodMetrics(ctx context.Context, input WatchPodMetricsInput) {
 	Expect(input.Deployment).NotTo(BeNil(), "input.Deployment is required for dumpContainerMetrics")
 
 	deployment := &appsv1.Deployment{}
-	key, err := client.ObjectKeyFromObject(input.Deployment)
-	Expect(err).NotTo(HaveOccurred(), "Failed to get key for deployment %s/%s", input.Deployment.Namespace, input.Deployment.Name)
+	key := client.ObjectKeyFromObject(input.Deployment)
 	Expect(input.GetLister.Get(ctx, key, deployment)).To(Succeed(), "Failed to get deployment %s/%s", input.Deployment.Namespace, input.Deployment.Name)
 
 	selector, err := metav1.LabelSelectorAsMap(deployment.Spec.Selector)
@@ -186,19 +184,15 @@ func WatchPodMetrics(ctx context.Context, input WatchPodMetricsInput) {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				dumpPodMetrics(input.ClientSet, input.MetricsPath, deployment.Name, pods)
+				dumpPodMetrics(ctx, input.ClientSet, input.MetricsPath, deployment.Name, pods)
 			}
 		}
 	}()
 }
 
 // dumpPodMetrics captures metrics from all pods. It expects to find port 8080 open on the controller.
-// Use replacements in an e2econfig to enable metrics scraping without kube-rbac-proxy, e.g:
-//     - new: --metrics-addr=:8080
-//       old: --metrics-addr=127.0.0.1:8080
-func dumpPodMetrics(client *kubernetes.Clientset, metricsPath string, deploymentName string, pods *corev1.PodList) {
+func dumpPodMetrics(ctx context.Context, client *kubernetes.Clientset, metricsPath string, deploymentName string, pods *corev1.PodList) {
 	for _, pod := range pods.Items {
-
 		metricsDir := path.Join(metricsPath, deploymentName, pod.Name)
 		metricsFile := path.Join(metricsDir, "metrics.txt")
 		Expect(os.MkdirAll(metricsDir, 0750)).To(Succeed())
@@ -209,7 +203,7 @@ func dumpPodMetrics(client *kubernetes.Clientset, metricsPath string, deployment
 			Name(fmt.Sprintf("%s:8080", pod.Name)).
 			SubResource("proxy").
 			Suffix("metrics").
-			Do()
+			Do(ctx)
 		data, err := res.Raw()
 
 		if err != nil {
@@ -218,7 +212,7 @@ func dumpPodMetrics(client *kubernetes.Clientset, metricsPath string, deployment
 			metricsFile = path.Join(metricsDir, "metrics-error.txt")
 		}
 
-		if err := ioutil.WriteFile(metricsFile, data, 0600); err != nil {
+		if err := os.WriteFile(metricsFile, data, 0600); err != nil {
 			// Failing to dump metrics should not cause the test to fail
 			log.Logf("Error writing metrics for pod %s/%s: %v", pod.Namespace, pod.Name, err)
 		}
@@ -241,9 +235,146 @@ func WaitForDNSUpgrade(ctx context.Context, input WaitForDNSUpgradeInput, interv
 		if err := input.Getter.Get(ctx, client.ObjectKey{Name: "coredns", Namespace: metav1.NamespaceSystem}, d); err != nil {
 			return false, err
 		}
-		if d.Spec.Template.Spec.Containers[0].Image == "k8s.gcr.io/coredns:"+input.DNSVersion {
+
+		// NOTE: coredns image name has changed over time (k8s.gcr.io/coredns,
+		// k8s.gcr.io/coredns/coredns), so we are checking only if the version actually changed.
+		if strings.HasSuffix(d.Spec.Template.Spec.Containers[0].Image, fmt.Sprintf(":%s", input.DNSVersion)) {
 			return true, nil
 		}
 		return false, nil
 	}, intervals...).Should(BeTrue())
+}
+
+type DeployUnevictablePodInput struct {
+	WorkloadClusterProxy ClusterProxy
+	ControlPlane         *controlplanev1.KubeadmControlPlane
+	DeploymentName       string
+	Namespace            string
+
+	WaitForDeploymentAvailableInterval []interface{}
+}
+
+func DeployUnevictablePod(ctx context.Context, input DeployUnevictablePodInput) {
+	Expect(input.DeploymentName).ToNot(BeNil(), "Need a deployment name in DeployUnevictablePod")
+	Expect(input.Namespace).ToNot(BeNil(), "Need a namespace in DeployUnevictablePod")
+	Expect(input.WorkloadClusterProxy).ToNot(BeNil(), "Need a workloadClusterProxy in DeployUnevictablePod")
+	workloadClient := input.WorkloadClusterProxy.GetClientSet()
+
+	log.Logf("Check if namespace %s exists", input.Namespace)
+	if _, err := workloadClient.CoreV1().Namespaces().Get(ctx, input.Namespace, metav1.GetOptions{}); err != nil {
+		_, errCreateNamespace := workloadClient.CoreV1().Namespaces().Create(ctx, &corev1.Namespace{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: input.Namespace,
+			},
+		}, metav1.CreateOptions{})
+		Expect(errCreateNamespace).To(BeNil())
+	}
+
+	workloadDeployment := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      input.DeploymentName,
+			Namespace: input.Namespace,
+		},
+		Spec: appsv1.DeploymentSpec{
+			Replicas: pointer.Int32Ptr(4),
+			Selector: &metav1.LabelSelector{
+				MatchLabels: map[string]string{
+					"app": "nonstop",
+				},
+			},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: map[string]string{
+						"app": "nonstop",
+					},
+				},
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{
+						{
+							Name:  "web",
+							Image: "nginx:1.12",
+							Ports: []corev1.ContainerPort{
+								{
+									Name:          "http",
+									Protocol:      corev1.ProtocolTCP,
+									ContainerPort: 80,
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	if input.ControlPlane != nil {
+		workloadDeployment.Spec.Template.Spec.NodeSelector = map[string]string{"node-role.kubernetes.io/master": ""}
+		workloadDeployment.Spec.Template.Spec.Tolerations = []corev1.Toleration{
+			{
+				Key:    "node-role.kubernetes.io/master",
+				Effect: "NoSchedule",
+			},
+		}
+	}
+	AddDeploymentToWorkloadCluster(ctx, AddDeploymentToWorkloadClusterInput{
+		Namespace:  input.Namespace,
+		ClientSet:  workloadClient,
+		Deployment: workloadDeployment,
+	})
+
+	budget := &v1beta1.PodDisruptionBudget{
+		TypeMeta: metav1.TypeMeta{
+			Kind:       "PodDisruptionBudget",
+			APIVersion: "policy/v1beta1",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      input.DeploymentName,
+			Namespace: input.Namespace,
+		},
+		Spec: v1beta1.PodDisruptionBudgetSpec{
+			Selector: &metav1.LabelSelector{
+				MatchLabels: map[string]string{
+					"app": "nonstop",
+				},
+			},
+			MaxUnavailable: &intstr.IntOrString{
+				Type:   intstr.Int,
+				IntVal: 1,
+				StrVal: "1",
+			},
+		},
+	}
+	AddPodDisruptionBudget(ctx, AddPodDisruptionBudgetInput{
+		Namespace: input.Namespace,
+		ClientSet: workloadClient,
+		Budget:    budget,
+	})
+
+	WaitForDeploymentsAvailable(ctx, WaitForDeploymentsAvailableInput{
+		Getter:     input.WorkloadClusterProxy.GetClient(),
+		Deployment: workloadDeployment,
+	}, input.WaitForDeploymentAvailableInterval...)
+}
+
+type AddDeploymentToWorkloadClusterInput struct {
+	ClientSet  *kubernetes.Clientset
+	Deployment *appsv1.Deployment
+	Namespace  string
+}
+
+func AddDeploymentToWorkloadCluster(ctx context.Context, input AddDeploymentToWorkloadClusterInput) {
+	result, err := input.ClientSet.AppsV1().Deployments(input.Namespace).Create(ctx, input.Deployment, metav1.CreateOptions{})
+	Expect(result).NotTo(BeNil())
+	Expect(err).To(BeNil(), "nonstop pods need to be successfully deployed")
+}
+
+type AddPodDisruptionBudgetInput struct {
+	ClientSet *kubernetes.Clientset
+	Budget    *v1beta1.PodDisruptionBudget
+	Namespace string
+}
+
+func AddPodDisruptionBudget(ctx context.Context, input AddPodDisruptionBudgetInput) {
+	budget, err := input.ClientSet.PolicyV1beta1().PodDisruptionBudgets(input.Namespace).Create(ctx, input.Budget, metav1.CreateOptions{})
+	Expect(budget).NotTo(BeNil())
+	Expect(err).To(BeNil(), "podDisruptionBudget needs to be successfully deployed")
 }

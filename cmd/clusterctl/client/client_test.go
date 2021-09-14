@@ -25,6 +25,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/serializer"
 	"k8s.io/apimachinery/pkg/util/wait"
+
 	clusterctlv1 "sigs.k8s.io/cluster-api/cmd/clusterctl/api/v1alpha3"
 	"sigs.k8s.io/cluster-api/cmd/clusterctl/client/cluster"
 	"sigs.k8s.io/cluster-api/cmd/clusterctl/client/config"
@@ -33,9 +34,10 @@ import (
 	yaml "sigs.k8s.io/cluster-api/cmd/clusterctl/client/yamlprocessor"
 	"sigs.k8s.io/cluster-api/cmd/clusterctl/internal/scheme"
 	"sigs.k8s.io/cluster-api/cmd/clusterctl/internal/test"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-// TestNewFakeClient is a fake test to document fakeClient usage
+// TestNewFakeClient is a fake test to document fakeClient usage.
 func TestNewFakeClient(t *testing.T) {
 	// create a fake config with a provider named P1 and a variable named var
 	repository1Config := config.NewProvider("p1", "url", clusterctlv1.CoreProviderType)
@@ -102,6 +104,14 @@ func (f fakeClient) Move(options MoveOptions) error {
 	return f.internalClient.Move(options)
 }
 
+func (f fakeClient) Backup(options BackupOptions) error {
+	return f.internalClient.Backup(options)
+}
+
+func (f fakeClient) Restore(options RestoreOptions) error {
+	return f.internalClient.Restore(options)
+}
+
 func (f fakeClient) PlanUpgrade(options PlanUpgradeOptions) ([]UpgradePlan, error) {
 	return f.internalClient.PlanUpgrade(options)
 }
@@ -118,14 +128,29 @@ func (f fakeClient) ProcessYAML(options ProcessYAMLOptions) (YamlPrinter, error)
 	return f.internalClient.ProcessYAML(options)
 }
 
+func (f fakeClient) RolloutRestart(options RolloutOptions) error {
+	return f.internalClient.RolloutRestart(options)
+}
+
 func (f fakeClient) DescribeCluster(options DescribeClusterOptions) (*tree.ObjectTree, error) {
 	return f.internalClient.DescribeCluster(options)
+}
+
+func (f fakeClient) RolloutPause(options RolloutOptions) error {
+	return f.internalClient.RolloutPause(options)
+}
+
+func (f fakeClient) RolloutResume(options RolloutOptions) error {
+	return f.internalClient.RolloutResume(options)
+}
+
+func (f fakeClient) RolloutUndo(options RolloutOptions) error {
+	return f.internalClient.RolloutUndo(options)
 }
 
 // newFakeClient returns a clusterctl client that allows to execute tests on a set of fake config, fake repositories and fake clusters.
 // you can use WithCluster and WithRepository to prepare for the test case.
 func newFakeClient(configClient config.Client) *fakeClient {
-
 	fake := &fakeClient{
 		clusters:     map[cluster.Kubeconfig]cluster.Client{},
 		repositories: map[string]repository.Client{},
@@ -202,7 +227,7 @@ func newFakeCluster(kubeconfig cluster.Kubeconfig, configClient config.Client) *
 }
 
 // newFakeCertManagerClient creates a new CertManagerClient
-// allows the caller to define which images are needed for the manager to run
+// allows the caller to define which images are needed for the manager to run.
 func newFakeCertManagerClient(imagesReturnImages []string, imagesReturnError error) *fakeCertManagerClient {
 	return &fakeCertManagerClient{
 		images:      imagesReturnImages,
@@ -293,13 +318,13 @@ func (f *fakeClusterClient) WorkloadCluster() cluster.WorkloadCluster {
 	return f.internalclient.WorkloadCluster()
 }
 
-func (f *fakeClusterClient) WithObjs(objs ...runtime.Object) *fakeClusterClient {
+func (f *fakeClusterClient) WithObjs(objs ...client.Object) *fakeClusterClient {
 	f.fakeProxy.WithObjs(objs...)
 	return f
 }
 
-func (f *fakeClusterClient) WithProviderInventory(name string, providerType clusterctlv1.ProviderType, version, targetNamespace, watchingNamespace string) *fakeClusterClient {
-	f.fakeProxy.WithProviderInventory(name, providerType, version, targetNamespace, watchingNamespace)
+func (f *fakeClusterClient) WithProviderInventory(name string, providerType clusterctlv1.ProviderType, version, targetNamespace string) *fakeClusterClient {
+	f.fakeProxy.WithProviderInventory(name, providerType, version, targetNamespace)
 	return f
 }
 
@@ -339,6 +364,10 @@ type fakeConfigClient struct {
 
 var _ config.Client = &fakeConfigClient{}
 
+func (f fakeConfigClient) CertManager() config.CertManagerClient {
+	return f.internalclient.CertManager()
+}
+
 func (f fakeConfigClient) Providers() config.ProvidersClient {
 	return f.internalclient.Providers()
 }
@@ -365,7 +394,7 @@ func (f *fakeConfigClient) WithProvider(provider config.Provider) *fakeConfigCli
 // The implementation stores configuration settings in a map; you can use
 // the WithPaths or WithDefaultVersion methods to configure the repository and WithFile to set the map values.
 func newFakeRepository(provider config.Provider, configClient config.Client) *fakeRepositoryClient {
-	fakeRepository := test.NewFakeRepository()
+	fakeRepository := repository.NewMemoryRepository()
 
 	if configClient == nil {
 		configClient = newFakeConfig()
@@ -382,7 +411,7 @@ func newFakeRepository(provider config.Provider, configClient config.Client) *fa
 type fakeRepositoryClient struct {
 	config.Provider
 	configClient   config.Client
-	fakeRepository *test.FakeRepository
+	fakeRepository *repository.MemoryRepository
 	processor      yaml.Processor
 }
 
@@ -449,15 +478,15 @@ func (f *fakeRepositoryClient) WithFile(version, path string, content []byte) *f
 	return f
 }
 
-// fakeTemplateClient provides a super simple TemplateClient (e.g. without support for local overrides)
+// fakeTemplateClient provides a super simple TemplateClient (e.g. without support for local overrides).
 type fakeTemplateClient struct {
 	version               string
-	fakeRepository        *test.FakeRepository
+	fakeRepository        *repository.MemoryRepository
 	configVariablesClient config.VariablesClient
 	processor             yaml.Processor
 }
 
-func (f *fakeTemplateClient) Get(flavor, targetNamespace string, listVariablesOnly bool) (repository.Template, error) {
+func (f *fakeTemplateClient) Get(flavor, targetNamespace string, skipTemplateProcess bool) (repository.Template, error) {
 	name := "cluster-template"
 	if flavor != "" {
 		name = fmt.Sprintf("%s-%s", name, flavor)
@@ -473,14 +502,14 @@ func (f *fakeTemplateClient) Get(flavor, targetNamespace string, listVariablesOn
 		ConfigVariablesClient: f.configVariablesClient,
 		Processor:             f.processor,
 		TargetNamespace:       targetNamespace,
-		ListVariablesOnly:     listVariablesOnly,
+		SkipTemplateProcess:   skipTemplateProcess,
 	})
 }
 
-// fakeMetadataClient provides a super simple MetadataClient (e.g. without support for local overrides/embedded metadata)
+// fakeMetadataClient provides a super simple MetadataClient (e.g. without support for local overrides/embedded metadata).
 type fakeMetadataClient struct {
 	version        string
-	fakeRepository *test.FakeRepository
+	fakeRepository *repository.MemoryRepository
 }
 
 func (f *fakeMetadataClient) Get() (*clusterctlv1.Metadata, error) {
@@ -498,21 +527,20 @@ func (f *fakeMetadataClient) Get() (*clusterctlv1.Metadata, error) {
 	return obj, nil
 }
 
-// fakeComponentClient provides a super simple ComponentClient (e.g. without support for local overrides)
+// fakeComponentClient provides a super simple ComponentClient (e.g. without support for local overrides).
 type fakeComponentClient struct {
 	provider       config.Provider
-	fakeRepository *test.FakeRepository
+	fakeRepository *repository.MemoryRepository
 	configClient   config.Client
 	processor      yaml.Processor
 }
 
-func (f *fakeComponentClient) Get(options repository.ComponentsOptions) (repository.Components, error) {
-	if options.Version == "" {
-		options.Version = f.fakeRepository.DefaultVersion()
-	}
-	path := f.fakeRepository.ComponentsPath()
+func (f *fakeComponentClient) Raw(options repository.ComponentsOptions) ([]byte, error) {
+	return f.getRawBytes(&options)
+}
 
-	content, err := f.fakeRepository.GetFile(options.Version, path)
+func (f *fakeComponentClient) Get(options repository.ComponentsOptions) (repository.Components, error) {
+	content, err := f.getRawBytes(&options)
 	if err != nil {
 		return nil, err
 	}
@@ -526,4 +554,13 @@ func (f *fakeComponentClient) Get(options repository.ComponentsOptions) (reposit
 			Options:      options,
 		},
 	)
+}
+
+func (f *fakeComponentClient) getRawBytes(options *repository.ComponentsOptions) ([]byte, error) {
+	if options.Version == "" {
+		options.Version = f.fakeRepository.DefaultVersion()
+	}
+	path := f.fakeRepository.ComponentsPath()
+
+	return f.fakeRepository.GetFile(options.Version, path)
 }

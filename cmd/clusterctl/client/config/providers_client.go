@@ -26,33 +26,43 @@ import (
 	clusterctlv1 "sigs.k8s.io/cluster-api/cmd/clusterctl/api/v1alpha3"
 )
 
+// Core providers.
 const (
-	// Core providers
 	ClusterAPIProviderName = "cluster-api"
+)
 
-	// Infra providers
+// Infra providers.
+const (
 	AWSProviderName       = "aws"
 	AzureProviderName     = "azure"
 	DockerProviderName    = "docker"
 	DOProviderName        = "digitalocean"
 	GCPProviderName       = "gcp"
 	Metal3ProviderName    = "metal3"
+	NestedProviderName    = "nested"
 	OpenStackProviderName = "openstack"
 	PacketProviderName    = "packet"
 	SideroProviderName    = "sidero"
 	VSphereProviderName   = "vsphere"
+)
 
-	// Bootstrap providers
+// Bootstrap providers.
+const (
 	KubeadmBootstrapProviderName = "kubeadm"
 	TalosBootstrapProviderName   = "talos"
 	AWSEKSBootstrapProviderName  = "aws-eks"
+)
 
-	// ControlPlane providers
+// ControlPlane providers.
+const (
 	KubeadmControlPlaneProviderName = "kubeadm"
 	TalosControlPlaneProviderName   = "talos"
 	AWSEKSControlPlaneProviderName  = "aws-eks"
+	NestedControlPlaneProviderName  = "nested"
+)
 
-	// Other
+// Other.
+const (
 	ProvidersConfigKey = "providers"
 )
 
@@ -134,6 +144,11 @@ func (p *providersClient) defaults() []Provider {
 			providerType: clusterctlv1.InfrastructureProviderType,
 		},
 		&provider{
+			name:         NestedProviderName,
+			url:          "https://github.com/kubernetes-sigs/cluster-api-provider-nested/releases/latest/infrastructure-components.yaml",
+			providerType: clusterctlv1.InfrastructureProviderType,
+		},
+		&provider{
 			name:         OpenStackProviderName,
 			url:          "https://github.com/kubernetes-sigs/cluster-api-provider-openstack/releases/latest/infrastructure-components.yaml",
 			providerType: clusterctlv1.InfrastructureProviderType,
@@ -181,12 +196,17 @@ func (p *providersClient) defaults() []Provider {
 			url:          "https://github.com/kubernetes-sigs/cluster-api-provider-aws/releases/latest/eks-controlplane-components.yaml",
 			providerType: clusterctlv1.ControlPlaneProviderType,
 		},
+		&provider{
+			name:         NestedControlPlaneProviderName,
+			url:          "https://github.com/kubernetes-sigs/cluster-api-provider-nested/releases/latest/control-plane-components.yaml",
+			providerType: clusterctlv1.ControlPlaneProviderType,
+		},
 	}
 
 	return defaults
 }
 
-// configProvider mirrors config.Provider interface and allows serialization of the corresponding info
+// configProvider mirrors config.Provider interface and allows serialization of the corresponding info.
 type configProvider struct {
 	Name string                    `json:"name,omitempty"`
 	URL  string                    `json:"url,omitempty"`
@@ -238,7 +258,7 @@ func (p *providersClient) Get(name string, providerType clusterctlv1.ProviderTyp
 		return nil, err
 	}
 
-	provider := NewProvider(name, "", providerType) //Nb. Having the url empty is fine because the url is not considered by SameAs.
+	provider := NewProvider(name, "", providerType) // NB. Having the url empty is fine because the url is not considered by SameAs.
 	for _, r := range l {
 		if r.SameAs(provider) {
 			return r, nil
@@ -265,8 +285,7 @@ func validateProvider(r Provider) error {
 		return errors.New("provider URL value cannot be empty")
 	}
 
-	_, err := url.Parse(r.URL())
-	if err != nil {
+	if _, err := url.Parse(r.URL()); err != nil {
 		return errors.Wrap(err, "error parsing provider URL")
 	}
 

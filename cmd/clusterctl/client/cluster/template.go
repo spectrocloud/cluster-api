@@ -19,13 +19,12 @@ package cluster
 import (
 	"context"
 	"encoding/base64"
-	"io/ioutil"
 	"net/http"
 	"net/url"
 	"os"
 	"strings"
 
-	"github.com/google/go-github/github"
+	"github.com/google/go-github/v33/github"
 	"github.com/pkg/errors"
 	"golang.org/x/oauth2"
 	corev1 "k8s.io/api/core/v1"
@@ -38,10 +37,10 @@ import (
 // TemplateClient has methods to work with templates stored in the cluster/out of the provider repository.
 type TemplateClient interface {
 	// GetFromConfigMap returns a workload cluster template from the given ConfigMap.
-	GetFromConfigMap(namespace, name, dataKey, targetNamespace string, listVariablesOnly bool) (repository.Template, error)
+	GetFromConfigMap(namespace, name, dataKey, targetNamespace string, skipTemplateProcess bool) (repository.Template, error)
 
 	// GetFromURL returns a workload cluster template from the given URL.
-	GetFromURL(templateURL, targetNamespace string, listVariablesOnly bool) (repository.Template, error)
+	GetFromURL(templateURL, targetNamespace string, skipTemplateProcess bool) (repository.Template, error)
 }
 
 // templateClient implements TemplateClient.
@@ -55,6 +54,7 @@ type templateClient struct {
 // ensure templateClient implements TemplateClient.
 var _ TemplateClient = &templateClient{}
 
+// TemplateClientInput is an input struct for newTemplateClient.
 type TemplateClientInput struct {
 	proxy        Proxy
 	configClient config.Client
@@ -71,7 +71,7 @@ func newTemplateClient(input TemplateClientInput) *templateClient {
 	}
 }
 
-func (t *templateClient) GetFromConfigMap(configMapNamespace, configMapName, configMapDataKey, targetNamespace string, listVariablesOnly bool) (repository.Template, error) {
+func (t *templateClient) GetFromConfigMap(configMapNamespace, configMapName, configMapDataKey, targetNamespace string, skipTemplateProcess bool) (repository.Template, error) {
 	if configMapNamespace == "" {
 		return nil, errors.New("invalid GetFromConfigMap operation: missing configMapNamespace value")
 	}
@@ -104,11 +104,11 @@ func (t *templateClient) GetFromConfigMap(configMapNamespace, configMapName, con
 		ConfigVariablesClient: t.configClient.Variables(),
 		Processor:             t.processor,
 		TargetNamespace:       targetNamespace,
-		ListVariablesOnly:     listVariablesOnly,
+		SkipTemplateProcess:   skipTemplateProcess,
 	})
 }
 
-func (t *templateClient) GetFromURL(templateURL, targetNamespace string, listVariablesOnly bool) (repository.Template, error) {
+func (t *templateClient) GetFromURL(templateURL, targetNamespace string, skipTemplateProcess bool) (repository.Template, error) {
 	if templateURL == "" {
 		return nil, errors.New("invalid GetFromURL operation: missing templateURL value")
 	}
@@ -123,7 +123,7 @@ func (t *templateClient) GetFromURL(templateURL, targetNamespace string, listVar
 		ConfigVariablesClient: t.configClient.Variables(),
 		Processor:             t.processor,
 		TargetNamespace:       targetNamespace,
-		ListVariablesOnly:     listVariablesOnly,
+		SkipTemplateProcess:   skipTemplateProcess,
 	})
 }
 
@@ -152,7 +152,7 @@ func (t *templateClient) getLocalFileContent(rURL *url.URL) ([]byte, error) {
 	if f.IsDir() {
 		return nil, errors.Errorf("invalid path: file %q is actually a directory", rURL.Path)
 	}
-	content, err := ioutil.ReadFile(rURL.Path)
+	content, err := os.ReadFile(rURL.Path)
 	if err != nil {
 		return nil, errors.Wrapf(err, "failed to read file %q", rURL.Path)
 	}
@@ -212,7 +212,7 @@ func getGitHubClient(configVariablesClient config.VariablesClient) (*github.Clie
 	return github.NewClient(authenticatingHTTPClient), nil
 }
 
-// handleGithubErr wraps error messages
+// handleGithubErr wraps error messages.
 func handleGithubErr(err error, message string, args ...interface{}) error {
 	if _, ok := err.(*github.RateLimitError); ok {
 		return errors.New("rate limit for github api has been reached. Please wait one hour or get a personal API tokens a assign it to the GITHUB_TOKEN environment variable")

@@ -23,118 +23,111 @@ import (
 	"testing"
 	"time"
 
-	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 	"github.com/onsi/gomega/types"
 	"github.com/pkg/errors"
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha3"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha4"
+	"sigs.k8s.io/cluster-api/api/v1alpha4/index"
 	"sigs.k8s.io/cluster-api/controllers/remote"
-	"sigs.k8s.io/cluster-api/test/helpers"
+	"sigs.k8s.io/cluster-api/internal/envtest"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
-	"sigs.k8s.io/controller-runtime/pkg/envtest/printer"
-	"sigs.k8s.io/controller-runtime/pkg/log"
 	// +kubebuilder:scaffold:imports
 )
 
 const (
-	timeout = time.Second * 30
+	timeout         = time.Second * 30
+	testClusterName = "test-cluster"
 )
 
 var (
-	testEnv *helpers.TestEnvironment
-	ctx     = context.Background()
+	env        *envtest.Environment
+	ctx        = ctrl.SetupSignalHandler()
+	fakeScheme = runtime.NewScheme()
 )
 
-func TestMain(m *testing.M) {
-	fmt.Println("Creating new test environment")
-	testEnv = helpers.NewTestEnvironment()
-
-	// Set up a ClusterCacheTracker and ClusterCacheReconciler to provide to controllers
-	// requiring a connection to a remote cluster
-	tracker, err := remote.NewClusterCacheTracker(
-		log.Log,
-		testEnv.Manager,
-	)
-	if err != nil {
-		panic(fmt.Sprintf("unable to create cluster cache tracker: %v", err))
-	}
-	if err := (&remote.ClusterCacheReconciler{
-		Client:  testEnv,
-		Log:     log.Log,
-		Tracker: tracker,
-	}).SetupWithManager(testEnv.Manager, controller.Options{MaxConcurrentReconciles: 1}); err != nil {
-		panic(fmt.Sprintf("Failed to start ClusterCacheReconciler: %v", err))
-	}
-	if err := (&ClusterReconciler{
-		Client:   testEnv,
-		Log:      log.Log.WithName("controllers").WithName("Cluster"),
-		recorder: testEnv.GetEventRecorderFor("cluster-controller"),
-	}).SetupWithManager(testEnv.Manager, controller.Options{MaxConcurrentReconciles: 1}); err != nil {
-		panic(fmt.Sprintf("Failed to start ClusterReconciler: %v", err))
-	}
-	if err := (&MachineReconciler{
-		Client:   testEnv,
-		Log:      log.Log.WithName("controllers").WithName("Machine"),
-		Tracker:  tracker,
-		recorder: testEnv.GetEventRecorderFor("machine-controller"),
-	}).SetupWithManager(testEnv.Manager, controller.Options{MaxConcurrentReconciles: 1}); err != nil {
-		panic(fmt.Sprintf("Failed to start MachineReconciler: %v", err))
-	}
-	if err := (&MachineSetReconciler{
-		Client:   testEnv,
-		Log:      log.Log.WithName("controllers").WithName("MachineSet"),
-		Tracker:  tracker,
-		recorder: testEnv.GetEventRecorderFor("machineset-controller"),
-	}).SetupWithManager(testEnv.Manager, controller.Options{MaxConcurrentReconciles: 1}); err != nil {
-		panic(fmt.Sprintf("Failed to start MMachineSetReconciler: %v", err))
-	}
-	if err := (&MachineDeploymentReconciler{
-		Client:   testEnv,
-		Log:      log.Log.WithName("controllers").WithName("MachineDeployment"),
-		recorder: testEnv.GetEventRecorderFor("machinedeployment-controller"),
-	}).SetupWithManager(testEnv.Manager, controller.Options{MaxConcurrentReconciles: 1}); err != nil {
-		panic(fmt.Sprintf("Failed to start MMachineDeploymentReconciler: %v", err))
-	}
-	if err := (&MachineHealthCheckReconciler{
-		Client:   testEnv,
-		Log:      log.Log.WithName("controllers").WithName("MachineHealthCheck"),
-		Tracker:  tracker,
-		recorder: testEnv.GetEventRecorderFor("machinehealthcheck-controller"),
-	}).SetupWithManager(testEnv.Manager, controller.Options{MaxConcurrentReconciles: 1}); err != nil {
-		panic(fmt.Sprintf("Failed to start MachineHealthCheckReconciler : %v", err))
-	}
-
-	go func() {
-		fmt.Println("Starting the manager")
-		if err := testEnv.StartManager(); err != nil {
-			panic(fmt.Sprintf("Failed to start the envtest manager: %v", err))
-		}
-	}()
-	// wait for webhook port to be open prior to running tests
-	testEnv.WaitForWebhooks()
-
-	code := m.Run()
-
-	fmt.Println("Tearing down test suite")
-	if err := testEnv.Stop(); err != nil {
-		panic(fmt.Sprintf("Failed to stop envtest: %v", err))
-	}
-
-	os.Exit(code)
+func init() {
+	_ = clientgoscheme.AddToScheme(fakeScheme)
+	_ = clusterv1.AddToScheme(fakeScheme)
+	_ = apiextensionsv1.AddToScheme(fakeScheme)
 }
 
-// TestGinkgoSuite will run the ginkgo tests.
-// This will run with the testEnv setup and teardown in TestMain.
-func TestGinkgoSuite(t *testing.T) {
+func TestMain(m *testing.M) {
+	setupIndexes := func(ctx context.Context, mgr ctrl.Manager) {
+		if err := index.AddDefaultIndexes(ctx, mgr); err != nil {
+			panic(fmt.Sprintf("unable to setup index: %v", err))
+		}
+	}
+
+	setupReconcilers := func(ctx context.Context, mgr ctrl.Manager) {
+		// Set up a ClusterCacheTracker and ClusterCacheReconciler to provide to controllers
+		// requiring a connection to a remote cluster
+		tracker, err := remote.NewClusterCacheTracker(
+			mgr,
+			remote.ClusterCacheTrackerOptions{
+				Log:     ctrl.Log.WithName("remote").WithName("ClusterCacheTracker"),
+				Indexes: remote.DefaultIndexes,
+			},
+		)
+		if err != nil {
+			panic(fmt.Sprintf("unable to create cluster cache tracker: %v", err))
+		}
+		if err := (&remote.ClusterCacheReconciler{
+			Client:  mgr.GetClient(),
+			Log:     ctrl.Log.WithName("remote").WithName("ClusterCacheReconciler"),
+			Tracker: tracker,
+		}).SetupWithManager(ctx, mgr, controller.Options{MaxConcurrentReconciles: 1}); err != nil {
+			panic(fmt.Sprintf("Failed to start ClusterCacheReconciler: %v", err))
+		}
+		if err := (&ClusterReconciler{
+			Client:   mgr.GetClient(),
+			recorder: mgr.GetEventRecorderFor("cluster-controller"),
+		}).SetupWithManager(ctx, mgr, controller.Options{MaxConcurrentReconciles: 1}); err != nil {
+			panic(fmt.Sprintf("Failed to start ClusterReconciler: %v", err))
+		}
+		if err := (&MachineReconciler{
+			Client:   mgr.GetClient(),
+			Tracker:  tracker,
+			recorder: mgr.GetEventRecorderFor("machine-controller"),
+		}).SetupWithManager(ctx, mgr, controller.Options{MaxConcurrentReconciles: 1}); err != nil {
+			panic(fmt.Sprintf("Failed to start MachineReconciler: %v", err))
+		}
+		if err := (&MachineSetReconciler{
+			Client:   mgr.GetClient(),
+			Tracker:  tracker,
+			recorder: mgr.GetEventRecorderFor("machineset-controller"),
+		}).SetupWithManager(ctx, mgr, controller.Options{MaxConcurrentReconciles: 1}); err != nil {
+			panic(fmt.Sprintf("Failed to start MMachineSetReconciler: %v", err))
+		}
+		if err := (&MachineDeploymentReconciler{
+			Client:   mgr.GetClient(),
+			recorder: mgr.GetEventRecorderFor("machinedeployment-controller"),
+		}).SetupWithManager(ctx, mgr, controller.Options{MaxConcurrentReconciles: 1}); err != nil {
+			panic(fmt.Sprintf("Failed to start MMachineDeploymentReconciler: %v", err))
+		}
+		if err := (&MachineHealthCheckReconciler{
+			Client:   mgr.GetClient(),
+			Tracker:  tracker,
+			recorder: mgr.GetEventRecorderFor("machinehealthcheck-controller"),
+		}).SetupWithManager(ctx, mgr, controller.Options{MaxConcurrentReconciles: 1}); err != nil {
+			panic(fmt.Sprintf("Failed to start MachineHealthCheckReconciler : %v", err))
+		}
+	}
+
 	SetDefaultEventuallyPollingInterval(100 * time.Millisecond)
 	SetDefaultEventuallyTimeout(timeout)
-	RegisterFailHandler(Fail)
 
-	RunSpecsWithDefaultAndCustomReporters(t,
-		"Controllers Suite",
-		[]Reporter{printer.NewlineReporter{}})
+	os.Exit(envtest.Run(ctx, envtest.RunInput{
+		M:                m,
+		SetupEnv:         func(e *envtest.Environment) { env = e },
+		SetupIndexes:     setupIndexes,
+		SetupReconcilers: setupReconcilers,
+	}))
 }
 
 func ContainRefOfGroupKind(group, kind string) types.GomegaMatcher {
@@ -158,7 +151,7 @@ func (matcher *refGroupKindMatcher) Match(actual interface{}) (success bool, err
 	for _, ref := range ownerRefs {
 		gv, err := schema.ParseGroupVersion(ref.APIVersion)
 		if err != nil {
-			return false, nil
+			return false, nil // nolint:nilerr // If we can't get the group version we can't match, but it's not a failure
 		}
 		if ref.Kind == matcher.kind && gv.Group == clusterv1.GroupVersion.Group {
 			return true, nil

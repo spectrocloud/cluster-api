@@ -28,10 +28,10 @@ import (
 	"github.com/spf13/cobra"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/util/duration"
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha3"
+	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha4"
 	"sigs.k8s.io/cluster-api/cmd/clusterctl/client"
 	"sigs.k8s.io/cluster-api/cmd/clusterctl/client/tree"
-	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 const (
@@ -134,7 +134,7 @@ func runDescribeCluster(name string) error {
 	return nil
 }
 
-// printObjectTree prints the cluster status to stdout
+// printObjectTree prints the cluster status to stdout.
 func printObjectTree(tree *tree.ObjectTree) {
 	// Creates the output table
 	tbl := uitable.New()
@@ -150,7 +150,7 @@ func printObjectTree(tree *tree.ObjectTree) {
 
 // addObjectRow add a row for a given object, and recursively for all the object's children.
 // NOTE: each row name gets a prefix, that generates a tree view like representation.
-func addObjectRow(prefix string, tbl *uitable.Table, objectTree *tree.ObjectTree, obj controllerutil.Object) {
+func addObjectRow(prefix string, tbl *uitable.Table, objectTree *tree.ObjectTree, obj ctrlclient.Object) {
 	// Gets the descriptor for the object's ready condition, if any.
 	readyDescriptor := conditionDescriptor{readyColor: gray}
 	if ready := tree.GetReadyCondition(obj); ready != nil {
@@ -201,7 +201,7 @@ func addObjectRow(prefix string, tbl *uitable.Table, objectTree *tree.ObjectTree
 
 // addOtherConditions adds a row for each object condition except the ready condition,
 // which is already represented on the object's main row.
-func addOtherConditions(prefix string, tbl *uitable.Table, objectTree *tree.ObjectTree, obj controllerutil.Object) {
+func addOtherConditions(prefix string, tbl *uitable.Table, objectTree *tree.ObjectTree, obj ctrlclient.Object) {
 	// Add a row for each other condition, taking care of updating the tree view prefix.
 	// In this case the tree prefix get a filler, to indent conditions from objects, and eventually a
 	// and additional pipe if the object has children that should be presented after the conditions.
@@ -250,7 +250,7 @@ func getChildPrefix(currentPrefix string, childIndex, childCount int) string {
 // - objects with a meta name are represented as meta name - (kind/name), e.g. ClusterInfrastructure - DockerCluster/test1
 // - other objects are represented as kind/name, e.g.Machine/test1-md-0-779b87ff56-642vs
 // - if the object is being deleted, a prefix will be added.
-func getRowName(obj controllerutil.Object) string {
+func getRowName(obj ctrlclient.Object) string {
 	if tree.IsGroupObject(obj) {
 		items := strings.Split(tree.GetGroupItems(obj), tree.GroupItemsSeparator)
 		kind := flect.Pluralize(strings.TrimSuffix(obj.GetObjectKind().GroupVersionKind().Kind, "Group"))

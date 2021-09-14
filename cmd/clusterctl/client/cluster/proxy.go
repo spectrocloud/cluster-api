@@ -31,12 +31,12 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	"sigs.k8s.io/cluster-api/cmd/clusterctl/internal/scheme"
-	"sigs.k8s.io/cluster-api/cmd/version"
+	"sigs.k8s.io/cluster-api/version"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 var (
-	Scheme = scheme.Scheme
+	localScheme = scheme.Scheme
 )
 
 type proxy struct {
@@ -138,7 +138,7 @@ func (k *proxy) NewClient() (client.Client, error) {
 	connectBackoff := newConnectBackoff()
 	if err := retryWithExponentialBackoff(connectBackoff, func() error {
 		var err error
-		c, err = client.New(config, client.Options{Scheme: Scheme})
+		c, err = client.New(config, client.Options{Scheme: localScheme})
 		if err != nil {
 			return err
 		}
@@ -217,14 +217,17 @@ func listObjByGVK(c client.Client, groupVersion, kind string, options []client.L
 	return objList, nil
 }
 
+// ProxyOption defines a function that can change proxy options.
 type ProxyOption func(p *proxy)
 
+// InjectProxyTimeout sets the proxy timeout.
 func InjectProxyTimeout(t time.Duration) ProxyOption {
 	return func(p *proxy) {
 		p.timeout = t
 	}
 }
 
+// InjectKubeconfigPaths sets the kubeconfig paths loading rules.
 func InjectKubeconfigPaths(paths []string) ProxyOption {
 	return func(p *proxy) {
 		p.configLoadingRules.Precedence = paths

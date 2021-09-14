@@ -21,12 +21,13 @@ import (
 
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
-
+	"github.com/pkg/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
-	"k8s.io/apimachinery/pkg/runtime"
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha3"
-	"sigs.k8s.io/cluster-api/bootstrap/kubeadm/types/v1beta1"
-	controlplanev1 "sigs.k8s.io/cluster-api/controlplane/kubeadm/api/v1alpha3"
+	"k8s.io/utils/pointer"
+	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha4"
+	bootstrapv1 "sigs.k8s.io/cluster-api/bootstrap/kubeadm/api/v1alpha4"
+	controlplanev1 "sigs.k8s.io/cluster-api/controlplane/kubeadm/api/v1alpha4"
 	"sigs.k8s.io/cluster-api/test/framework/internal/log"
 	"sigs.k8s.io/cluster-api/util/patch"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -36,7 +37,7 @@ import (
 type CreateKubeadmControlPlaneInput struct {
 	Creator         Creator
 	ControlPlane    *controlplanev1.KubeadmControlPlane
-	MachineTemplate runtime.Object
+	MachineTemplate client.Object
 }
 
 // CreateKubeadmControlPlane creates the control plane object and necessary dependencies.
@@ -107,14 +108,14 @@ func WaitForKubeadmControlPlaneMachinesToExist(ctx context.Context, input WaitFo
 	}, intervals...).Should(Equal(int(*input.ControlPlane.Spec.Replicas)))
 }
 
-// WaitForKubeadmControlPlaneMachinesToExistInput is the input for WaitForKubeadmControlPlaneMachinesToExist.
+// WaitForOneKubeadmControlPlaneMachineToExistInput is the input for WaitForKubeadmControlPlaneMachinesToExist.
 type WaitForOneKubeadmControlPlaneMachineToExistInput struct {
 	Lister       Lister
 	Cluster      *clusterv1.Cluster
 	ControlPlane *controlplanev1.KubeadmControlPlane
 }
 
-// WaitForKubeadmControlPlaneMachineToExist will wait until all control plane machines have node refs.
+// WaitForOneKubeadmControlPlaneMachineToExist will wait until all control plane machines have node refs.
 func WaitForOneKubeadmControlPlaneMachineToExist(ctx context.Context, input WaitForOneKubeadmControlPlaneMachineToExistInput, intervals ...interface{}) {
 	Expect(ctx).NotTo(BeNil(), "ctx is required for WaitForOneKubeadmControlPlaneMachineToExist")
 	Expect(input.Lister).ToNot(BeNil(), "Invalid argument. input.Getter can't be nil when calling WaitForOneKubeadmControlPlaneMachineToExist")
@@ -299,15 +300,15 @@ func UpgradeControlPlaneAndWaitForUpgrade(ctx context.Context, input UpgradeCont
 	Expect(err).ToNot(HaveOccurred())
 
 	input.ControlPlane.Spec.Version = input.KubernetesUpgradeVersion
-	input.ControlPlane.Spec.KubeadmConfigSpec.ClusterConfiguration.Etcd = v1beta1.Etcd{
-		Local: &v1beta1.LocalEtcd{
-			ImageMeta: v1beta1.ImageMeta{
+	input.ControlPlane.Spec.KubeadmConfigSpec.ClusterConfiguration.Etcd = bootstrapv1.Etcd{
+		Local: &bootstrapv1.LocalEtcd{
+			ImageMeta: bootstrapv1.ImageMeta{
 				ImageTag: input.EtcdImageTag,
 			},
 		},
 	}
-	input.ControlPlane.Spec.KubeadmConfigSpec.ClusterConfiguration.DNS = v1beta1.DNS{
-		ImageMeta: v1beta1.ImageMeta{
+	input.ControlPlane.Spec.KubeadmConfigSpec.ClusterConfiguration.DNS = bootstrapv1.DNS{
+		ImageMeta: bootstrapv1.ImageMeta{
 			ImageTag: input.DNSImageTag,
 		},
 	}
@@ -323,7 +324,7 @@ func UpgradeControlPlaneAndWaitForUpgrade(ctx context.Context, input UpgradeCont
 	}, input.WaitForMachinesToBeUpgraded...)
 
 	log.Logf("Waiting for kube-proxy to have the upgraded kubernetes version")
-	workloadCluster := input.ClusterProxy.GetWorkloadCluster(context.TODO(), input.Cluster.Namespace, input.Cluster.Name)
+	workloadCluster := input.ClusterProxy.GetWorkloadCluster(ctx, input.Cluster.Namespace, input.Cluster.Name)
 	workloadClient := workloadCluster.GetClient()
 	WaitForKubeProxyUpgrade(ctx, WaitForKubeProxyUpgradeInput{
 		Getter:            workloadClient,
@@ -351,4 +352,52 @@ func controlPlaneMachineOptions() []client.ListOption {
 	return []client.ListOption{
 		client.HasLabels{clusterv1.MachineControlPlaneLabelName},
 	}
+}
+
+type ScaleAndWaitControlPlaneInput struct {
+	ClusterProxy        ClusterProxy
+	Cluster             *clusterv1.Cluster
+	ControlPlane        *controlplanev1.KubeadmControlPlane
+	Replicas            int32
+	WaitForControlPlane []interface{}
+}
+
+// ScaleAndWaitControlPlane scales KCP and waits until all machines have node ref and equal to Replicas.
+func ScaleAndWaitControlPlane(ctx context.Context, input ScaleAndWaitControlPlaneInput) {
+	Expect(ctx).NotTo(BeNil(), "ctx is required for ScaleAndWaitControlPlane")
+	Expect(input.ClusterProxy).ToNot(BeNil(), "Invalid argument. input.ClusterProxy can't be nil when calling ScaleAndWaitControlPlane")
+	Expect(input.Cluster).ToNot(BeNil(), "Invalid argument. input.Cluster can't be nil when calling ScaleAndWaitControlPlane")
+
+	patchHelper, err := patch.NewHelper(input.ControlPlane, input.ClusterProxy.GetClient())
+	Expect(err).ToNot(HaveOccurred())
+	input.ControlPlane.Spec.Replicas = pointer.Int32Ptr(input.Replicas)
+	log.Logf("Scaling controlplane %s/%s from %v to %v replicas", input.ControlPlane.Namespace, input.ControlPlane.Name, input.ControlPlane.Spec.Replicas, input.Replicas)
+	Expect(patchHelper.Patch(ctx, input.ControlPlane)).To(Succeed())
+
+	log.Logf("Waiting for correct number of replicas to exist")
+	Eventually(func() (int, error) {
+		kcpLabelSelector, err := metav1.ParseToLabelSelector(input.ControlPlane.Status.Selector)
+		if err != nil {
+			return -1, err
+		}
+
+		selectorMap, err := metav1.LabelSelectorAsMap(kcpLabelSelector)
+		if err != nil {
+			return -1, err
+		}
+		machines := &clusterv1.MachineList{}
+		if err := input.ClusterProxy.GetClient().List(ctx, machines, client.InNamespace(input.ControlPlane.Namespace), client.MatchingLabels(selectorMap)); err != nil {
+			return -1, err
+		}
+		nodeRefCount := 0
+		for _, machine := range machines.Items {
+			if machine.Status.NodeRef != nil {
+				nodeRefCount++
+			}
+		}
+		if len(machines.Items) != nodeRefCount {
+			return -1, errors.New("Machine count does not match existing nodes count")
+		}
+		return nodeRefCount, nil
+	}, input.WaitForControlPlane...).Should(Equal(int(input.Replicas)))
 }

@@ -26,25 +26,25 @@ import (
 
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
-	controlplanev1 "sigs.k8s.io/cluster-api/controlplane/kubeadm/api/v1alpha3"
+	controlplanev1 "sigs.k8s.io/cluster-api/controlplane/kubeadm/api/v1alpha4"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/selection"
 	"k8s.io/utils/pointer"
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha3"
-	bootstrapv1 "sigs.k8s.io/cluster-api/bootstrap/kubeadm/api/v1alpha3"
+	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha4"
+	bootstrapv1 "sigs.k8s.io/cluster-api/bootstrap/kubeadm/api/v1alpha4"
 	"sigs.k8s.io/cluster-api/test/framework"
 	"sigs.k8s.io/cluster-api/test/framework/clusterctl"
 	"sigs.k8s.io/cluster-api/util"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-// KCPUpgradeSpecInput is the input for KCPUpgradeSpec.
+// KCPAdoptionSpecInput is the input for KCPAdoptionSpec.
 type KCPAdoptionSpecInput struct {
 	E2EConfig             *clusterctl.E2EConfig
 	ClusterctlConfigPath  string
-	BootstrapClusterProxy ClusterProxy
+	BootstrapClusterProxy framework.ClusterProxy
 	ArtifactFolder        string
 	SkipCleanup           bool
 }
@@ -55,7 +55,7 @@ type ClusterProxy interface {
 	ApplyWithArgs(context.Context, []byte, ...string) error
 }
 
-// KCPAdoptionSpec implements a test that verifies KCP to properly adopt existing control plane Machines
+// KCPAdoptionSpec implements a test that verifies KCP to properly adopt existing control plane Machines.
 func KCPAdoptionSpec(ctx context.Context, inputGetter func() KCPAdoptionSpecInput) {
 	var (
 		specName      = "kcp-adoption"
@@ -75,7 +75,7 @@ func KCPAdoptionSpec(ctx context.Context, inputGetter func() KCPAdoptionSpecInpu
 		Expect(input.E2EConfig).ToNot(BeNil(), "Invalid argument. input.E2EConfig can't be nil when calling %s spec", specName)
 		Expect(input.ClusterctlConfigPath).To(BeAnExistingFile(), "Invalid argument. input.ClusterctlConfigPath must be an existing file when calling %s spec", specName)
 		Expect(input.BootstrapClusterProxy).ToNot(BeNil(), "Invalid argument. input.BootstrapClusterProxy can't be nil when calling %s spec", specName)
-		Expect(os.MkdirAll(input.ArtifactFolder, 0755)).To(Succeed(), "Invalid argument. input.ArtifactFolder can't be created for %s spec", specName)
+		Expect(os.MkdirAll(input.ArtifactFolder, 0750)).To(Succeed(), "Invalid argument. input.ArtifactFolder can't be created for %s spec", specName)
 		Expect(input.E2EConfig.Variables).To(HaveKey(KubernetesVersion))
 
 		// Setup a Namespace where to host objects for this spec and create a watcher for the namespace events.
@@ -83,7 +83,6 @@ func KCPAdoptionSpec(ctx context.Context, inputGetter func() KCPAdoptionSpecInpu
 	})
 
 	It("Should adopt up-to-date control plane Machines without modification", func() {
-
 		By("Creating a workload cluster")
 
 		clusterName := fmt.Sprintf("%s-%s", specName, util.RandomString(6))
@@ -111,7 +110,7 @@ func KCPAdoptionSpec(ctx context.Context, inputGetter func() KCPAdoptionSpecInpu
 		Expect(workloadClusterTemplate).ToNot(BeNil(), "Failed to get the cluster template")
 
 		By("Applying the cluster template yaml to the cluster with the 'initial' selector")
-		Expect(input.BootstrapClusterProxy.ApplyWithArgs(ctx, workloadClusterTemplate, "--selector", "kcp-adoption.step1")).ShouldNot(HaveOccurred())
+		Expect(input.BootstrapClusterProxy.Apply(ctx, workloadClusterTemplate, "--selector", "kcp-adoption.step1")).ShouldNot(HaveOccurred())
 
 		cluster = framework.DiscoveryAndWaitForCluster(ctx, framework.DiscoveryAndWaitForClusterInput{
 			Getter:    client,
@@ -124,7 +123,7 @@ func KCPAdoptionSpec(ctx context.Context, inputGetter func() KCPAdoptionSpecInpu
 			Cluster:   cluster,
 		}, WaitForControlPlaneIntervals...)
 
-		workloadCluster := input.BootstrapClusterProxy.GetWorkloadCluster(context.TODO(), cluster.Namespace, cluster.Name)
+		workloadCluster := input.BootstrapClusterProxy.GetWorkloadCluster(ctx, cluster.Namespace, cluster.Name)
 		framework.WaitForClusterMachinesReady(ctx, framework.WaitForClusterMachinesReadyInput{
 			GetLister:  input.BootstrapClusterProxy.GetClient(),
 			NodeGetter: workloadCluster.GetClient(),
@@ -132,7 +131,7 @@ func KCPAdoptionSpec(ctx context.Context, inputGetter func() KCPAdoptionSpecInpu
 		}, WaitForControlPlaneIntervals...)
 
 		By("Applying the cluster template yaml to the cluster with the 'kcp' selector")
-		Expect(input.BootstrapClusterProxy.ApplyWithArgs(ctx, workloadClusterTemplate, "--selector", "kcp-adoption.step2")).ShouldNot(HaveOccurred())
+		Expect(input.BootstrapClusterProxy.Apply(ctx, workloadClusterTemplate, "--selector", "kcp-adoption.step2")).ShouldNot(HaveOccurred())
 
 		var controlPlane *controlplanev1.KubeadmControlPlane
 		Eventually(func() *controlplanev1.KubeadmControlPlane {

@@ -26,7 +26,7 @@ import (
 	"github.com/pkg/errors"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha3"
+	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha4"
 )
 
 func TestHasSameState(t *testing.T) {
@@ -199,14 +199,14 @@ func TestMarkMethods(t *testing.T) {
 
 	// test MarkTrue
 	MarkTrue(cluster, "conditionFoo")
-	g.Expect(Get(cluster, "conditionFoo")).To(haveSameStateOf(&clusterv1.Condition{
+	g.Expect(Get(cluster, "conditionFoo")).To(HaveSameStateOf(&clusterv1.Condition{
 		Type:   "conditionFoo",
 		Status: corev1.ConditionTrue,
 	}))
 
 	// test MarkFalse
 	MarkFalse(cluster, "conditionBar", "reasonBar", clusterv1.ConditionSeverityError, "messageBar")
-	g.Expect(Get(cluster, "conditionBar")).To(haveSameStateOf(&clusterv1.Condition{
+	g.Expect(Get(cluster, "conditionBar")).To(HaveSameStateOf(&clusterv1.Condition{
 		Type:     "conditionBar",
 		Status:   corev1.ConditionFalse,
 		Severity: clusterv1.ConditionSeverityError,
@@ -216,7 +216,7 @@ func TestMarkMethods(t *testing.T) {
 
 	// test MarkUnknown
 	MarkUnknown(cluster, "conditionBaz", "reasonBaz", "messageBaz")
-	g.Expect(Get(cluster, "conditionBaz")).To(haveSameStateOf(&clusterv1.Condition{
+	g.Expect(Get(cluster, "conditionBaz")).To(HaveSameStateOf(&clusterv1.Condition{
 		Type:    "conditionBaz",
 		Status:  corev1.ConditionUnknown,
 		Reason:  "reasonBaz",

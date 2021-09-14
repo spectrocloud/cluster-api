@@ -19,7 +19,7 @@ package tree
 import (
 	"strconv"
 
-	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 const (
@@ -47,12 +47,12 @@ const (
 	// GroupItemsAnnotation contains the list of names for the objects included in a group object.
 	GroupItemsAnnotation = "tree.cluster.x-k8s.io.io/group-items"
 
-	// GroupItemsSeparator is the separator used in the GroupItemsAnnotation
+	// GroupItemsSeparator is the separator used in the GroupItemsAnnotation.
 	GroupItemsSeparator = ", "
 )
 
 // GetMetaName returns the object meta name that should be used for the object in the presentation layer, if defined.
-func GetMetaName(obj controllerutil.Object) string {
+func GetMetaName(obj client.Object) string {
 	if val, ok := getAnnotation(obj, ObjectMetaNameAnnotation); ok {
 		return val
 	}
@@ -62,7 +62,7 @@ func GetMetaName(obj controllerutil.Object) string {
 // IsGroupingObject returns true in case the object is responsible to trigger the grouping action
 // when adding the object's children. e.g. A control-plane object, could be responsible of grouping
 // the control-plane machines while added as a children objects.
-func IsGroupingObject(obj controllerutil.Object) bool {
+func IsGroupingObject(obj client.Object) bool {
 	if val, ok := getBoolAnnotation(obj, GroupingObjectAnnotation); ok {
 		return val
 	}
@@ -71,7 +71,7 @@ func IsGroupingObject(obj controllerutil.Object) bool {
 
 // IsGroupObject return true if the object is the result of a grouping operation, and
 // thus the object is representing group of sibling object, e.g. a group of machines.
-func IsGroupObject(obj controllerutil.Object) bool {
+func IsGroupObject(obj client.Object) bool {
 	if val, ok := getBoolAnnotation(obj, GroupObjectAnnotation); ok {
 		return val
 	}
@@ -79,7 +79,7 @@ func IsGroupObject(obj controllerutil.Object) bool {
 }
 
 // GetGroupItems return the list of names for the objects included in a group object.
-func GetGroupItems(obj controllerutil.Object) string {
+func GetGroupItems(obj client.Object) string {
 	if val, ok := getAnnotation(obj, GroupItemsAnnotation); ok {
 		return val
 	}
@@ -88,7 +88,7 @@ func GetGroupItems(obj controllerutil.Object) string {
 
 // IsVirtualObject return true if the object does not correspond to any real object, but instead it is
 // a virtual object introduced to provide a better representation of the cluster status.
-func IsVirtualObject(obj controllerutil.Object) bool {
+func IsVirtualObject(obj client.Object) bool {
 	if val, ok := getBoolAnnotation(obj, VirtualObjectAnnotation); ok {
 		return val
 	}
@@ -96,14 +96,14 @@ func IsVirtualObject(obj controllerutil.Object) bool {
 }
 
 // IsShowConditionsObject returns true if the presentation layer should show all the conditions for the object.
-func IsShowConditionsObject(obj controllerutil.Object) bool {
+func IsShowConditionsObject(obj client.Object) bool {
 	if val, ok := getBoolAnnotation(obj, ShowObjectConditionsAnnotation); ok {
 		return val
 	}
 	return false
 }
 
-func getAnnotation(obj controllerutil.Object, annotation string) (string, bool) {
+func getAnnotation(obj client.Object, annotation string) (string, bool) {
 	if obj == nil {
 		return "", false
 	}
@@ -111,7 +111,7 @@ func getAnnotation(obj controllerutil.Object, annotation string) (string, bool) 
 	return val, ok
 }
 
-func getBoolAnnotation(obj controllerutil.Object, annotation string) (bool, bool) {
+func getBoolAnnotation(obj client.Object, annotation string) (bool, bool) {
 	val, ok := getAnnotation(obj, annotation)
 	if ok {
 		if boolVal, err := strconv.ParseBool(val); err == nil {
@@ -121,7 +121,7 @@ func getBoolAnnotation(obj controllerutil.Object, annotation string) (bool, bool
 	return false, false
 }
 
-func addAnnotation(obj controllerutil.Object, annotation, value string) {
+func addAnnotation(obj client.Object, annotation, value string) {
 	annotations := obj.GetAnnotations()
 	if annotations == nil {
 		annotations = map[string]string{}

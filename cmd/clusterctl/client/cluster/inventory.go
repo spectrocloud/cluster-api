@@ -24,8 +24,10 @@ import (
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/types"
+	kerrors "k8s.io/apimachinery/pkg/util/errors"
 	"k8s.io/apimachinery/pkg/util/sets"
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha3"
+	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha4"
 	clusterctlv1 "sigs.k8s.io/cluster-api/cmd/clusterctl/api/v1alpha3"
 	"sigs.k8s.io/cluster-api/cmd/clusterctl/config"
 	logf "sigs.k8s.io/cluster-api/cmd/clusterctl/log"
@@ -34,8 +36,6 @@ import (
 )
 
 const (
-	embeddedCustomResourceDefinitionPath = "cmd/clusterctl/config/manifest/clusterctl-api.yaml"
-
 	waitInventoryCRDInterval = 250 * time.Millisecond
 	waitInventoryCRDTimeout  = 1 * time.Minute
 )
@@ -93,22 +93,18 @@ type InventoryClient interface {
 	// this as the default provider; In case there are more provider of the same type, there is no default provider.
 	GetDefaultProviderName(providerType clusterctlv1.ProviderType) (string, error)
 
-	// GetDefaultProviderVersion returns the default version for a given provider.
-	// In case there is only a single version installed for a given provider, e.g. only the v0.4.1 version for the AWS provider, it returns
-	// this as the default version; In case there are more version installed for the same provider, there is no default provider version.
-	GetDefaultProviderVersion(provider string, providerType clusterctlv1.ProviderType) (string, error)
+	// GetProviderVersion returns the version for a given provider.
+	GetProviderVersion(provider string, providerType clusterctlv1.ProviderType) (string, error)
 
-	// GetDefaultProviderNamespace returns the default namespace for a given provider.
-	// In case there is only a single instance for a given provider, e.g. only the AWS provider in the capa-system namespace, it returns
-	// this as the default namespace; In case there are more instances for the same provider installed in different namespaces, there is no default provider namespace.
-	GetDefaultProviderNamespace(provider string, providerType clusterctlv1.ProviderType) (string, error)
-
-	// GetManagementGroups returns the list of management groups defined in the management cluster.
-	GetManagementGroups() (ManagementGroupList, error)
+	// GetProviderNamespace returns the namespace for a given provider.
+	GetProviderNamespace(provider string, providerType clusterctlv1.ProviderType) (string, error)
 
 	// CheckCAPIContract checks the Cluster API version installed in the management cluster, and fails if this version
 	// does not match the current one supported by clusterctl.
 	CheckCAPIContract(...CheckCAPIContractOption) error
+
+	// CheckSingleProviderInstance ensures that only one instance of a provider is running, returns error otherwise.
+	CheckSingleProviderInstance() error
 }
 
 // inventoryClient implements InventoryClient.
@@ -162,14 +158,8 @@ func (p *inventoryClient) EnsureCustomResourceDefinitions() error {
 
 	log.V(1).Info("Installing the clusterctl inventory CRD")
 
-	// Get the CRDs manifest from the embedded assets.
-	yaml, err := config.Asset(embeddedCustomResourceDefinitionPath)
-	if err != nil {
-		return err
-	}
-
 	// Transform the yaml in a list of objects.
-	objs, err := utilyaml.ToUnstructured(yaml)
+	objs, err := utilyaml.ToUnstructured(config.ClusterctlAPIManifest)
 	if err != nil {
 		return errors.Wrap(err, "failed to parse yaml for clusterctl inventory CRDs")
 	}
@@ -190,11 +180,7 @@ func (p *inventoryClient) EnsureCustomResourceDefinitions() error {
 
 		// If the object is a CRDs, waits for it being Established.
 		if apiextensionsv1.SchemeGroupVersion.WithKind("CustomResourceDefinition").GroupKind() == o.GroupVersionKind().GroupKind() {
-			crdKey, err := client.ObjectKeyFromObject(&o)
-			if err != nil {
-				return nil
-			}
-
+			crdKey := client.ObjectKeyFromObject(&o)
 			if err := p.pollImmediateWaiter(waitInventoryCRDInterval, waitInventoryCRDTimeout, func() (bool, error) {
 				c, err := p.proxy.NewClient()
 				if err != nil {
@@ -254,7 +240,7 @@ func (p *inventoryClient) createObj(o unstructured.Unstructured) error {
 	if labels == nil {
 		labels = map[string]string{}
 	}
-	labels[clusterctlv1.ClusterctlCoreLabelName] = "inventory"
+	labels[clusterctlv1.ClusterctlCoreLabelName] = clusterctlv1.ClusterctlCoreLabelInventoryValue
 	o.SetLabels(labels)
 
 	if err := c.Create(ctx, &o); err != nil {
@@ -285,7 +271,7 @@ func (p *inventoryClient) Create(m clusterctlv1.Provider) error {
 				return errors.Wrapf(err, "failed to get current provider object")
 			}
 
-			//if it does not exists, create the provider object
+			// if it does not exists, create the provider object
 			if err := cl.Create(ctx, &m); err != nil {
 				return errors.Wrapf(err, "failed to create provider object")
 			}
@@ -350,7 +336,7 @@ func (p *inventoryClient) GetDefaultProviderName(providerType clusterctlv1.Provi
 	return "", nil
 }
 
-func (p *inventoryClient) GetDefaultProviderVersion(provider string, providerType clusterctlv1.ProviderType) (string, error) {
+func (p *inventoryClient) GetProviderVersion(provider string, providerType clusterctlv1.ProviderType) (string, error) {
 	providerList, err := p.List()
 	if err != nil {
 		return "", err
@@ -366,11 +352,11 @@ func (p *inventoryClient) GetDefaultProviderVersion(provider string, providerTyp
 		return versions.List()[0], nil
 	}
 
-	// There is no version installed or more than one version installed for this provider; in both cases, a default version for this provider cannot be decided.
+	// The default version for this provider cannot be decided.
 	return "", nil
 }
 
-func (p *inventoryClient) GetDefaultProviderNamespace(provider string, providerType clusterctlv1.ProviderType) (string, error) {
+func (p *inventoryClient) GetProviderNamespace(provider string, providerType clusterctlv1.ProviderType) (string, error) {
 	providerList, err := p.List()
 	if err != nil {
 		return "", err
@@ -386,7 +372,7 @@ func (p *inventoryClient) GetDefaultProviderNamespace(provider string, providerT
 		return namespaces.List()[0], nil
 	}
 
-	// There is no provider or more than one namespace for this provider; in both cases, a default provider namespace cannot be decided.
+	// The default provider namespace cannot be decided.
 	return "", nil
 }
 
@@ -418,4 +404,35 @@ func (p *inventoryClient) CheckCAPIContract(options ...CheckCAPIContractOption) 
 		}
 	}
 	return errors.Errorf("failed to check Cluster API version")
+}
+
+func (p *inventoryClient) CheckSingleProviderInstance() error {
+	providers, err := p.List()
+	if err != nil {
+		return err
+	}
+
+	providerGroups := make(map[string][]string)
+	for _, p := range providers.Items {
+		namespacedName := types.NamespacedName{Namespace: p.Namespace, Name: p.Name}.String()
+		if providers, ok := providerGroups[p.ManifestLabel()]; ok {
+			providerGroups[p.ManifestLabel()] = append(providers, namespacedName)
+		} else {
+			providerGroups[p.ManifestLabel()] = []string{namespacedName}
+		}
+	}
+
+	var errs []error
+	for provider, providerInstances := range providerGroups {
+		if len(providerInstances) > 1 {
+			errs = append(errs, errors.Errorf("multiple instance of provider type %q found: %v", provider, providerInstances))
+		}
+	}
+
+	if len(errs) > 0 {
+		return errors.Wrap(kerrors.NewAggregate(errs), "detected multiple instances of the same provider, "+
+			"but clusterctl v1alpha4 does not support this use case. See https://cluster-api.sigs.k8s.io/developer/architecture/controllers/support-multiple-instances.html for more details")
+	}
+
+	return nil
 }

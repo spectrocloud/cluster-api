@@ -26,6 +26,7 @@ import (
 	"crypto/x509/pkix"
 	"fmt"
 	"math/big"
+	"reflect"
 	"time"
 
 	"github.com/blang/semver"
@@ -35,9 +36,11 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha3"
-	kubeadmv1 "sigs.k8s.io/cluster-api/bootstrap/kubeadm/types/v1beta1"
-	controlplanev1 "sigs.k8s.io/cluster-api/controlplane/kubeadm/api/v1alpha3"
+	"k8s.io/client-go/util/retry"
+	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha4"
+	bootstrapv1 "sigs.k8s.io/cluster-api/bootstrap/kubeadm/api/v1alpha4"
+	kubeadmtypes "sigs.k8s.io/cluster-api/bootstrap/kubeadm/types"
+	controlplanev1 "sigs.k8s.io/cluster-api/controlplane/kubeadm/api/v1alpha4"
 	"sigs.k8s.io/cluster-api/util"
 	"sigs.k8s.io/cluster-api/util/certs"
 	containerutil "sigs.k8s.io/cluster-api/util/container"
@@ -52,11 +55,26 @@ const (
 	kubeletConfigKey          = "kubelet"
 	cgroupDriverKey           = "cgroupDriver"
 	labelNodeRoleControlPlane = "node-role.kubernetes.io/master"
+	clusterStatusKey          = "ClusterStatus"
+	clusterConfigurationKey   = "ClusterConfiguration"
 )
 
 var (
+	// Starting from v1.22.0 kubeadm dropped the usage of the ClusterStatus entry from the kubeadm-config ConfigMap
+	// so we're not anymore required to remove API endpoints for control plane nodes after deletion.
+	//
+	// NOTE: The following assumes that kubeadm version equals to Kubernetes version.
+	minKubernetesVersionWithoutClusterStatus = semver.MustParse("1.22.0")
+
+	// Starting from v1.21.0 kubeadm defaults to systemdCGroup driver, as well as images built with ImageBuilder,
+	// so it is necessary to mutate the kubelet-config-xx ConfigMap.
+	//
+	// NOTE: The following assumes that kubeadm version equals to Kubernetes version.
 	minVerKubeletSystemdDriver = semver.MustParse("1.21.0")
-	ErrControlPlaneMinNodes    = errors.New("cluster has fewer than 2 control plane nodes; removing an etcd member is not supported")
+
+	// ErrControlPlaneMinNodes signals that a cluster doesn't meet the minimum required nodes
+	// to remove an etcd member.
+	ErrControlPlaneMinNodes = errors.New("cluster has fewer than 2 control plane nodes; removing an etcd member is not supported")
 )
 
 // WorkloadCluster defines all behaviors necessary to upgrade kubernetes on a workload cluster
@@ -73,14 +91,15 @@ type WorkloadCluster interface {
 	ReconcileKubeletRBACBinding(ctx context.Context, version semver.Version) error
 	ReconcileKubeletRBACRole(ctx context.Context, version semver.Version) error
 	UpdateKubernetesVersionInKubeadmConfigMap(ctx context.Context, version semver.Version) error
-	UpdateImageRepositoryInKubeadmConfigMap(ctx context.Context, imageRepository string) error
-	UpdateEtcdVersionInKubeadmConfigMap(ctx context.Context, imageRepository, imageTag string) error
-	UpdateAPIServerInKubeadmConfigMap(ctx context.Context, apiServer kubeadmv1.APIServer) error
-	UpdateControllerManagerInKubeadmConfigMap(ctx context.Context, controllerManager kubeadmv1.ControlPlaneComponent) error
-	UpdateSchedulerInKubeadmConfigMap(ctx context.Context, scheduler kubeadmv1.ControlPlaneComponent) error
+	UpdateImageRepositoryInKubeadmConfigMap(ctx context.Context, imageRepository string, version semver.Version) error
+	UpdateEtcdVersionInKubeadmConfigMap(ctx context.Context, imageRepository, imageTag string, version semver.Version) error
+	UpdateEtcdExtraArgsInKubeadmConfigMap(ctx context.Context, extraArgs map[string]string, version semver.Version) error
+	UpdateAPIServerInKubeadmConfigMap(ctx context.Context, apiServer bootstrapv1.APIServer, version semver.Version) error
+	UpdateControllerManagerInKubeadmConfigMap(ctx context.Context, controllerManager bootstrapv1.ControlPlaneComponent, version semver.Version) error
+	UpdateSchedulerInKubeadmConfigMap(ctx context.Context, scheduler bootstrapv1.ControlPlaneComponent, version semver.Version) error
 	UpdateKubeletConfigMap(ctx context.Context, version semver.Version) error
 	UpdateKubeProxyImageInfo(ctx context.Context, kcp *controlplanev1.KubeadmControlPlane) error
-	UpdateCoreDNS(ctx context.Context, kcp *controlplanev1.KubeadmControlPlane) error
+	UpdateCoreDNS(ctx context.Context, kcp *controlplanev1.KubeadmControlPlane, version semver.Version) error
 	RemoveEtcdMemberForMachine(ctx context.Context, machine *clusterv1.Machine) error
 	RemoveMachineFromKubeadmConfigMap(ctx context.Context, machine *clusterv1.Machine, version semver.Version) error
 	RemoveNodeFromKubeadmConfigMap(ctx context.Context, nodeName string, version semver.Version) error
@@ -119,38 +138,21 @@ func (w *Workload) getConfigMap(ctx context.Context, configMap ctrlclient.Object
 	return original.DeepCopy(), nil
 }
 
-// UpdateKubernetesVersionInKubeadmConfigMap updates the kubernetes version in the kubeadm config map.
-func (w *Workload) UpdateImageRepositoryInKubeadmConfigMap(ctx context.Context, imageRepository string) error {
-	configMapKey := ctrlclient.ObjectKey{Name: "kubeadm-config", Namespace: metav1.NamespaceSystem}
-	kubeadmConfigMap, err := w.getConfigMap(ctx, configMapKey)
-	if err != nil {
-		return err
-	}
-	config := &kubeadmConfig{ConfigMap: kubeadmConfigMap}
-	if err := config.UpdateImageRepository(imageRepository); err != nil {
-		return err
-	}
-	if err := w.Client.Update(ctx, config.ConfigMap); err != nil {
-		return errors.Wrap(err, "error updating kubeadm ConfigMap")
-	}
-	return nil
+// UpdateImageRepositoryInKubeadmConfigMap updates the image repository in the kubeadm config map.
+func (w *Workload) UpdateImageRepositoryInKubeadmConfigMap(ctx context.Context, imageRepository string, version semver.Version) error {
+	return w.updateClusterConfiguration(ctx, func(c *bootstrapv1.ClusterConfiguration) {
+		if imageRepository == "" {
+			return
+		}
+		c.ImageRepository = imageRepository
+	}, version)
 }
 
 // UpdateKubernetesVersionInKubeadmConfigMap updates the kubernetes version in the kubeadm config map.
 func (w *Workload) UpdateKubernetesVersionInKubeadmConfigMap(ctx context.Context, version semver.Version) error {
-	configMapKey := ctrlclient.ObjectKey{Name: kubeadmConfigKey, Namespace: metav1.NamespaceSystem}
-	kubeadmConfigMap, err := w.getConfigMap(ctx, configMapKey)
-	if err != nil {
-		return err
-	}
-	config := &kubeadmConfig{ConfigMap: kubeadmConfigMap}
-	if err := config.UpdateKubernetesVersion(fmt.Sprintf("v%s", version)); err != nil {
-		return err
-	}
-	if err := w.Client.Update(ctx, config.ConfigMap); err != nil {
-		return errors.Wrap(err, "error updating kubeadm ConfigMap")
-	}
-	return nil
+	return w.updateClusterConfiguration(ctx, func(c *bootstrapv1.ClusterConfiguration) {
+		c.KubernetesVersion = fmt.Sprintf("v%s", version.String())
+	}, version)
 }
 
 // UpdateKubeletConfigMap will create a new kubelet-config-1.x config map for a new version of the kubelet.
@@ -182,7 +184,7 @@ func (w *Workload) UpdateKubeletConfigMap(ctx context.Context, version semver.Ve
 	// In order to avoid using two cgroup drivers on the same machine,
 	// (cgroupfs and systemd cgroup drivers), starting from
 	// 1.21 image builder is going to configure containerd for using the
-	// systemd driver, and the Kubelet configuration must be updated accordingly
+	// systemd driver, and the Kubelet configuration must be aligned to this change.
 	// NOTE: It is considered safe to update the kubelet-config-1.21 ConfigMap
 	// because only new nodes using v1.21 images will pick up the change during
 	// kubeadm join.
@@ -227,72 +229,24 @@ func (w *Workload) UpdateKubeletConfigMap(ctx context.Context, version semver.Ve
 }
 
 // UpdateAPIServerInKubeadmConfigMap updates api server configuration in kubeadm config map.
-func (w *Workload) UpdateAPIServerInKubeadmConfigMap(ctx context.Context, apiServer kubeadmv1.APIServer) error {
-	configMapKey := ctrlclient.ObjectKey{Name: kubeadmConfigKey, Namespace: metav1.NamespaceSystem}
-	kubeadmConfigMap, err := w.getConfigMap(ctx, configMapKey)
-	if err != nil {
-		return err
-	}
-	config := &kubeadmConfig{ConfigMap: kubeadmConfigMap}
-	changed, err := config.UpdateAPIServer(apiServer)
-	if err != nil {
-		return err
-	}
-
-	if !changed {
-		return nil
-	}
-
-	if err := w.Client.Update(ctx, config.ConfigMap); err != nil {
-		return errors.Wrap(err, "error updating kubeadm ConfigMap")
-	}
-	return nil
+func (w *Workload) UpdateAPIServerInKubeadmConfigMap(ctx context.Context, apiServer bootstrapv1.APIServer, version semver.Version) error {
+	return w.updateClusterConfiguration(ctx, func(c *bootstrapv1.ClusterConfiguration) {
+		c.APIServer = apiServer
+	}, version)
 }
 
 // UpdateControllerManagerInKubeadmConfigMap updates controller manager configuration in kubeadm config map.
-func (w *Workload) UpdateControllerManagerInKubeadmConfigMap(ctx context.Context, controllerManager kubeadmv1.ControlPlaneComponent) error {
-	configMapKey := ctrlclient.ObjectKey{Name: kubeadmConfigKey, Namespace: metav1.NamespaceSystem}
-	kubeadmConfigMap, err := w.getConfigMap(ctx, configMapKey)
-	if err != nil {
-		return err
-	}
-	config := &kubeadmConfig{ConfigMap: kubeadmConfigMap}
-	changed, err := config.UpdateControllerManager(controllerManager)
-	if err != nil {
-		return err
-	}
-
-	if !changed {
-		return nil
-	}
-
-	if err := w.Client.Update(ctx, config.ConfigMap); err != nil {
-		return errors.Wrap(err, "error updating kubeadm ConfigMap")
-	}
-	return nil
+func (w *Workload) UpdateControllerManagerInKubeadmConfigMap(ctx context.Context, controllerManager bootstrapv1.ControlPlaneComponent, version semver.Version) error {
+	return w.updateClusterConfiguration(ctx, func(c *bootstrapv1.ClusterConfiguration) {
+		c.ControllerManager = controllerManager
+	}, version)
 }
 
 // UpdateSchedulerInKubeadmConfigMap updates scheduler configuration in kubeadm config map.
-func (w *Workload) UpdateSchedulerInKubeadmConfigMap(ctx context.Context, scheduler kubeadmv1.ControlPlaneComponent) error {
-	configMapKey := ctrlclient.ObjectKey{Name: kubeadmConfigKey, Namespace: metav1.NamespaceSystem}
-	kubeadmConfigMap, err := w.getConfigMap(ctx, configMapKey)
-	if err != nil {
-		return err
-	}
-	config := &kubeadmConfig{ConfigMap: kubeadmConfigMap}
-	changed, err := config.UpdateScheduler(scheduler)
-	if err != nil {
-		return err
-	}
-
-	if !changed {
-		return nil
-	}
-
-	if err := w.Client.Update(ctx, config.ConfigMap); err != nil {
-		return errors.Wrap(err, "error updating kubeadm ConfigMap")
-	}
-	return nil
+func (w *Workload) UpdateSchedulerInKubeadmConfigMap(ctx context.Context, scheduler bootstrapv1.ControlPlaneComponent, version semver.Version) error {
+	return w.updateClusterConfiguration(ctx, func(c *bootstrapv1.ClusterConfiguration) {
+		c.Scheduler = scheduler
+	}, version)
 }
 
 // RemoveMachineFromKubeadmConfigMap removes the entry for the machine from the kubeadm configmap.
@@ -305,36 +259,93 @@ func (w *Workload) RemoveMachineFromKubeadmConfigMap(ctx context.Context, machin
 	return w.RemoveNodeFromKubeadmConfigMap(ctx, machine.Status.NodeRef.Name, version)
 }
 
-var (
-	// Starting from v1.22.0 kubeadm dropped usage of the ClusterStatus entry from the kubeadm-config ConfigMap
-	// so it isn't necessary anymore to remove API endpoints for control plane nodes after deletion.
-	// NOTE: This assume kubeadm version equals to Kubernetes version.
-	minKubernetesVersionWithoutClusterStatus = semver.MustParse("1.22.0")
-)
-
 // RemoveNodeFromKubeadmConfigMap removes the entry for the node from the kubeadm configmap.
 func (w *Workload) RemoveNodeFromKubeadmConfigMap(ctx context.Context, name string, version semver.Version) error {
 	if version.GTE(minKubernetesVersionWithoutClusterStatus) {
 		return nil
 	}
 
-	return util.Retry(func() (bool, error) {
-		configMapKey := ctrlclient.ObjectKey{Name: kubeadmConfigKey, Namespace: metav1.NamespaceSystem}
-		kubeadmConfigMap, err := w.getConfigMap(ctx, configMapKey)
+	return w.updateClusterStatus(ctx, func(s *bootstrapv1.ClusterStatus) {
+		delete(s.APIEndpoints, name)
+	}, version)
+}
+
+// updateClusterStatus gets the ClusterStatus kubeadm-config ConfigMap, converts it to the
+// Cluster API representation, and then applies a mutation func; if changes are detected, the
+// data are converted back into the Kubeadm API version in use for the target Kubernetes version and the
+// kubeadm-config ConfigMap updated.
+func (w *Workload) updateClusterStatus(ctx context.Context, mutator func(status *bootstrapv1.ClusterStatus), version semver.Version) error {
+	return retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+		key := ctrlclient.ObjectKey{Name: kubeadmConfigKey, Namespace: metav1.NamespaceSystem}
+		configMap, err := w.getConfigMap(ctx, key)
 		if err != nil {
-			Log.Error(err, "unable to get kubeadmConfigMap")
-			return false, nil
+			return errors.Wrap(err, "failed to get kubeadmConfigMap")
 		}
-		config := &kubeadmConfig{ConfigMap: kubeadmConfigMap}
-		if err := config.RemoveAPIEndpoint(name); err != nil {
-			return false, err
+
+		currentData, ok := configMap.Data[clusterStatusKey]
+		if !ok {
+			return errors.Errorf("unable to find %q in the kubeadm-config ConfigMap", clusterStatusKey)
 		}
-		if err := w.Client.Update(ctx, config.ConfigMap); err != nil {
-			Log.Error(err, "error updating kubeadm ConfigMap")
-			return false, nil
+
+		currentClusterStatus, err := kubeadmtypes.UnmarshalClusterStatus(currentData)
+		if err != nil {
+			return errors.Wrapf(err, "unable to decode %q in the kubeadm-config ConfigMap's from YAML", clusterStatusKey)
 		}
-		return true, nil
-	}, 5)
+
+		updatedClusterStatus := currentClusterStatus.DeepCopy()
+		mutator(updatedClusterStatus)
+
+		if !reflect.DeepEqual(currentClusterStatus, updatedClusterStatus) {
+			updatedData, err := kubeadmtypes.MarshalClusterStatusForVersion(updatedClusterStatus, version)
+			if err != nil {
+				return errors.Wrapf(err, "unable to encode %q kubeadm-config ConfigMap's to YAML", clusterStatusKey)
+			}
+			configMap.Data[clusterStatusKey] = updatedData
+			if err := w.Client.Update(ctx, configMap); err != nil {
+				return errors.Wrap(err, "failed to upgrade the kubeadmConfigMap")
+			}
+		}
+		return nil
+	})
+}
+
+// updateClusterConfiguration gets the ClusterConfiguration kubeadm-config ConfigMap, converts it to the
+// Cluster API representation, and then applies a mutation func; if changes are detected, the
+// data are converted back into the Kubeadm API version in use for the target Kubernetes version and the
+// kubeadm-config ConfigMap updated.
+func (w *Workload) updateClusterConfiguration(ctx context.Context, mutator func(*bootstrapv1.ClusterConfiguration), version semver.Version) error {
+	return retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+		key := ctrlclient.ObjectKey{Name: kubeadmConfigKey, Namespace: metav1.NamespaceSystem}
+		configMap, err := w.getConfigMap(ctx, key)
+		if err != nil {
+			return errors.Wrap(err, "failed to get kubeadmConfigMap")
+		}
+
+		currentData, ok := configMap.Data[clusterConfigurationKey]
+		if !ok {
+			return errors.Errorf("unable to find %q in the kubeadm-config ConfigMap", clusterConfigurationKey)
+		}
+
+		currentObj, err := kubeadmtypes.UnmarshalClusterConfiguration(currentData)
+		if err != nil {
+			return errors.Wrapf(err, "unable to decode %q in the kubeadm-config ConfigMap's from YAML", clusterConfigurationKey)
+		}
+
+		updatedObj := currentObj.DeepCopy()
+		mutator(updatedObj)
+
+		if !reflect.DeepEqual(currentObj, updatedObj) {
+			updatedData, err := kubeadmtypes.MarshalClusterConfigurationForVersion(updatedObj, version)
+			if err != nil {
+				return errors.Wrapf(err, "unable to encode %q kubeadm-config ConfigMap's to YAML", clusterConfigurationKey)
+			}
+			configMap.Data[clusterConfigurationKey] = updatedData
+			if err := w.Client.Update(ctx, configMap); err != nil {
+				return errors.Wrap(err, "failed to upgrade the kubeadmConfigMap")
+			}
+		}
+		return nil
+	})
 }
 
 // ClusterStatus holds stats information about the cluster.
@@ -491,4 +502,12 @@ func patchKubeProxyImage(ds *appsv1.DaemonSet, image string) {
 			containers[idx].Image = image
 		}
 	}
+}
+
+// yamlToUnstructured looks inside a config map for a specific key and extracts the embedded YAML into an
+// *unstructured.Unstructured.
+func yamlToUnstructured(rawYAML []byte) (*unstructured.Unstructured, error) {
+	unst := &unstructured.Unstructured{}
+	err := yaml.Unmarshal(rawYAML, unst)
+	return unst, err
 }

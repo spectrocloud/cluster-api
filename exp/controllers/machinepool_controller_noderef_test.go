@@ -17,34 +17,24 @@ limitations under the License.
 package controllers
 
 import (
-	"context"
 	"testing"
 
 	. "github.com/onsi/gomega"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/record"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
-	"sigs.k8s.io/controller-runtime/pkg/log"
-
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha3"
 )
 
 func TestMachinePoolGetNodeReference(t *testing.T) {
-	g := NewWithT(t)
-
-	g.Expect(clusterv1.AddToScheme(scheme.Scheme)).To(Succeed())
-
 	r := &MachinePoolReconciler{
-		Client:   fake.NewFakeClientWithScheme(scheme.Scheme),
-		Log:      log.Log,
+		Client:   fake.NewClientBuilder().Build(),
 		recorder: record.NewFakeRecorder(32),
 	}
 
-	nodeList := []runtime.Object{
+	nodeList := []client.Object{
 		&corev1.Node{
 			ObjectMeta: metav1.ObjectMeta{
 				Name: "node-1",
@@ -79,7 +69,7 @@ func TestMachinePoolGetNodeReference(t *testing.T) {
 		},
 	}
 
-	client := fake.NewFakeClientWithScheme(scheme.Scheme, nodeList...)
+	client := fake.NewClientBuilder().WithObjects(nodeList...).Build()
 
 	testCases := []struct {
 		name           string
@@ -137,33 +127,32 @@ func TestMachinePoolGetNodeReference(t *testing.T) {
 			name:           "valid provider id, no node found",
 			providerIDList: []string{"aws:///id-node-100"},
 			expected:       nil,
-			err:            ErrNoAvailableNodes,
+			err:            errNoAvailableNodes,
 		},
 	}
 
 	for _, test := range testCases {
 		t.Run(test.name, func(t *testing.T) {
-			gt := NewWithT(t)
+			g := NewWithT(t)
 
-			result, err := r.getNodeReferences(context.TODO(), client, test.providerIDList)
+			result, err := r.getNodeReferences(ctx, client, test.providerIDList)
 			if test.err == nil {
 				g.Expect(err).To(BeNil())
 			} else {
-				gt.Expect(err).NotTo(BeNil())
-				gt.Expect(err).To(Equal(test.err), "Expected error %v, got %v", test.err, err)
+				g.Expect(err).NotTo(BeNil())
+				g.Expect(err).To(Equal(test.err), "Expected error %v, got %v", test.err, err)
 			}
 
 			if test.expected == nil && len(result.references) == 0 {
 				return
 			}
 
-			gt.Expect(len(result.references)).To(Equal(len(test.expected.references)), "Expected NodeRef count to be %v, got %v", len(result.references), len(test.expected.references))
+			g.Expect(len(result.references)).To(Equal(len(test.expected.references)), "Expected NodeRef count to be %v, got %v", len(result.references), len(test.expected.references))
 
 			for n := range test.expected.references {
-				gt.Expect(result.references[n].Name).To(Equal(test.expected.references[n].Name), "Expected NodeRef's name to be %v, got %v", result.references[n].Name, test.expected.references[n].Name)
-				gt.Expect(result.references[n].Namespace).To(Equal(test.expected.references[n].Namespace), "Expected NodeRef's namespace to be %v, got %v", result.references[n].Namespace, test.expected.references[n].Namespace)
+				g.Expect(result.references[n].Name).To(Equal(test.expected.references[n].Name), "Expected NodeRef's name to be %v, got %v", result.references[n].Name, test.expected.references[n].Name)
+				g.Expect(result.references[n].Namespace).To(Equal(test.expected.references[n].Namespace), "Expected NodeRef's namespace to be %v, got %v", result.references[n].Namespace, test.expected.references[n].Namespace)
 			}
 		})
-
 	}
 }

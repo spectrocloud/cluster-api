@@ -17,12 +17,13 @@ limitations under the License.
 package repository
 
 import (
-	"io/ioutil"
 	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
+
+	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha4"
 
 	"github.com/pkg/errors"
 	"k8s.io/apimachinery/pkg/util/version"
@@ -53,7 +54,7 @@ import (
 // basepath: C:\cluster-api\out\repo
 // provider-label: infrastructure-docker
 // version: v0.3.0 (whatever latest resolve to)
-// components.yaml: infrastructure-components.yaml
+// components.yaml: infrastructure-components.yaml.
 type localRepository struct {
 	providerConfig        config.Provider
 	configVariablesClient config.VariablesClient
@@ -84,8 +85,8 @@ func (r *localRepository) ComponentsPath() string {
 func (r *localRepository) GetFile(version, fileName string) ([]byte, error) {
 	var err error
 
-	if version == "latest" {
-		version, err = r.getLatestRelease()
+	if version == latestVersionTag {
+		version, err = latestRelease(r)
 		if err != nil {
 			return nil, errors.Wrapf(err, "failed to get the latest release")
 		}
@@ -102,19 +103,18 @@ func (r *localRepository) GetFile(version, fileName string) ([]byte, error) {
 	if f.IsDir() {
 		return nil, errors.Errorf("invalid path: file %q is actually a directory %q", fileName, absolutePath)
 	}
-	content, err := ioutil.ReadFile(absolutePath)
+	content, err := os.ReadFile(absolutePath)
 	if err != nil {
 		return nil, errors.Wrapf(err, "failed to read file %q from local release %s", absolutePath, version)
 	}
 	return content, nil
-
 }
 
 // GetVersions returns the list of versions that are available for a local repository.
 func (r *localRepository) GetVersions() ([]string, error) {
 	// get all the sub-directories under {basepath}/{provider-id}/
 	releasesPath := filepath.Join(r.basepath, r.providerLabel)
-	files, err := ioutil.ReadDir(releasesPath)
+	files, err := os.ReadDir(releasesPath)
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to list release directories")
 	}
@@ -164,7 +164,7 @@ func newLocalRepository(providerConfig config.Provider, configVariablesClient co
 
 	componentsPath := urlSplit[len(urlSplit)-1]
 	defaultVersion := urlSplit[len(urlSplit)-2]
-	if defaultVersion != "latest" {
+	if defaultVersion != latestVersionTag {
 		_, err = version.ParseSemantic(defaultVersion)
 		if err != nil {
 			return nil, errors.Errorf("invalid version: %q. Version must obey the syntax and semantics of the \"Semantic Versioning\" specification (http://semver.org/) and path format {basepath}/{provider-name}/{version}/{components.yaml}", defaultVersion)
@@ -189,56 +189,11 @@ func newLocalRepository(providerConfig config.Provider, configVariablesClient co
 		componentsPath:        componentsPath,
 	}
 
-	if defaultVersion == "latest" {
-		repo.defaultVersion, err = repo.getLatestRelease()
+	if defaultVersion == latestVersionTag {
+		repo.defaultVersion, err = latestContractRelease(repo, clusterv1.GroupVersion.Version)
 		if err != nil {
 			return nil, errors.Wrap(err, "failed to get latest version")
 		}
 	}
 	return repo, nil
-}
-
-// getLatestRelease returns the latest release for the local repository.
-func (r *localRepository) getLatestRelease() (string, error) {
-	versions, err := r.GetVersions()
-	if err != nil {
-		return "", errors.Wrapf(err, "failed to get local repository versions")
-	}
-
-	var latestTag string
-	var latestPrereleaseTag string
-
-	var latestReleaseVersion *version.Version
-	var latestPrereleaseVersion *version.Version
-
-	for _, v := range versions {
-		sv, err := version.ParseSemantic(v)
-		if err != nil {
-			continue
-		}
-
-		// track prereleases separately
-		if sv.PreRelease() != "" {
-			if latestPrereleaseVersion == nil || latestPrereleaseVersion.LessThan(sv) {
-				latestPrereleaseTag = v
-				latestPrereleaseVersion = sv
-			}
-			continue
-		}
-
-		if latestReleaseVersion == nil || latestReleaseVersion.LessThan(sv) {
-			latestTag = v
-			latestReleaseVersion = sv
-		}
-	}
-
-	// Fall back to returning latest prereleases if no release has been cut or bail if it's also empty
-	if latestTag == "" {
-		if latestPrereleaseTag == "" {
-			return "", errors.New("failed to find releases tagged with a valid semantic version number")
-		}
-
-		return latestPrereleaseTag, nil
-	}
-	return latestTag, nil
 }

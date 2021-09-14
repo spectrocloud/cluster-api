@@ -55,7 +55,7 @@ const (
 // Conditions and condition Reasons for the Cluster object
 
 const (
-	// ControlPlaneReady reports the ready condition from the control plane object defined for this cluster.
+	// ControlPlaneReadyCondition reports the ready condition from the control plane object defined for this cluster.
 	// This condition is mirrored from the Ready condition in the control plane ref object, and
 	// the absence of this condition might signal problems in the reconcile external loops or the fact that
 	// the control plane provider does not not implements the Ready condition yet.
@@ -65,13 +65,6 @@ const (
 	// to be available.
 	// NOTE: This reason is used only as a fallback when the control plane object is not reporting its own ready condition.
 	WaitingForControlPlaneFallbackReason = "WaitingForControlPlane"
-
-	// WaitingForControlPlaneAvailableReason (Severity=Info) documents a Cluster API object
-	// waiting for the control plane machine to be available.
-	//
-	// NOTE: Having the control plane machine available is a pre-condition for joining additional control planes
-	// or workers nodes.
-	WaitingForControlPlaneAvailableReason = "WaitingForControlPlaneAvailable"
 )
 
 // Conditions and condition Reasons for the Machine object
@@ -152,19 +145,7 @@ const (
 	ExternalRemediationRequestCreationFailed = "ExternalRemediationRequestCreationFailed"
 )
 
-// Conditions and condition Reasons for the MachineHealthCheck object
-
-const (
-	// RemediationAllowedCondition is set on MachineHealthChecks to show the status of whether the MachineHealthCheck is
-	// allowed to remediate any Machines or whether it is blocked from remediating any further.
-	RemediationAllowedCondition ConditionType = "RemediationAllowed"
-
-	// TooManyUnhealthy is the reason used when too many Machines are unhealthy and the MachineHealthCheck is blocked
-	// from making any further remediations.
-	TooManyUnhealthyReason = "TooManyUnhealthy"
-)
-
-// Conditions and condition Reasons for the Machine's Node object
+// Conditions and condition Reasons for the Machine's Node object.
 const (
 	// MachineNodeHealthyCondition provides info about the operational state of the Kubernetes node hosted on the machine by summarizing  node conditions.
 	// If the conditions defined in a Kubernetes node (i.e., NodeReady, NodeMemoryPressure, NodeDiskPressure, NodePIDPressure, and NodeNetworkUnavailable) are in a healthy state, it will be set to True.
@@ -174,13 +155,25 @@ const (
 	WaitingForNodeRefReason = "WaitingForNodeRef"
 
 	// NodeProvisioningReason (Severity=Info) documents machine in the process of provisioning a node.
-	// NB. provisioning --> NodeRef == ""
+	// NB. provisioning --> NodeRef == "".
 	NodeProvisioningReason = "NodeProvisioning"
 
 	// NodeNotFoundReason (Severity=Error) documents a machine's node has previously been observed but is now gone.
-	// NB. provisioned --> NodeRef != ""
+	// NB. provisioned --> NodeRef != "".
 	NodeNotFoundReason = "NodeNotFound"
 
 	// NodeConditionsFailedReason (Severity=Warning) documents a node is not in a healthy state due to the failed state of at least 1 Kubelet condition.
 	NodeConditionsFailedReason = "NodeConditionsFailed"
+)
+
+// Conditions and condition Reasons for the MachineHealthCheck object
+
+const (
+	// RemediationAllowedCondition is set on MachineHealthChecks to show the status of whether the MachineHealthCheck is
+	// allowed to remediate any Machines or whether it is blocked from remediating any further.
+	RemediationAllowedCondition ConditionType = "RemediationAllowed"
+
+	// TooManyUnhealthyReason is the reason used when too many Machines are unhealthy and the MachineHealthCheck is blocked
+	// from making any further remediations.
+	TooManyUnhealthyReason = "TooManyUnhealthy"
 )
