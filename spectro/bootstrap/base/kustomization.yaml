@@ -1,0 +1,22 @@
+namespace: capi-kubeadm-bootstrap-system
+
+namePrefix: capi-kubeadm-bootstrap-
+
+commonLabels:
+  cluster.x-k8s.io/provider: "bootstrap-kubeadm"
+
+resources:
+  - ../../../bootstrap/kubeadm/config/default/namespace.yaml
+
+bases:
+  - ../../../bootstrap/kubeadm/config/rbac
+  - ../../../bootstrap/kubeadm/config/manager
+
+
+patchesStrategicMerge:
+  - ../../../bootstrap/kubeadm/config/default/manager_image_patch.yaml
+  - ../../../bootstrap/kubeadm/config/default/manager_pull_policy.yaml
+
+
+configurations:
+  - ../../../bootstrap/kubeadm/config/default/kustomizeconfig.yaml
