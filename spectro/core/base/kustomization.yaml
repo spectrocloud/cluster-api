@@ -6,14 +6,43 @@ commonLabels:
   cluster.x-k8s.io/provider: "cluster-api"
 
 
-resources:
-  - ../../../config/default/namespace.yaml
+#resources:
+#  - ../../../config/default/namespace.yaml
 
 bases:
-  - ../../../config/rbac
+#  - ../../../config/rbac
   - ../../../config/manager
 
 patchesStrategicMerge:
   - ../../../config/default/manager_image_patch.yaml
   - ../../../config/default/manager_pull_policy.yaml
-  - ../../../config/default/manager_role_aggregation_patch.yaml
+#  - ../../../config/default/manager_role_aggregation_patch.yaml
+#
+#
+patchesJson6902:
+  - target:
+      group: apps
+      kind: Deployment
+      name: controller-manager
+      namespace: system
+      version: v1
+    path: patch_service_account.yaml
+  - target:
+      group: apps
+      kind: Deployment
+      name: controller-manager
+      namespace: system
+      version: v1
+    path: patch_healthcheck.yaml
+#  - target:
+#      group: rbac.authorization.k8s.io
+#      kind: ClusterRoleBinding
+#      name: manager-rolebinding
+#      version: v1
+#    path: patch_cluster_role_binding_ref.yaml
+#  - target:
+#      group: rbac.authorization.k8s.io
+#      kind: RoleBinding
+#      name: leader-election-rolebinding
+#      version: v1
+#    path: patch_role_binding_ref.yaml
