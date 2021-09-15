@@ -147,7 +147,7 @@ func InitFlags(fs *pflag.FlagSet) {
 	fs.DurationVar(&syncPeriod, "sync-period", 10*time.Minute,
 		"The minimum interval at which watched resources are reconciled (e.g. 15m)")
 
-	fs.IntVar(&webhookPort, "webhook-port", 9443,
+	fs.IntVar(&webhookPort, "webhook-port", 0,
 		"Webhook Server port")
 
 	fs.StringVar(&webhookCertDir, "webhook-cert-dir", "/tmp/k8s-webhook-server/serving-certs/",
@@ -218,6 +218,10 @@ func main() {
 }
 
 func setupChecks(mgr ctrl.Manager) {
+	if webhookPort == 0 {
+		setupLog.V(0).Info("webhook is disabled skipping webhook healthcheck setup")
+		return
+	}
 	if err := mgr.AddReadyzCheck("webhook", mgr.GetWebhookServer().StartedChecker()); err != nil {
 		setupLog.Error(err, "unable to create ready check")
 		os.Exit(1)
@@ -230,6 +234,10 @@ func setupChecks(mgr ctrl.Manager) {
 }
 
 func setupIndexes(ctx context.Context, mgr ctrl.Manager) {
+	if webhookPort != 0 {
+		setupLog.V(0).Info("webhook is enabled skipping index setup")
+		return
+	}
 	if err := index.AddDefaultIndexes(ctx, mgr); err != nil {
 		setupLog.Error(err, "unable to setup indexes")
 		os.Exit(1)
@@ -237,6 +245,10 @@ func setupIndexes(ctx context.Context, mgr ctrl.Manager) {
 }
 
 func setupReconcilers(ctx context.Context, mgr ctrl.Manager) {
+	if webhookPort != 0 {
+		setupLog.V(0).Info("webhook is enabled skipping reconcilers setup")
+		return
+	}
 	// Set up a ClusterCacheTracker and ClusterCacheReconciler to provide to controllers
 	// requiring a connection to a remote cluster
 	tracker, err := remote.NewClusterCacheTracker(
@@ -373,6 +385,10 @@ func setupReconcilers(ctx context.Context, mgr ctrl.Manager) {
 }
 
 func setupWebhooks(mgr ctrl.Manager) {
+	if webhookPort == 0 {
+		setupLog.V(0).Info("webhook is disabled skipping webhook setup")
+		return
+	}
 	// NOTE: ClusterClass and managed topologies are behind ClusterTopology feature gate flag; the webhook
 	// is going to prevent creating or updating new objects in case the feature flag is disabled.
 	if err := (&clusterv1.ClusterClass{}).SetupWebhookWithManager(mgr); err != nil {
