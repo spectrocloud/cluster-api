@@ -5,11 +5,7 @@ namePrefix: capi-kubeadm-bootstrap-
 commonLabels:
   cluster.x-k8s.io/provider: "bootstrap-kubeadm"
 
-#resources:
-#  - ../../../bootstrap/kubeadm/config/default/namespace.yaml
-
 bases:
-#  - ../../../bootstrap/kubeadm/config/rbac
   - ../../../bootstrap/kubeadm/config/manager
 
 
@@ -21,7 +17,6 @@ patchesStrategicMerge:
 configurations:
   - ../../../bootstrap/kubeadm/config/default/kustomizeconfig.yaml
 
-#
 patchesJson6902:
   - target:
       group: apps
@@ -37,15 +32,3 @@ patchesJson6902:
       namespace: system
       version: v1
     path: patch_healthcheck.yaml
-#  - target:
-#      group: rbac.authorization.k8s.io
-#      kind: ClusterRoleBinding
-#      name: manager-rolebinding
-#      version: v1
-#    path: patch_cluster_role_binding_ref.yaml
-#  - target:
-#      group: rbac.authorization.k8s.io
-#      kind: RoleBinding
-#      name: leader-election-rolebinding
-#      version: v1
-#    path: patch_role_binding_ref.yaml
