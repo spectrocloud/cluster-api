@@ -51,6 +51,13 @@ configurations:
 
 patchesJson6902:
 - target:
+    group: apps
+    kind: Deployment
+    name: controller-manager
+    namespace: system
+    version: v1
+  path: patch_service_account.yaml
+- target:
     group: apiextensions.k8s.io
     version: v1
     kind: CustomResourceDefinition

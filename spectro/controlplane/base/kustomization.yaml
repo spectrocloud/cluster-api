@@ -5,14 +5,25 @@ namePrefix: capi-kubeadm-control-plane-
 commonLabels:
   cluster.x-k8s.io/provider: "control-plane-kubeadm"
 
-resources:
-  - ../../../controlplane/kubeadm/config/default/namespace.yaml
-
 bases:
-  - ../../../controlplane/kubeadm/config/rbac
   - ../../../controlplane/kubeadm/config/manager
 
 patchesStrategicMerge:
   - ../../../controlplane/kubeadm/config/default/manager_image_patch.yaml
   - ../../../controlplane/kubeadm/config/default/manager_pull_policy.yaml
-  - ../../../controlplane/kubeadm/config/default/manager_role_aggregation_patch.yaml
+
+patchesJson6902:
+  - target:
+      group: apps
+      kind: Deployment
+      name: controller-manager
+      namespace: system
+      version: v1
+    path: patch_service_account.yaml
+  - target:
+      group: apps
+      kind: Deployment
+      name: controller-manager
+      namespace: system
+      version: v1
+    path: patch_healthcheck.yaml

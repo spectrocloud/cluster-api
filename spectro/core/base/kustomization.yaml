@@ -5,15 +5,25 @@ namePrefix: capi-
 commonLabels:
   cluster.x-k8s.io/provider: "cluster-api"
 
-
-resources:
-  - ../../../config/default/namespace.yaml
-
 bases:
-  - ../../../config/rbac
   - ../../../config/manager
 
 patchesStrategicMerge:
   - ../../../config/default/manager_image_patch.yaml
   - ../../../config/default/manager_pull_policy.yaml
-  - ../../../config/default/manager_role_aggregation_patch.yaml
+
+patchesJson6902:
+  - target:
+      group: apps
+      kind: Deployment
+      name: controller-manager
+      namespace: system
+      version: v1
+    path: patch_service_account.yaml
+  - target:
+      group: apps
+      kind: Deployment
+      name: controller-manager
+      namespace: system
+      version: v1
+    path: patch_healthcheck.yaml
