@@ -65,7 +65,7 @@ func NewProviderID(id string) (*ProviderID, error) {
 
 	switch cloudProvider {
 	case azure:
-		instance = id
+		instance = strings.ToLower(id)
 	default:
 		lastSlashIndex := strings.LastIndex(id, "/")
 		instance = id[lastSlashIndex+1:]
