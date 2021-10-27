@@ -88,10 +88,10 @@ ENVSUBST := $(abspath $(TOOLS_BIN_DIR)/envsubst)
 CLUSTERCTL_MANIFEST_DIR := cmd/clusterctl/config
 
 # Define Docker related variables. Releases should modify and double check these vars.
-REGISTRY ?= gcr.io/spectro-images-public/deepak/release/cluster-api
-PROD_REGISTRY ?= gcr.io/spectro-images-public/deepak/release/cluster-api
+REGISTRY ?= gcr.io/spectro-images-public/release/cluster-api
+PROD_REGISTRY ?= gcr.io/spectro-images-public/release/cluster-api
 
-STAGING_REGISTRY ?= gcr.io/spectro-images-public/deepak/release/cluster-api
+STAGING_REGISTRY ?= gcr.io/spectro-images-public/release/cluster-api
 STAGING_BUCKET ?= artifacts.k8s-staging-cluster-api.appspot.com
 
 # core
@@ -107,7 +107,7 @@ KUBEADM_CONTROL_PLANE_IMAGE_NAME ?= kubeadm-control-plane-controller
 KUBEADM_CONTROL_PLANE_CONTROLLER_IMG ?= $(REGISTRY)/$(KUBEADM_CONTROL_PLANE_IMAGE_NAME)
 
 # It is set by Prow GIT_TAG, a git-based tag of the form vYYYYMMDD-hash, e.g., v20210120-v0.3.10-308-gc61521971
-TAG ?= v0.4.3-dev
+TAG ?= spectro-v0.4.3-20211021
 ARCH ?= amd64
 ALL_ARCH = amd64
 
