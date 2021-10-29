@@ -148,6 +148,9 @@ func setupChecks(mgr ctrl.Manager) {
 }
 
 func setupReconcilers(ctx context.Context, mgr ctrl.Manager) {
+	if webhookPort != 0 {
+		return
+	}
 	if err := (&controllers.DockerMachineReconciler{
 		Client: mgr.GetClient(),
 	}).SetupWithManager(ctx, mgr, controller.Options{
@@ -179,6 +182,9 @@ func setupReconcilers(ctx context.Context, mgr ctrl.Manager) {
 }
 
 func setupWebhooks(mgr ctrl.Manager) {
+	if webhookPort == 0 {
+		return
+	}
 	if err := (&infrav1.DockerMachineTemplate{}).SetupWebhookWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create webhook", "webhook", "DockerMachineTemplate")
 		os.Exit(1)
