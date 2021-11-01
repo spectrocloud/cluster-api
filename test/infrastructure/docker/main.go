@@ -85,7 +85,7 @@ func initFlags(fs *pflag.FlagSet) {
 		"The minimum interval at which watched resources are reconciled (e.g. 15m)")
 	fs.StringVar(&healthAddr, "health-addr", ":9440",
 		"The address the health endpoint binds to.")
-	fs.IntVar(&webhookPort, "webhook-port", 9443,
+	fs.IntVar(&webhookPort, "webhook-port", 0,
 		"Webhook Server port")
 	fs.StringVar(&webhookCertDir, "webhook-cert-dir", "/tmp/k8s-webhook-server/serving-certs/",
 		"Webhook cert dir, only used when webhook-port is specified.")
@@ -123,9 +123,8 @@ func main() {
 	// Setup the context that's going to be used in controllers and for the manager.
 	ctx := ctrl.SetupSignalHandler()
 
-	setupChecks(mgr)
 	setupReconcilers(ctx, mgr)
-	setupWebhooks(mgr)
+	setupWebhooks(ctx, mgr)
 
 	// +kubebuilder:scaffold:builder
 	setupLog.Info("starting manager")
@@ -151,6 +150,8 @@ func setupReconcilers(ctx context.Context, mgr ctrl.Manager) {
 	if webhookPort != 0 {
 		return
 	}
+	log := ctrl.LoggerFrom(ctx)
+	log.Info("setupReconcilers")
 	if err := (&controllers.DockerMachineReconciler{
 		Client: mgr.GetClient(),
 	}).SetupWithManager(ctx, mgr, controller.Options{
@@ -181,10 +182,12 @@ func setupReconcilers(ctx context.Context, mgr ctrl.Manager) {
 	}
 }
 
-func setupWebhooks(mgr ctrl.Manager) {
+func setupWebhooks(ctx context.Context, mgr ctrl.Manager) {
 	if webhookPort == 0 {
 		return
 	}
+	log := ctrl.LoggerFrom(ctx)
+	log.Info("setupWebhooks")
 	if err := (&infrav1.DockerMachineTemplate{}).SetupWebhookWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create webhook", "webhook", "DockerMachineTemplate")
 		os.Exit(1)
@@ -199,4 +202,5 @@ func setupWebhooks(mgr ctrl.Manager) {
 		setupLog.Error(err, "unable to create webhook", "webhook", "DockerClusterTemplate")
 		os.Exit(1)
 	}
+	setupChecks(mgr)
 }
