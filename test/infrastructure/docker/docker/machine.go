@@ -342,6 +342,12 @@ func (m *Machine) ExecBootstrap(ctx context.Context, data string) error {
 		}
 		err := cmd.Run(ctx)
 		if err != nil {
+			// If the capd pod for some reason restarts after running the bootstrap exec, the node is created successfully
+			// but because the capd restarted in the middle of the process, dockerMachine.Spec.Bootstrapped = true does not
+			// get set. In this case capd tries to bootstrap the node again and will fail. Hence skip in such a situation
+			if nodeAlreadyExists(outErr.String()) {
+				return nil
+			}
 			log.Info("Failed running command", "command", command, "stdout", outStd.String(), "stderr", outErr.String(), "bootstrap data", data)
 			logContainerDebugInfo(log, m.ContainerName())
 			return errors.Wrap(errors.WithStack(err), "failed to run cloud config")
