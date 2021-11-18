@@ -1432,7 +1432,7 @@ spec:
         - --leader-elect
         - --metrics-bind-addr=localhost:8080
         - --feature-gates=MachinePool=${EXP_MACHINE_POOL:=false},ClusterTopology=${CLUSTER_TOPOLOGY:=false}
-        image: gcr.io/spectro-images-public/cluster-api-docker/capd-manager-amd64:spectro-v0.4.3-20211021
+        image: gcr.io/spectro-images-public/cluster-api-docker/capd-manager-amd64:spectro-v0.4.3-20211116
         imagePullPolicy: Always
         livenessProbe:
           httpGet:

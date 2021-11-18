@@ -8,5 +8,5 @@ spec:
     spec:
       containers:
       # Change the value of image field below to your controller image URL
-      - image: gcr.io/spectro-images-public/cluster-api-docker/capd-manager-amd64:spectro-v0.4.3-20211021
+      - image: gcr.io/spectro-images-public/cluster-api-docker/capd-manager-amd64:spectro-v0.4.3-20211116
         name: manager
