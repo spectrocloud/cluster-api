@@ -35,6 +35,7 @@ type Runtime interface {
 	ContainerDebugInfo(ctx context.Context, containerName string, w io.Writer) error
 	DeleteContainer(ctx context.Context, containerName string) error
 	KillContainer(ctx context.Context, containerName, signal string) error
+	StartContainer(ctx context.Context, input *StartContainerInput) error
 }
 
 // Mount contains mount details.
@@ -127,4 +128,14 @@ type Container struct {
 	Image string
 	// Status is the status of the container
 	Status string
+}
+
+// StartContainerInput contains values for starting a container.
+type StartContainerInput struct {
+	// ID of the container
+	ID string
+	// Name is the name of the container
+	Name string
+	// Filters for the container
+	Filters FilterBuilder
 }

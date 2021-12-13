@@ -88,6 +88,23 @@ func (n *Node) IsRunning() bool {
 	return strings.HasPrefix(n.status, "Up")
 }
 
+// IsCreated returns if the container is in created state.
+func (n *Node) IsCreated() bool {
+	return strings.HasPrefix(n.status, "Created")
+}
+
+// Start starts the container
+func (n *Node) Start(ctx context.Context) error {
+	containerRuntime, err := container.NewDockerClient()
+	if err != nil {
+		return errors.Wrap(err, "failed to connect to container runtime")
+	}
+	// start the container using the container runtime
+	return containerRuntime.StartContainer(ctx, &container.StartContainerInput{
+		Name: n.Name,
+	})
+}
+
 // Delete removes the container.
 func (n *Node) Delete(ctx context.Context) error {
 	containerRuntime, err := container.NewDockerClient()

@@ -222,6 +222,16 @@ func (r *DockerMachineReconciler) reconcileNormal(ctx context.Context, cluster *
 		}
 	}
 
+	// Check if the external machine is created but not started because the capd pod crashed immediately after creation.
+	// In this case start the existing container.
+	if externalMachine.Exists() && externalMachine.IsCreated() {
+		log.V(0).Info("Start existing machine", "machine", externalMachine.Name())
+		if err := externalMachine.Start(ctx); err != nil {
+			return ctrl.Result{}, errors.Wrap(err, "failed to start the node")
+		}
+		log.V(0).Info("Successfully started machine", "machine", externalMachine.Name())
+	}
+
 	// Preload images into the container
 	if len(dockerMachine.Spec.PreLoadImages) > 0 {
 		if err := externalMachine.PreloadLoadImages(ctx, dockerMachine.Spec.PreLoadImages); err != nil {

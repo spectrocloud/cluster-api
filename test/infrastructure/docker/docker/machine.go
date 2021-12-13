@@ -194,6 +194,14 @@ func (m *Machine) Address(ctx context.Context) (string, error) {
 	return ipv4, nil
 }
 
+func (m *Machine) IsCreated() bool {
+	return m.container.IsCreated()
+}
+
+func (m *Machine) Start(ctx context.Context) error {
+	return m.container.Start(ctx)
+}
+
 // Create creates a docker container hosting a Kubernetes node.
 func (m *Machine) Create(ctx context.Context, role string, version *string, mounts []infrav1.Mount) error {
 	log := ctrl.LoggerFrom(ctx)
