@@ -388,7 +388,7 @@ func (d *docker) RunContainer(ctx context.Context, runConfig *RunContainerInput,
 		NetworkMode:   dockercontainer.NetworkMode(runConfig.Network),
 		Tmpfs:         runConfig.Tmpfs,
 		PortBindings:  nat.PortMap{},
-		RestartPolicy: dockercontainer.RestartPolicy{Name: "unless-stopped"},
+		RestartPolicy: dockercontainer.RestartPolicy{Name: "always"},
 	}
 	networkConfig := network.NetworkingConfig{}
 
