@@ -217,7 +217,7 @@ func (r *DockerMachineReconciler) reconcileNormal(ctx context.Context, cluster *
 
 	// Create the machine if not existing yet
 	if !externalMachine.Exists() {
-		if err := externalMachine.Create(ctx, role, machine.Spec.Version, dockerMachine.Spec.ExtraMounts); err != nil {
+		if err := externalMachine.Create(ctx, role, machine.Spec.Version, dockerMachine.Spec.ExtraMounts, dockerMachine.Spec.EnvironmentVariables); err != nil {
 			return ctrl.Result{}, errors.Wrap(err, "failed to create worker DockerMachine")
 		}
 	}

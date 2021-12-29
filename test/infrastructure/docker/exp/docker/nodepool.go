@@ -186,7 +186,7 @@ func (np *NodePool) addMachine(ctx context.Context) error {
 		return errors.Wrapf(err, "failed to create helper for managing the externalMachine named %s", instanceName)
 	}
 
-	if err := externalMachine.Create(ctx, constants.WorkerNodeRoleValue, np.machinePool.Spec.Template.Spec.Version, np.dockerMachinePool.Spec.Template.ExtraMounts); err != nil {
+	if err := externalMachine.Create(ctx, constants.WorkerNodeRoleValue, np.machinePool.Spec.Template.Spec.Version, np.dockerMachinePool.Spec.Template.ExtraMounts, np.dockerMachinePool.Spec.Template.EnvironmentVariables); err != nil {
 		return errors.Wrapf(err, "failed to create docker machine with instance name %s", instanceName)
 	}
 	return nil

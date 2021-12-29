@@ -35,6 +35,10 @@ type DockerMachinePoolMachineTemplate struct {
 	// +optional
 	CustomImage string `json:"customImage,omitempty"`
 
+	// EnviornmentVariables to be passed to the docker node created
+	// +optional
+	EnvironmentVariables map[string]string `json:"environmentVariables,omitempty"`
+
 	// PreLoadImages allows to pre-load images in a newly created machine. This can be used to
 	// speed up tests by avoiding e.g. to download CNI images on all the containers.
 	// +optional

@@ -47,8 +47,8 @@ const (
 )
 
 type nodeCreator interface {
-	CreateControlPlaneNode(ctx context.Context, name, image, clusterName, listenAddress string, port int32, mounts []v1alpha4.Mount, portMappings []v1alpha4.PortMapping, labels map[string]string, ipFamily clusterv1.ClusterIPFamily) (node *types.Node, err error)
-	CreateWorkerNode(ctx context.Context, name, image, clusterName string, mounts []v1alpha4.Mount, portMappings []v1alpha4.PortMapping, labels map[string]string, ipFamily clusterv1.ClusterIPFamily) (node *types.Node, err error)
+	CreateControlPlaneNode(ctx context.Context, name, image, clusterName, listenAddress string, port int32, mounts []v1alpha4.Mount, portMappings []v1alpha4.PortMapping, labels map[string]string, ipFamily clusterv1.ClusterIPFamily, envVars map[string]string) (node *types.Node, err error)
+	CreateWorkerNode(ctx context.Context, name, image, clusterName string, mounts []v1alpha4.Mount, portMappings []v1alpha4.PortMapping, labels map[string]string, ipFamily clusterv1.ClusterIPFamily, envVars map[string]string) (node *types.Node, err error)
 }
 
 // Machine implement a service for managing the docker containers hosting a kubernetes nodes.
@@ -203,7 +203,7 @@ func (m *Machine) Start(ctx context.Context) error {
 }
 
 // Create creates a docker container hosting a Kubernetes node.
-func (m *Machine) Create(ctx context.Context, role string, version *string, mounts []infrav1.Mount) error {
+func (m *Machine) Create(ctx context.Context, role string, version *string, mounts []infrav1.Mount, envVars map[string]string) error {
 	log := ctrl.LoggerFrom(ctx)
 
 	// Create if not exists.
@@ -229,6 +229,7 @@ func (m *Machine) Create(ctx context.Context, role string, version *string, moun
 				nil,
 				m.labels,
 				m.ipFamily,
+				envVars,
 			)
 			if err != nil {
 				return errors.WithStack(err)
@@ -244,6 +245,7 @@ func (m *Machine) Create(ctx context.Context, role string, version *string, moun
 				nil,
 				m.labels,
 				m.ipFamily,
+				envVars,
 			)
 			if err != nil {
 				return errors.WithStack(err)
