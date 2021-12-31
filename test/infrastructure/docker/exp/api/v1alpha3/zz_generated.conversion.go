@@ -230,6 +230,7 @@ func autoConvert_v1alpha3_DockerMachinePoolMachineTemplate_To_v1alpha4_DockerMac
 	out.CustomImage = in.CustomImage
 	out.PreLoadImages = *(*[]string)(unsafe.Pointer(&in.PreLoadImages))
 	out.ExtraMounts = *(*[]dockerapiv1alpha4.Mount)(unsafe.Pointer(&in.ExtraMounts))
+	out.EnvironmentVariables = *(*map[string]string)(unsafe.Pointer(&in.EnvironmentVariables))
 	return nil
 }
 
@@ -240,6 +241,7 @@ func Convert_v1alpha3_DockerMachinePoolMachineTemplate_To_v1alpha4_DockerMachine
 
 func autoConvert_v1alpha4_DockerMachinePoolMachineTemplate_To_v1alpha3_DockerMachinePoolMachineTemplate(in *v1alpha4.DockerMachinePoolMachineTemplate, out *DockerMachinePoolMachineTemplate, s conversion.Scope) error {
 	out.CustomImage = in.CustomImage
+	out.EnvironmentVariables = *(*map[string]string)(unsafe.Pointer(&in.EnvironmentVariables))
 	out.PreLoadImages = *(*[]string)(unsafe.Pointer(&in.PreLoadImages))
 	out.ExtraMounts = *(*[]dockerapiv1alpha3.Mount)(unsafe.Pointer(&in.ExtraMounts))
 	return nil

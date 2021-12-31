@@ -468,6 +468,7 @@ func autoConvert_v1alpha3_DockerMachineSpec_To_v1alpha4_DockerMachineSpec(in *Do
 	out.ProviderID = (*string)(unsafe.Pointer(in.ProviderID))
 	out.CustomImage = in.CustomImage
 	out.PreLoadImages = *(*[]string)(unsafe.Pointer(&in.PreLoadImages))
+	out.EnvironmentVariables = *(*map[string]string)(unsafe.Pointer(&in.EnvironmentVariables))
 	out.ExtraMounts = *(*[]v1alpha4.Mount)(unsafe.Pointer(&in.ExtraMounts))
 	out.Bootstrapped = in.Bootstrapped
 	return nil
@@ -483,6 +484,7 @@ func autoConvert_v1alpha4_DockerMachineSpec_To_v1alpha3_DockerMachineSpec(in *v1
 	out.CustomImage = in.CustomImage
 	out.PreLoadImages = *(*[]string)(unsafe.Pointer(&in.PreLoadImages))
 	out.ExtraMounts = *(*[]Mount)(unsafe.Pointer(&in.ExtraMounts))
+	out.EnvironmentVariables = *(*map[string]string)(unsafe.Pointer(&in.EnvironmentVariables))
 	out.Bootstrapped = in.Bootstrapped
 	return nil
 }
@@ -586,7 +588,17 @@ func Convert_v1alpha4_DockerMachineTemplate_To_v1alpha3_DockerMachineTemplate(in
 
 func autoConvert_v1alpha3_DockerMachineTemplateList_To_v1alpha4_DockerMachineTemplateList(in *DockerMachineTemplateList, out *v1alpha4.DockerMachineTemplateList, s conversion.Scope) error {
 	out.ListMeta = in.ListMeta
-	out.Items = *(*[]v1alpha4.DockerMachineTemplate)(unsafe.Pointer(&in.Items))
+	if in.Items != nil {
+		in, out := &in.Items, &out.Items
+		*out = make([]v1alpha4.DockerMachineTemplate, len(*in))
+		for i := range *in {
+			if err := Convert_v1alpha3_DockerMachineTemplate_To_v1alpha4_DockerMachineTemplate(&(*in)[i], &(*out)[i], s); err != nil {
+				return err
+			}
+		}
+	} else {
+		out.Items = nil
+	}
 	return nil
 }
 
@@ -597,7 +609,17 @@ func Convert_v1alpha3_DockerMachineTemplateList_To_v1alpha4_DockerMachineTemplat
 
 func autoConvert_v1alpha4_DockerMachineTemplateList_To_v1alpha3_DockerMachineTemplateList(in *v1alpha4.DockerMachineTemplateList, out *DockerMachineTemplateList, s conversion.Scope) error {
 	out.ListMeta = in.ListMeta
-	out.Items = *(*[]DockerMachineTemplate)(unsafe.Pointer(&in.Items))
+	if in.Items != nil {
+		in, out := &in.Items, &out.Items
+		*out = make([]DockerMachineTemplate, len(*in))
+		for i := range *in {
+			if err := Convert_v1alpha4_DockerMachineTemplate_To_v1alpha3_DockerMachineTemplate(&(*in)[i], &(*out)[i], s); err != nil {
+				return err
+			}
+		}
+	} else {
+		out.Items = nil
+	}
 	return nil
 }
 

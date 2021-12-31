@@ -44,6 +44,10 @@ type DockerMachinePoolMachineTemplate struct {
 	// These may be used to bind a hostPath
 	// +optional
 	ExtraMounts []infrav1.Mount `json:"extraMounts,omitempty"`
+
+	// EnviornmentVariables to be passed to the docker node created
+	// +optional
+	EnvironmentVariables map[string]string `json:"environmentVariables,omitempty"`
 }
 
 // DockerMachinePoolSpec defines the desired state of DockerMachinePool.
