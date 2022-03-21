@@ -223,6 +223,13 @@ func (in *DockerMachineSpec) DeepCopyInto(out *DockerMachineSpec) {
 		*out = make([]string, len(*in))
 		copy(*out, *in)
 	}
+	if in.EnvironmentVariables != nil {
+		in, out := &in.EnvironmentVariables, &out.EnvironmentVariables
+		*out = make(map[string]string, len(*in))
+		for key, val := range *in {
+			(*out)[key] = val
+		}
+	}
 	if in.ExtraMounts != nil {
 		in, out := &in.ExtraMounts, &out.ExtraMounts
 		*out = make([]Mount, len(*in))
