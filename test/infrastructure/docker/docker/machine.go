@@ -194,6 +194,14 @@ func (m *Machine) Address(ctx context.Context) (string, error) {
 	return ipv4, nil
 }
 
+func (m *Machine) IsCreated() bool {
+	return m.container.IsCreated()
+}
+
+func (m *Machine) Start(ctx context.Context) error {
+	return m.container.Start(ctx)
+}
+
 // Create creates a docker container hosting a Kubernetes node.
 func (m *Machine) Create(ctx context.Context, role string, version *string, mounts []infrav1.Mount) error {
 	log := ctrl.LoggerFrom(ctx)
@@ -342,6 +350,12 @@ func (m *Machine) ExecBootstrap(ctx context.Context, data string) error {
 		}
 		err := cmd.Run(ctx)
 		if err != nil {
+			// If the capd pod for some reason restarts after running the bootstrap exec, the node is created successfully
+			// but because the capd restarted in the middle of the process, dockerMachine.Spec.Bootstrapped = true does not
+			// get set. In this case capd tries to bootstrap the node again and will fail. Hence skip in such a situation
+			if nodeAlreadyExists(outErr.String()) {
+				return nil
+			}
 			log.Info("Failed running command", "command", command, "stdout", outStd.String(), "stderr", outErr.String(), "bootstrap data", data)
 			logContainerDebugInfo(log, m.ContainerName())
 			return errors.Wrap(errors.WithStack(err), "failed to run cloud config")

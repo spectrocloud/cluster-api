@@ -19,6 +19,7 @@ package docker
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/pkg/errors"
@@ -104,4 +105,10 @@ func list(visit func(string, *types.Node), filters container.FilterBuilder) erro
 	}
 
 	return nil
+}
+
+func nodeAlreadyExists(stderr string) bool {
+	const regex = `Node with name "[^"]*" and status "Ready" already exists in the cluster. You must delete the existing Node or change the name of this new joining Node`
+	re := regexp.MustCompile(regex)
+	return re.FindString(stderr) != ""
 }

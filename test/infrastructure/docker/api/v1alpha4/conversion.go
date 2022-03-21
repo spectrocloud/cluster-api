@@ -16,5 +16,11 @@ limitations under the License.
 
 package v1alpha4
 
-func (*DockerCluster) Hub()     {}
-func (*DockerClusterList) Hub() {}
+func (*DockerCluster) Hub()             {}
+func (*DockerClusterList) Hub()         {}
+func (*DockerClusterTemplate) Hub()     {}
+func (*DockerClusterTemplateList) Hub() {}
+func (*DockerMachine) Hub()             {}
+func (*DockerMachineList) Hub()         {}
+func (*DockerMachineTemplate) Hub()     {}
+func (*DockerMachineTemplateList) Hub() {}

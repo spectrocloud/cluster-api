@@ -1,2 +1,4 @@
+namespace: capd-system
+
 resources:
 - manager.yaml

@@ -388,7 +388,7 @@ func (d *docker) RunContainer(ctx context.Context, runConfig *RunContainerInput,
 		NetworkMode:   dockercontainer.NetworkMode(runConfig.Network),
 		Tmpfs:         runConfig.Tmpfs,
 		PortBindings:  nat.PortMap{},
-		RestartPolicy: dockercontainer.RestartPolicy{Name: "unless-stopped"},
+		RestartPolicy: dockercontainer.RestartPolicy{Name: "always"},
 	}
 	networkConfig := network.NetworkingConfig{}
 
@@ -500,6 +500,62 @@ func (d *docker) RunContainer(ctx context.Context, runConfig *RunContainerInput,
 	containerJSON, err := d.dockerClient.ContainerInspect(ctx, resp.ID)
 	if err != nil {
 		return fmt.Errorf("error inspecting container %s: %v", resp.ID, err)
+	}
+
+	if containerJSON.ContainerJSONBase.State.ExitCode != 0 {
+		return fmt.Errorf("error container run failed with exit code %d", containerJSON.ContainerJSONBase.State.ExitCode)
+	}
+
+	return nil
+}
+
+// Container
+func (d *docker) StartContainer(ctx context.Context, input *StartContainerInput) error {
+
+	if input.ID == "" {
+		listOptions := types.ContainerListOptions{
+			All:     true,
+			Limit:   -1,
+			Filters: dockerfilters.NewArgs(),
+		}
+
+		if input.Name != "" {
+			listOptions.Filters.Add("name", input.Name)
+		} else {
+			// Construct our filtering options
+			for key, values := range input.Filters {
+				for subkey, subvalues := range values {
+					for _, v := range subvalues {
+						if v == "" {
+							listOptions.Filters.Add(key, subkey)
+						} else {
+							listOptions.Filters.Add(key, fmt.Sprintf("%s=%s", subkey, v))
+						}
+					}
+				}
+			}
+		}
+
+		dockerContainers, err := d.dockerClient.ContainerList(ctx, listOptions)
+		if err != nil {
+			return errors.Wrap(err, "failed to list containers")
+		}
+
+		if len(dockerContainers) == 0 {
+			return errors.Errorf("container does not exist: %s", input.ID)
+		}
+
+		input.ID = dockerContainers[0].ID
+	}
+
+	// Actually start the container
+	if err := d.dockerClient.ContainerStart(ctx, input.ID, types.ContainerStartOptions{}); err != nil {
+		return errors.Wrapf(err, "error starting container %s", input.ID)
+	}
+
+	containerJSON, err := d.dockerClient.ContainerInspect(ctx, input.ID)
+	if err != nil {
+		return fmt.Errorf("error inspecting container %s: %v", input.ID, err)
 	}
 
 	if containerJSON.ContainerJSONBase.State.ExitCode != 0 {

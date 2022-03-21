@@ -56,8 +56,9 @@ KUSTOMIZE := $(abspath $(TOOLS_BIN_DIR)/kustomize)
 $(KUSTOMIZE): # Build kustomize from tools folder.
 	$(MAKE) -C $(ROOT) kustomize
 
+# gcr.io/spectro-images-public/cluster-api-docker/capd-manager:spectro-v0.4.3-20211021
 # Define Docker related variables. Releases should modify and double check these vars.
-REGISTRY ?= gcr.io/$(shell gcloud config get-value project)
+REGISTRY ?= gcr.io/spectro-images-public/cluster-api-docker
 IMAGE_NAME ?= capd-manager
 CONTROLLER_IMG ?= $(REGISTRY)/$(IMAGE_NAME)
 ARCH ?= amd64
@@ -67,7 +68,7 @@ STAGING_REGISTRY ?= gcr.io/k8s-staging-cluster-api
 STAGING_BUCKET ?= artifacts.k8s-staging-cluster-api.appspot.com
 
 # TAG is set to GIT_TAG in GCB, a git-based tag of the form vYYYYMMDD-hash, e.g., v20210120-v0.3.10-308-gc61521971.
-TAG ?= dev
+TAG ?= spectro-v0.4.3-20211116
 
 # Allow overriding the imagePullPolicy
 PULL_POLICY ?= Always
@@ -163,13 +164,13 @@ docker-pull-prerequisites:
 
 .PHONY: docker-build
 docker-build: docker-pull-prerequisites ## Build the docker image for controller-manager
-	DOCKER_BUILDKIT=1 docker build --build-arg builder_image=$(GO_CONTAINER_IMAGE) --build-arg goproxy=$(GOPROXY) --build-arg ARCH=$(ARCH) ../../.. -t $(CONTROLLER_IMG)-$(ARCH):$(TAG) --file Dockerfile
+	DOCKER_BUILDKIT=1 docker build --build-arg builder_image=$(GO_CONTAINER_IMAGE) --build-arg goproxy=$(GOPROXY) --build-arg ARCH=$(ARCH) ../../.. -t $(CONTROLLER_IMG):$(TAG) --file Dockerfile
 	MANIFEST_IMG=$(CONTROLLER_IMG)-$(ARCH) MANIFEST_TAG=$(TAG) $(MAKE) set-manifest-image
 	$(MAKE) set-manifest-pull-policy
 
 .PHONY: docker-push
 docker-push: ## Push the docker image
-	docker push $(CONTROLLER_IMG)-$(ARCH):$(TAG)
+	docker push $(CONTROLLER_IMG):$(TAG)
 
 ## --------------------------------------
 ## Docker — All ARCH
