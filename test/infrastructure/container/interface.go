@@ -90,6 +90,10 @@ type RunContainerInput struct {
 	PortMappings []PortMapping
 	// IPFamily is the IP version to use.
 	IPFamily v1alpha4.ClusterIPFamily
+	// PID namespace to use for the container
+	PidMode string
+	// IPC namespace to use for the container
+	IpcMode string
 }
 
 // ExecContainerInput contains values for running exec on a container.
