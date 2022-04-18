@@ -68,7 +68,7 @@ STAGING_REGISTRY ?= gcr.io/k8s-staging-cluster-api
 STAGING_BUCKET ?= artifacts.k8s-staging-cluster-api.appspot.com
 
 # TAG is set to GIT_TAG in GCB, a git-based tag of the form vYYYYMMDD-hash, e.g., v20210120-v0.3.10-308-gc61521971.
-TAG ?= spectro-v0.4.3-20211116
+TAG ?= spectro-v0.4.3-20211231
 
 # Allow overriding the imagePullPolicy
 PULL_POLICY ?= Always

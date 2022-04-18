@@ -48,6 +48,10 @@ type DockerMachineSpec struct {
 	// +optional
 	ExtraMounts []Mount `json:"extraMounts,omitempty"`
 
+	// EnviornmentVariables to be passed to the docker node created
+	// +optional
+	EnvironmentVariables map[string]string `json:"environmentVariables,omitempty"`
+
 	// Bootstrapped is true when the kubeadm bootstrapping has been run
 	// against this machine
 	// +optional

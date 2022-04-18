@@ -43,6 +43,10 @@ type DockerMachineSpec struct {
 	// +optional
 	PreLoadImages []string `json:"preLoadImages,omitempty"`
 
+	// EnviornmentVariables to be passed to the docker node created
+	// +optional
+	EnvironmentVariables map[string]string `json:"environmentVariables,omitempty"`
+
 	// ExtraMounts describes additional mount points for the node container
 	// These may be used to bind a hostPath
 	// +optional

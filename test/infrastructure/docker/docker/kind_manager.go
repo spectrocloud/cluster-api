@@ -38,17 +38,18 @@ const DefaultNetwork = "kind"
 type Manager struct{}
 
 type nodeCreateOpts struct {
-	Name         string
-	Image        string
-	ClusterName  string
-	Role         string
-	Mounts       []v1alpha4.Mount
-	PortMappings []v1alpha4.PortMapping
-	Labels       map[string]string
-	IPFamily     clusterv1.ClusterIPFamily
+	Name            string
+	Image           string
+	ClusterName     string
+	Role            string
+	Mounts          []v1alpha4.Mount
+	PortMappings    []v1alpha4.PortMapping
+	Labels          map[string]string
+	IPFamily        clusterv1.ClusterIPFamily
+	EnvironmentVars map[string]string
 }
 
-func (m *Manager) CreateControlPlaneNode(ctx context.Context, name, image, clusterName, listenAddress string, port int32, mounts []v1alpha4.Mount, portMappings []v1alpha4.PortMapping, labels map[string]string, ipFamily clusterv1.ClusterIPFamily) (*types.Node, error) {
+func (m *Manager) CreateControlPlaneNode(ctx context.Context, name, image, clusterName, listenAddress string, port int32, mounts []v1alpha4.Mount, portMappings []v1alpha4.PortMapping, labels map[string]string, ipFamily clusterv1.ClusterIPFamily, envVars map[string]string) (*types.Node, error) {
 	// gets a random host port for the API server
 	if port == 0 {
 		p, err := getPort()
@@ -66,13 +67,14 @@ func (m *Manager) CreateControlPlaneNode(ctx context.Context, name, image, clust
 		Protocol:      v1alpha4.PortMappingProtocolTCP,
 	})
 	createOpts := &nodeCreateOpts{
-		Name:         name,
-		Image:        image,
-		ClusterName:  clusterName,
-		Role:         constants.ControlPlaneNodeRoleValue,
-		PortMappings: portMappingsWithAPIServer,
-		Mounts:       mounts,
-		IPFamily:     ipFamily,
+		Name:            name,
+		Image:           image,
+		ClusterName:     clusterName,
+		Role:            constants.ControlPlaneNodeRoleValue,
+		PortMappings:    portMappingsWithAPIServer,
+		Mounts:          mounts,
+		IPFamily:        ipFamily,
+		EnvironmentVars: envVars,
 	}
 	node, err := createNode(ctx, createOpts)
 	if err != nil {
@@ -82,16 +84,17 @@ func (m *Manager) CreateControlPlaneNode(ctx context.Context, name, image, clust
 	return node, nil
 }
 
-func (m *Manager) CreateWorkerNode(ctx context.Context, name, image, clusterName string, mounts []v1alpha4.Mount, portMappings []v1alpha4.PortMapping, labels map[string]string, ipFamily clusterv1.ClusterIPFamily) (*types.Node, error) {
+func (m *Manager) CreateWorkerNode(ctx context.Context, name, image, clusterName string, mounts []v1alpha4.Mount, portMappings []v1alpha4.PortMapping, labels map[string]string, ipFamily clusterv1.ClusterIPFamily, envVars map[string]string) (*types.Node, error) {
 	createOpts := &nodeCreateOpts{
-		Name:         name,
-		Image:        image,
-		ClusterName:  clusterName,
-		Role:         constants.WorkerNodeRoleValue,
-		PortMappings: portMappings,
-		Mounts:       mounts,
-		Labels:       labels,
-		IPFamily:     ipFamily,
+		Name:            name,
+		Image:           image,
+		ClusterName:     clusterName,
+		Role:            constants.WorkerNodeRoleValue,
+		PortMappings:    portMappings,
+		Mounts:          mounts,
+		Labels:          labels,
+		IPFamily:        ipFamily,
+		EnvironmentVars: envVars,
 	}
 	return createNode(ctx, createOpts)
 }
@@ -158,7 +161,8 @@ func createNode(ctx context.Context, opts *nodeCreateOpts) (*types.Node, error) 
 			"/tmp": "", // various things depend on working /tmp
 			"/run": "", // systemd wants a writable /run
 		},
-		IPFamily: opts.IPFamily,
+		IPFamily:        opts.IPFamily,
+		EnvironmentVars: opts.EnvironmentVars,
 	}
 	log.V(6).Info("Container run options: %+v", runOptions)
 
