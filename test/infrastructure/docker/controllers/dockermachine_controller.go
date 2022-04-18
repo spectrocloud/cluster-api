@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"sigs.k8s.io/cluster-api/test/infrastructure/docker/ipam"
 	"time"
 
 	"github.com/pkg/errors"
@@ -45,6 +46,7 @@ import (
 // DockerMachineReconciler reconciles a DockerMachine object.
 type DockerMachineReconciler struct {
 	client.Client
+	*ipam.IpamProvisioner
 }
 
 // +kubebuilder:rbac:groups=infrastructure.cluster.x-k8s.io,resources=dockermachines,verbs=get;list;watch;create;update;patch;delete
@@ -114,6 +116,21 @@ func (r *DockerMachineReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	if err != nil {
 		return ctrl.Result{}, err
 	}
+
+	if dockerCluster.Spec.Ipam != nil && dockerCluster.Spec.Ipam.Enable && len(dockerMachine.Annotations["claimed_ip"]) == 0 {
+		//if ip is not allocated for the machine, allocate it and set it in docker machine annotations
+		log.Info("Claiming IP for machine ", dockerMachine.Name)
+		ip, err := ipam.ClaimIP(dockerCluster.Namespace, dockerMachine.Name)
+		if err != nil {
+			log.Error(err, "Failed to claim ip")
+			return ctrl.Result{RequeueAfter: 10 * time.Second}, err
+		} else {
+			dockerMachine.Annotations["claimed_ip"] = ip
+			log.Info("Claimed IP for cidr ", dockerCluster.Spec.Ipam.Enable, "and machine", dockerMachine.Name, "and claimed ip is ", ip)
+		}
+		annotations.AddAnnotations(dockerMachine, map[string]string{"claimed_ip": ip})
+	}
+
 	// Always attempt to Patch the DockerMachine object and status after each reconciliation.
 	defer func() {
 		if err := patchDockerMachine(ctx, patchHelper, dockerMachine); err != nil {
@@ -152,6 +169,18 @@ func (r *DockerMachineReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		return ctrl.Result{}, errors.Wrapf(err, "failed to create helper for managing the externalLoadBalancer")
 	}
 
+	if dockerCluster.Spec.Ipam != nil && dockerCluster.Spec.Ipam.Enable {
+		if len(dockerCluster.Annotations["haproxy_claimed_ip"]) > 0 {
+			externalLoadBalancer.UpdateStaticIp(dockerCluster.Annotations["haproxy_claimed_ip"])
+		} else {
+			if ip, err := ipam.ClaimIP(dockerCluster.Namespace, fmt.Sprintf("%s-lb", cluster.Name)); err != nil {
+				return  ctrl.Result{}, err
+			} else {
+				externalLoadBalancer.UpdateStaticIp(ip)
+			}
+		}
+	}
+
 	// Handle deleted machines
 	if !dockerMachine.ObjectMeta.DeletionTimestamp.IsZero() {
 		return r.reconcileDelete(ctx, machine, dockerMachine, externalMachine, externalLoadBalancer)
@@ -184,7 +213,8 @@ func patchDockerMachine(ctx context.Context, patchHelper *patch.Helper, dockerMa
 	)
 }
 
-func (r *DockerMachineReconciler) reconcileNormal(ctx context.Context, cluster *clusterv1.Cluster, machine *clusterv1.Machine, dockerMachine *infrav1.DockerMachine, externalMachine *docker.Machine, externalLoadBalancer *docker.LoadBalancer) (res ctrl.Result, retErr error) {
+func (r *DockerMachineReconciler) reconcileNormal(ctx context.Context, cluster *clusterv1.Cluster, machine *clusterv1.Machine,
+	dockerMachine *infrav1.DockerMachine, externalMachine *docker.Machine, externalLoadBalancer *docker.LoadBalancer) (res ctrl.Result, retErr error) {
 	log := ctrl.LoggerFrom(ctx)
 
 	// if the machine is already provisioned, return
@@ -217,7 +247,12 @@ func (r *DockerMachineReconciler) reconcileNormal(ctx context.Context, cluster *
 
 	// Create the machine if not existing yet
 	if !externalMachine.Exists() {
-		if err := externalMachine.Create(ctx, role, machine.Spec.Version, dockerMachine.Spec.ExtraMounts); err != nil {
+		var staticIp string
+		if v, ok := dockerMachine.Annotations["claimed_ip"]; ok {
+			staticIp = v
+		}
+		//staticIp := annotations.HasWithPrefix(dockerMachine, map[string]string{"claimed_ip": ip})
+		if err := externalMachine.Create(ctx, role, staticIp, machine.Spec.Version, dockerMachine.Spec.ExtraMounts, dockerMachine.Spec.EnvironmentVariables); err != nil {
 			return ctrl.Result{}, errors.Wrap(err, "failed to create worker DockerMachine")
 		}
 	}

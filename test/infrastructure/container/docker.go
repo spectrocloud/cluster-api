@@ -273,6 +273,42 @@ func (d *docker) ListContainers(ctx context.Context, filters FilterBuilder) ([]C
 	return containers, nil
 }
 
+// ListNetworks returns a list of all docker networks filtered by given filter
+func (d *docker) ListNetworks(ctx context.Context, filters FilterBuilder) ([]Network, error) {
+	listOptions := types.NetworkListOptions{
+		Filters: dockerfilters.NewArgs(),
+	}
+
+	// Construct our filtering options
+	for key, values := range filters {
+		for subkey, subvalues := range values {
+			for _, v := range subvalues {
+				if v == "" {
+					listOptions.Filters.Add(key, subkey)
+				} else {
+					listOptions.Filters.Add(key, fmt.Sprintf("%s=%s", subkey, v))
+				}
+			}
+		}
+	}
+
+	dockerNetworks, err := d.dockerClient.NetworkList(ctx, listOptions)
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to list networks")
+	}
+
+	var networks []Network
+	for i := range dockerNetworks {
+		nw := &dockerNetworks[i]
+		if nwInspect, err := d.dockerClient.NetworkInspect(ctx, nw.ID, types.NetworkInspectOptions{}); err == nil {
+			nw.Containers = nwInspect.Containers
+		}
+		network := dockerNetworkToNetwork(nw)
+		networks = append(networks, network)
+	}
+	return networks, nil
+}
+
 // DeleteContainer will remove a container, forcing removal if still running.
 func (d *docker) DeleteContainer(ctx context.Context, containerName string) error {
 	return d.dockerClient.ContainerRemove(ctx, containerName, types.ContainerRemoveOptions{
@@ -340,6 +376,23 @@ func dockerContainerToContainer(container *types.Container) Container {
 	}
 }
 
+func dockerNetworkToNetwork(network *types.NetworkResource) Network {
+	containers := make([]Container, 0, 1)
+	if len(network.Containers) > 0 {
+		for _, v := range network.Containers{
+			containers = append(containers, Container{
+				Name: v.Name,
+				Ipv4: v.IPv4Address,
+			})
+		}
+	}
+	return Network{
+		Name:   network.Name,
+		Cidr:  network.IPAM.Config[0].Subnet,
+		Containers: containers,
+	}
+}
+
 // ownerAndGroup gets the user configuration for the container (user:group).
 func (crc *RunContainerInput) ownerAndGroup() string {
 	if crc.User != "" {
@@ -391,6 +444,16 @@ func (d *docker) RunContainer(ctx context.Context, runConfig *RunContainerInput,
 		RestartPolicy: dockercontainer.RestartPolicy{Name: "always"},
 	}
 	networkConfig := network.NetworkingConfig{}
+
+	if len(runConfig.NetworkIpamConfig) > 0 {
+		endpointsCfg := make(map[string]*network.EndpointSettings)
+		for k, v := range runConfig.NetworkIpamConfig {
+			endpointsCfg [k] = &network.EndpointSettings{
+				IPAMConfig: &network.EndpointIPAMConfig{IPv4Address: v},
+			}
+		}
+		networkConfig.EndpointsConfig = endpointsCfg
+	}
 
 	if runConfig.IPFamily == v1alpha4.IPv6IPFamily {
 		hostConfig.Sysctls = map[string]string{

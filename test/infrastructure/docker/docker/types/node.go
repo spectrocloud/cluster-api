@@ -29,6 +29,42 @@ import (
 	"sigs.k8s.io/cluster-api/test/infrastructure/container"
 )
 
+type Network struct {
+	Name string
+	IpCidr string
+	Containers []*Container
+}
+
+type Container struct {
+	Name string
+	Ipv4 string
+}
+
+func NewContainer(name, ipv4 string) *Container {
+	return &Container{
+		Name: name,
+		Ipv4: ipv4,
+	}
+}
+
+// NewNode returns a Node with defaults.
+func NewNetwork(name, cidr string, containers []*Container) *Network {
+	return &Network{
+		Name:        name,
+		IpCidr:       cidr,
+		Containers: containers,
+	}
+}
+
+// String returns the name of the network.
+func (n *Network) String() string {
+	return n.Name
+}
+
+func (n *Network) Cidr() string {
+	return n.IpCidr
+}
+
 // Node can be thought of as a logical component of Kubernetes.
 // A node is either a control plane node, a worker node, or a load balancer node.
 type Node struct {

@@ -46,6 +46,12 @@ spec:
                 description: CustomImage allows customizing the container image that
                   is used for running the machine
                 type: string
+              environmentVariables:
+                additionalProperties:
+                  type: string
+                description: EnviornmentVariables to be passed to the docker node
+                  created
+                type: object
               extraMounts:
                 description: ExtraMounts describes additional mount points for the
                   node container These may be used to bind a hostPath
@@ -192,6 +198,12 @@ spec:
                 description: CustomImage allows customizing the container image that
                   is used for running the machine
                 type: string
+              environmentVariables:
+                additionalProperties:
+                  type: string
+                description: EnviornmentVariables to be passed to the docker node
+                  created
+                type: object
               extraMounts:
                 description: ExtraMounts describes additional mount points for the
                   node container These may be used to bind a hostPath
