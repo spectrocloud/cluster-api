@@ -46,12 +46,22 @@ type DockerClusterSpec struct {
 	// LoadBalancer allows defining configurations for the cluster load balancer.
 	// +optional
 	LoadBalancer DockerLoadBalancer `json:"loadBalancer,omitempty"`
+
+	// Ipam allows defining static ip to container nodes
+	// +optional
+	Ipam *Ipam `json:"ipam,omitempty"`
 }
 
 // DockerLoadBalancer allows defining configurations for the cluster load balancer.
 type DockerLoadBalancer struct {
 	// ImageMeta allows customizing the image used for the cluster load balancer.
 	ImageMeta `json:",inline"`
+}
+
+// DockerLoadBalancer allows defining configurations for the cluster load balancer.
+type Ipam struct {
+	// Enable provisions container nodes with static ip
+	Enable bool `json:"enable,omitempty"`
 }
 
 // ImageMeta allows customizing the image used for components that are not

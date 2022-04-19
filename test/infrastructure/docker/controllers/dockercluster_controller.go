@@ -19,21 +19,22 @@ package controllers
 
 import (
 	"context"
-
-	"sigs.k8s.io/controller-runtime/pkg/controller"
-
+	"fmt"
 	"github.com/go-logr/logr"
 	"github.com/pkg/errors"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha4"
 	infrav1 "sigs.k8s.io/cluster-api/test/infrastructure/docker/api/v1alpha4"
 	"sigs.k8s.io/cluster-api/test/infrastructure/docker/docker"
+	"sigs.k8s.io/cluster-api/test/infrastructure/docker/ipam"
 	"sigs.k8s.io/cluster-api/util"
+	"sigs.k8s.io/cluster-api/util/annotations"
 	"sigs.k8s.io/cluster-api/util/conditions"
 	"sigs.k8s.io/cluster-api/util/patch"
 	"sigs.k8s.io/cluster-api/util/predicates"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/source"
@@ -42,8 +43,13 @@ import (
 // DockerClusterReconciler reconciles a DockerCluster object.
 type DockerClusterReconciler struct {
 	client.Client
+	*ipam.IpamProvisioner
 	Log logr.Logger
 }
+
+const (
+	defaultDockerNetwork = "kind"
+)
 
 // +kubebuilder:rbac:groups=infrastructure.cluster.x-k8s.io,resources=dockerclusters,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=infrastructure.cluster.x-k8s.io,resources=dockerclusters/status;dockerclusters/finalizers,verbs=get;update;patch
@@ -74,17 +80,27 @@ func (r *DockerClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 
 	log = log.WithValues("cluster", cluster.Name)
 
+	// Initialize the patch helper
+	patchHelper, err := patch.NewHelper(dockerCluster, r.Client)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+
 	// Create a helper for managing a docker container hosting the loadbalancer.
 	externalLoadBalancer, err := docker.NewLoadBalancer(cluster, dockerCluster)
 	if err != nil {
 		return ctrl.Result{}, errors.Wrapf(err, "failed to create helper for managing the externalLoadBalancer")
 	}
 
-	// Initialize the patch helper
-	patchHelper, err := patch.NewHelper(dockerCluster, r.Client)
-	if err != nil {
-		return ctrl.Result{}, err
+	if dockerCluster.Spec.Ipam != nil && dockerCluster.Spec.Ipam.Enable && len(dockerCluster.Annotations["haproxy_claimed_ip"]) == 0 {
+		if ip, err := ipam.ClaimIP(dockerCluster.Namespace, fmt.Sprintf("%s-lb", cluster.Name)); err != nil {
+			return  ctrl.Result{}, err
+		} else {
+			annotations.AddAnnotations(dockerCluster, map[string]string{"haproxy_claimed_ip": ip})
+			externalLoadBalancer.UpdateStaticIp(ip)
+		}
 	}
+
 	// Always attempt to Patch the DockerCluster object and status after each reconciliation.
 	defer func() {
 		if err := patchDockerCluster(ctx, patchHelper, dockerCluster); err != nil {

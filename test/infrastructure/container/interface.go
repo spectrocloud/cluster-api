@@ -32,6 +32,7 @@ type Runtime interface {
 	ExecContainer(ctx context.Context, containerName string, config *ExecContainerInput, command string, args ...string) error
 	RunContainer(ctx context.Context, runConfig *RunContainerInput, output io.Writer) error
 	ListContainers(ctx context.Context, filters FilterBuilder) ([]Container, error)
+	ListNetworks(ctx context.Context, filters FilterBuilder) ([]Network, error)
 	ContainerDebugInfo(ctx context.Context, containerName string, w io.Writer) error
 	DeleteContainer(ctx context.Context, containerName string) error
 	KillContainer(ctx context.Context, containerName, signal string) error
@@ -90,6 +91,8 @@ type RunContainerInput struct {
 	PortMappings []PortMapping
 	// IPFamily is the IP version to use.
 	IPFamily v1alpha4.ClusterIPFamily
+	//Static Ip is the map of network name and static ip to be assigned while connecting to the network
+	NetworkIpamConfig map[string]string
 }
 
 // ExecContainerInput contains values for running exec on a container.
@@ -128,6 +131,17 @@ type Container struct {
 	Image string
 	// Status is the status of the container
 	Status string
+	// Ipv4 is the ip of the container
+	Ipv4 string
+}
+
+type Network struct {
+	// Name is the name of the network
+	Name string
+	// Cidr is the ip cidr range of network
+	Cidr string
+	// Containers are the containers connected to the same network
+	Containers []Container
 }
 
 // StartContainerInput contains values for starting a container.

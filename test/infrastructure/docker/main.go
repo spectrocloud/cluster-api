@@ -21,6 +21,7 @@ import (
 	"flag"
 	"math/rand"
 	"os"
+	"sigs.k8s.io/cluster-api/test/infrastructure/docker/ipam"
 	"time"
 
 	"github.com/spf13/pflag"
@@ -122,6 +123,7 @@ func main() {
 
 	// Setup the context that's going to be used in controllers and for the manager.
 	ctx := ctrl.SetupSignalHandler()
+	ipam.InitProvisioner(mgr.GetClient())
 
 	setupReconcilers(ctx, mgr)
 	setupWebhooks(ctx, mgr)
@@ -154,6 +156,7 @@ func setupReconcilers(ctx context.Context, mgr ctrl.Manager) {
 	log.Info("setupReconcilers")
 	if err := (&controllers.DockerMachineReconciler{
 		Client: mgr.GetClient(),
+		IpamProvisioner: ipam.InitProvisioner(mgr.GetClient()),
 	}).SetupWithManager(ctx, mgr, controller.Options{
 		MaxConcurrentReconciles: concurrency,
 	}); err != nil {
@@ -163,6 +166,7 @@ func setupReconcilers(ctx context.Context, mgr ctrl.Manager) {
 
 	if err := (&controllers.DockerClusterReconciler{
 		Client: mgr.GetClient(),
+		IpamProvisioner: ipam.InitProvisioner(mgr.GetClient()),
 		Log:    ctrl.Log.WithName("controllers").WithName("DockerCluster"),
 	}).SetupWithManager(mgr, controller.Options{}); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "DockerCluster")

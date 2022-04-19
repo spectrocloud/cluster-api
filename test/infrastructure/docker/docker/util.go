@@ -19,6 +19,7 @@ package docker
 import (
 	"context"
 	"fmt"
+	"log"
 	"regexp"
 	"strings"
 
@@ -68,6 +69,75 @@ func getContainer(filters container.FilterBuilder) (*types.Node, error) {
 	default:
 		return nil, errors.Errorf("expected 0 or 1 container, got %d", len(n))
 	}
+}
+
+func listNetworks(filters container.FilterBuilder) ([]*types.Network, error) {
+	n, err := ListNetwork(filters)
+	if err != nil {
+		return nil, errors.Wrapf(err, "failed to list containers")
+	}
+	return n, nil
+}
+
+func getNetwork(filters container.FilterBuilder) (*types.Network, error) {
+	n, err := listNetworks(filters)
+	if err != nil {
+		return nil, err
+	}
+
+	switch len(n) {
+	case 0:
+		return nil, nil
+	case 1:
+		return n[0], nil
+	default:
+		return nil, errors.Errorf("expected 0 or 1 container, got %d", len(n))
+	}
+}
+
+func GetNetwork(name string) (*types.Network, error) {
+	filters := container.FilterBuilder{}
+	filters.AddKeyValue(filterName, name)
+	log.Println(filters)
+	if networks, err := ListNetwork(filters); err != nil {
+		return nil, err
+	} else {
+		return networks[0], nil
+	}
+}
+
+func ListNetwork(filters container.FilterBuilder) ([]*types.Network, error) {
+	res := []*types.Network{}
+	visit := func(nw *types.Network) {
+		res = append(res, nw)
+	}
+	return res, listNetwork(visit, filters)
+}
+
+func listNetwork(visit func(*types.Network), filters container.FilterBuilder) error {
+	ctx := context.TODO()
+	containerRuntime, err := container.NewDockerClient()
+	if err != nil {
+		return errors.Wrap(err, "failed to connect to container runtime")
+	}
+
+	networks, err := containerRuntime.ListNetworks(ctx, filters)
+	if err != nil {
+		return errors.Wrap(err, "failed to list containers")
+	}
+
+	for _, nw := range networks {
+		name := nw.Name
+		cidr := nw.Cidr
+
+		containers := make([]*types.Container, 0, 1)
+		for _, c := range nw.Containers {
+			containers = append(containers, types.NewContainer(c.Name, c.Ipv4))
+		}
+
+		visit(types.NewNetwork(name, cidr, containers))
+	}
+	return nil
 }
 
 // List returns the list of container IDs for the kind "nodes", optionally
