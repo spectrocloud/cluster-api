@@ -126,7 +126,7 @@ func (r *DockerMachineReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 			return ctrl.Result{RequeueAfter: 10 * time.Second}, err
 		} else {
 			dockerMachine.Annotations["claimed_ip"] = ip
-			log.Info("Claimed IP for cidr ", dockerCluster.Spec.Ipam.Enable, "and machine", dockerMachine.Name, "and claimed ip is ", ip)
+			log.Info("Claimed IP for machine", dockerMachine.Name, "and claimed ip is ", ip)
 		}
 		annotations.AddAnnotations(dockerMachine, map[string]string{"claimed_ip": ip})
 	}
