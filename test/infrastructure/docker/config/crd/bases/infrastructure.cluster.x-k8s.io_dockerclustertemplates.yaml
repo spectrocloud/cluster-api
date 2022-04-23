@@ -90,6 +90,14 @@ spec:
                           the Status and allow the Cluster API controllers to do what
                           they will with the defined failure domains.
                         type: object
+                      ipam:
+                        description: Ipam allows defining static ip to container nodes
+                        properties:
+                          enable:
+                            description: Enable provisions container nodes with static
+                              ip
+                            type: boolean
+                        type: object
                       loadBalancer:
                         description: LoadBalancer allows defining configurations for
                           the cluster load balancer.

@@ -19,9 +19,8 @@ package docker
 import (
 	"context"
 	"fmt"
-	"net"
-
 	"github.com/pkg/errors"
+	"net"
 	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha4"
 	"sigs.k8s.io/cluster-api/test/infrastructure/container"
 	"sigs.k8s.io/cluster-api/test/infrastructure/docker/api/v1alpha4"
@@ -32,7 +31,8 @@ import (
 )
 
 type lbCreator interface {
-	CreateExternalLoadBalancerNode(ctx context.Context, name, image, clusterName, listenAddress string, port int32, ipFamily clusterv1.ClusterIPFamily) (*types.Node, error)
+	CreateExternalLoadBalancerNode(ctx context.Context, name, image, clusterName, listenAddress,
+		staticIp string, port int32, ipFamily clusterv1.ClusterIPFamily) (*types.Node, error)
 }
 
 // LoadBalancer manages the load balancer for a specific docker cluster.
@@ -42,6 +42,7 @@ type LoadBalancer struct {
 	container *types.Node
 	ipFamily  clusterv1.ClusterIPFamily
 	lbCreator lbCreator
+	staticIp string
 }
 
 // NewLoadBalancer returns a new helper for managing a docker loadbalancer with a given name.
@@ -68,10 +69,10 @@ func NewLoadBalancer(cluster *clusterv1.Cluster, dockerCluster *v1alpha4.DockerC
 	}
 
 	image := getLoadBalancerImage(dockerCluster)
-
 	return &LoadBalancer{
 		name:      cluster.Name,
 		image:     image,
+		staticIp:  dockerCluster.Annotations["haproxy_claimed_ip"],
 		container: container,
 		ipFamily:  ipFamily,
 		lbCreator: &Manager{},
@@ -103,6 +104,11 @@ func (s *LoadBalancer) containerName() string {
 	return fmt.Sprintf("%s-lb", s.name)
 }
 
+func (s *LoadBalancer) UpdateStaticIp(ip string) error {
+	s.staticIp = ip
+	return nil
+}
+
 // Create creates a docker container hosting a load balancer for the cluster.
 func (s *LoadBalancer) Create(ctx context.Context) error {
 	log := ctrl.LoggerFrom(ctx)
@@ -122,6 +128,7 @@ func (s *LoadBalancer) Create(ctx context.Context) error {
 			s.image,
 			s.name,
 			listenAddr,
+			s.staticIp,
 			0,
 			s.ipFamily,
 		)
@@ -131,6 +138,14 @@ func (s *LoadBalancer) Create(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+func (s *LoadBalancer) IsWithStaticIp() bool {
+	return len(s.staticIp) > 0
+}
+
+func (s *LoadBalancer) GetStaticIp() string {
+	return s.staticIp
 }
 
 // UpdateConfiguration updates the external load balancer configuration with new control plane nodes.

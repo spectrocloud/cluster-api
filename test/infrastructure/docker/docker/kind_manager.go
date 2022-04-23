@@ -45,11 +45,14 @@ type nodeCreateOpts struct {
 	Mounts          []v1alpha4.Mount
 	PortMappings    []v1alpha4.PortMapping
 	Labels          map[string]string
+	IpamConfig 		map[string]string
 	IPFamily        clusterv1.ClusterIPFamily
 	EnvironmentVars map[string]string
 }
 
-func (m *Manager) CreateControlPlaneNode(ctx context.Context, name, image, clusterName, listenAddress string, port int32, mounts []v1alpha4.Mount, portMappings []v1alpha4.PortMapping, labels map[string]string, ipFamily clusterv1.ClusterIPFamily, envVars map[string]string) (*types.Node, error) {
+func (m *Manager) CreateControlPlaneNode(ctx context.Context, name, image, clusterName, listenAddress, staticIp string,
+	port int32, mounts []v1alpha4.Mount, portMappings []v1alpha4.PortMapping, labels map[string]string,
+	ipFamily clusterv1.ClusterIPFamily, envVars map[string]string) (*types.Node, error) {
 	// gets a random host port for the API server
 	if port == 0 {
 		p, err := getPort()
@@ -76,6 +79,12 @@ func (m *Manager) CreateControlPlaneNode(ctx context.Context, name, image, clust
 		IPFamily:        ipFamily,
 		EnvironmentVars: envVars,
 	}
+
+	if len(staticIp) > 0 {
+		createOpts.IpamConfig = map[string]string{
+			DefaultNetwork: staticIp,
+		}
+	}
 	node, err := createNode(ctx, createOpts)
 	if err != nil {
 		return nil, err
@@ -84,7 +93,9 @@ func (m *Manager) CreateControlPlaneNode(ctx context.Context, name, image, clust
 	return node, nil
 }
 
-func (m *Manager) CreateWorkerNode(ctx context.Context, name, image, clusterName string, mounts []v1alpha4.Mount, portMappings []v1alpha4.PortMapping, labels map[string]string, ipFamily clusterv1.ClusterIPFamily, envVars map[string]string) (*types.Node, error) {
+func (m *Manager) CreateWorkerNode(ctx context.Context, name, image, clusterName,staticIp string, mounts []v1alpha4.Mount,
+	portMappings []v1alpha4.PortMapping, labels map[string]string, ipFamily clusterv1.ClusterIPFamily,
+	envVars map[string]string) (*types.Node, error) {
 	createOpts := &nodeCreateOpts{
 		Name:            name,
 		Image:           image,
@@ -96,10 +107,16 @@ func (m *Manager) CreateWorkerNode(ctx context.Context, name, image, clusterName
 		IPFamily:        ipFamily,
 		EnvironmentVars: envVars,
 	}
+
+	if len(staticIp) > 0 {
+		createOpts.IpamConfig = map[string]string{
+			DefaultNetwork: staticIp,
+		}
+	}
 	return createNode(ctx, createOpts)
 }
 
-func (m *Manager) CreateExternalLoadBalancerNode(ctx context.Context, name, image, clusterName, listenAddress string, port int32, ipFamily clusterv1.ClusterIPFamily) (*types.Node, error) {
+func (m *Manager) CreateExternalLoadBalancerNode(ctx context.Context, name, image, clusterName, listenAddress, staticIp string, port int32, ipFamily clusterv1.ClusterIPFamily) (*types.Node, error) {
 	// gets a random host port for control-plane load balancer
 	// gets a random host port for the API server
 	if port == 0 {
@@ -124,6 +141,13 @@ func (m *Manager) CreateExternalLoadBalancerNode(ctx context.Context, name, imag
 		Role:         constants.ExternalLoadBalancerNodeRoleValue,
 		PortMappings: portMappings,
 	}
+
+	if len(staticIp) > 0 {
+		createOpts.IpamConfig = map[string]string{
+			DefaultNetwork: staticIp,
+		}
+	}
+
 	node, err := createNode(ctx, createOpts)
 	if err != nil {
 		return nil, err
@@ -163,6 +187,7 @@ func createNode(ctx context.Context, opts *nodeCreateOpts) (*types.Node, error) 
 		},
 		IPFamily:        opts.IPFamily,
 		EnvironmentVars: opts.EnvironmentVars,
+		NetworkIpamConfig: opts.IpamConfig,
 	}
 	log.V(6).Info("Container run options: %+v", runOptions)
 
