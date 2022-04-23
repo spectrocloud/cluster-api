@@ -72,6 +72,7 @@ func NewLoadBalancer(cluster *clusterv1.Cluster, dockerCluster *v1alpha4.DockerC
 	return &LoadBalancer{
 		name:      cluster.Name,
 		image:     image,
+		staticIp:  dockerCluster.Annotations["haproxy_claimed_ip"],
 		container: container,
 		ipFamily:  ipFamily,
 		lbCreator: &Manager{},

@@ -117,7 +117,7 @@ func (r *DockerMachineReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		return ctrl.Result{}, err
 	}
 
-	if dockerCluster.Spec.Ipam != nil && dockerCluster.Spec.Ipam.Enable && len(dockerMachine.Annotations["claimed_ip"]) == 0 {
+	if dockerCluster.Annotations["ipam"] == "enable" && len(dockerMachine.Annotations["claimed_ip"]) == 0 {
 		//if ip is not allocated for the machine, allocate it and set it in docker machine annotations
 		log.Info("Claiming IP for machine ", dockerMachine.Name)
 		ip, err := ipam.ClaimIP(dockerCluster.Namespace, dockerMachine.Name)
@@ -169,7 +169,7 @@ func (r *DockerMachineReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		return ctrl.Result{}, errors.Wrapf(err, "failed to create helper for managing the externalLoadBalancer")
 	}
 
-	if dockerCluster.Spec.Ipam != nil && dockerCluster.Spec.Ipam.Enable {
+	if dockerCluster.Annotations["ipam"] == "enable" {
 		if len(dockerCluster.Annotations["haproxy_claimed_ip"]) > 0 {
 			externalLoadBalancer.UpdateStaticIp(dockerCluster.Annotations["haproxy_claimed_ip"])
 		} else {

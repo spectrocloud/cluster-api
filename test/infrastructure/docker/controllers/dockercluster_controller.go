@@ -86,20 +86,21 @@ func (r *DockerClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		return ctrl.Result{}, err
 	}
 
+	if dockerCluster.Annotations["ipam"] == "enable" && len(dockerCluster.Annotations["haproxy_claimed_ip"]) == 0 {
+		if ip, err := ipam.ClaimIP(dockerCluster.Namespace, fmt.Sprintf("%s-lb", cluster.Name)); err != nil {
+			return  ctrl.Result{}, err
+		} else {
+			annotations.AddAnnotations(dockerCluster, map[string]string{"haproxy_claimed_ip": ip})
+		}
+	}
+
 	// Create a helper for managing a docker container hosting the loadbalancer.
 	externalLoadBalancer, err := docker.NewLoadBalancer(cluster, dockerCluster)
 	if err != nil {
 		return ctrl.Result{}, errors.Wrapf(err, "failed to create helper for managing the externalLoadBalancer")
 	}
 
-	if dockerCluster.Spec.Ipam != nil && dockerCluster.Spec.Ipam.Enable && len(dockerCluster.Annotations["haproxy_claimed_ip"]) == 0 {
-		if ip, err := ipam.ClaimIP(dockerCluster.Namespace, fmt.Sprintf("%s-lb", cluster.Name)); err != nil {
-			return  ctrl.Result{}, err
-		} else {
-			annotations.AddAnnotations(dockerCluster, map[string]string{"haproxy_claimed_ip": ip})
-			externalLoadBalancer.UpdateStaticIp(ip)
-		}
-	}
+	log.Info(fmt.Sprintf("LB ip is %s", externalLoadBalancer.GetStaticIp()))
 
 	// Always attempt to Patch the DockerCluster object and status after each reconciliation.
 	defer func() {
