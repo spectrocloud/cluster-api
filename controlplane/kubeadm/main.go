@@ -140,7 +140,7 @@ func InitFlags(fs *pflag.FlagSet) {
 	fs.IntVar(&restConfigBurst, "kube-api-burst", 30,
 		"Maximum number of queries that should be allowed in one burst from the controller client to the Kubernetes API server. Default 30")
 
-	fs.IntVar(&webhookPort, "webhook-port", 9443,
+	fs.IntVar(&webhookPort, "webhook-port", 0,
 		"Webhook Server port")
 
 	fs.StringVar(&webhookCertDir, "webhook-cert-dir", "/tmp/k8s-webhook-server/serving-certs/",
@@ -277,6 +277,10 @@ func main() {
 }
 
 func setupChecks(mgr ctrl.Manager) {
+	if webhookPort == 0 {
+		setupLog.V(0).Info("webhook is disabled skipping webhook healtcheck setup")
+		return
+	}
 	if err := mgr.AddReadyzCheck("webhook", mgr.GetWebhookServer().StartedChecker()); err != nil {
 		setupLog.Error(err, "unable to create ready check")
 		os.Exit(1)
@@ -300,6 +304,10 @@ func setupReconcilers(ctx context.Context, mgr ctrl.Manager) {
 		os.Exit(1)
 	}
 
+	if webhookPort != 0 {
+		setupLog.V(0).Info("webhook is enabled skipping reconcilers setup")
+		return
+	}
 	// Set up a ClusterCacheTracker to provide to controllers
 	// requiring a connection to a remote cluster
 	log := ctrl.Log.WithName("remote").WithName("ClusterCacheTracker")
@@ -342,6 +350,11 @@ func setupReconcilers(ctx context.Context, mgr ctrl.Manager) {
 }
 
 func setupWebhooks(mgr ctrl.Manager) {
+	if webhookPort == 0 {
+		setupLog.V(0).Info("webhook is disabled skipping webhook setup")
+		return
+	}
+
 	if err := (&kcpwebhooks.KubeadmControlPlane{}).SetupWebhookWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create webhook", "webhook", "KubeadmControlPlane")
 		os.Exit(1)
