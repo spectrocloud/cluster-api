@@ -215,7 +215,7 @@ func InitFlags(fs *pflag.FlagSet) {
 	fs.DurationVar(&nodeDrainClientTimeout, "node-drain-client-timeout-duration", time.Second*10,
 		"The timeout of the client used for draining nodes. Defaults to 10s")
 
-	fs.IntVar(&webhookPort, "webhook-port", 9443,
+	fs.IntVar(&webhookPort, "webhook-port", 0,
 		"Webhook Server port")
 
 	fs.StringVar(&webhookCertDir, "webhook-cert-dir", "/tmp/k8s-webhook-server/serving-certs/",
@@ -356,7 +356,7 @@ func main() {
 	// Setup the context that's going to be used in controllers and for the manager.
 	ctx := ctrl.SetupSignalHandler()
 
-	setupChecks(mgr)
+	(mgr)
 	setupIndexes(ctx, mgr)
 	tracker := setupReconcilers(ctx, mgr)
 	setupWebhooks(mgr, tracker)
@@ -368,7 +368,11 @@ func main() {
 	}
 }
 
-func setupChecks(mgr ctrl.Manager) {
+func setupChsetupChecksecks(mgr ctrl.Manager) {
+	if webhookPort == 0 {
+		setupLog.V(0).Info("webhook is disabled skipping webhook healthcheck setup")
+		return
+	}
 	if err := mgr.AddReadyzCheck("webhook", mgr.GetWebhookServer().StartedChecker()); err != nil {
 		setupLog.Error(err, "unable to create ready check")
 		os.Exit(1)
@@ -381,6 +385,10 @@ func setupChecks(mgr ctrl.Manager) {
 }
 
 func setupIndexes(ctx context.Context, mgr ctrl.Manager) {
+	if webhookPort != 0 {
+		setupLog.V(0).Info("webhook is enabled skipping index setup")
+		return
+	}
 	if err := index.AddDefaultIndexes(ctx, mgr); err != nil {
 		setupLog.Error(err, "unable to setup indexes")
 		os.Exit(1)
@@ -388,6 +396,11 @@ func setupIndexes(ctx context.Context, mgr ctrl.Manager) {
 }
 
 func setupReconcilers(ctx context.Context, mgr ctrl.Manager) webhooks.ClusterCacheTrackerReader {
+	if webhookPort != 0 {
+		setupLog.V(0).Info("webhook is enabled skipping reconcilers setup")
+		return nil
+	}
+
 	secretCachingClient, err := client.New(mgr.GetConfig(), client.Options{
 		HTTPClient: mgr.GetHTTPClient(),
 		Cache: &client.CacheOptions{
@@ -584,6 +597,10 @@ func setupReconcilers(ctx context.Context, mgr ctrl.Manager) webhooks.ClusterCac
 }
 
 func setupWebhooks(mgr ctrl.Manager, tracker webhooks.ClusterCacheTrackerReader) {
+	if webhookPort == 0 {
+		setupLog.V(0).Info("webhook is disabled skipping webhook setup")
+		return
+	}
 	// NOTE: ClusterClass and managed topologies are behind ClusterTopology feature gate flag; the webhook
 	// is going to prevent creating or updating new objects in case the feature flag is disabled.
 	if err := (&webhooks.ClusterClass{Client: mgr.GetClient()}).SetupWebhookWithManager(mgr); err != nil {
