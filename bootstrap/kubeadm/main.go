@@ -153,7 +153,7 @@ func InitFlags(fs *pflag.FlagSet) {
 	fs.DurationVar(&tokenTTL, "bootstrap-token-ttl", kubeadmbootstrapcontrollers.DefaultTokenTTL,
 		"The amount of time the bootstrap token will be valid")
 
-	fs.IntVar(&webhookPort, "webhook-port", 9443,
+	fs.IntVar(&webhookPort, "webhook-port", 0,
 		"Webhook Server port")
 
 	fs.StringVar(&webhookCertDir, "webhook-cert-dir", "/tmp/k8s-webhook-server/serving-certs/",
@@ -275,6 +275,10 @@ func main() {
 }
 
 func setupChecks(mgr ctrl.Manager) {
+	if webhookPort == 0 {
+		setupLog.V(0).Info("webhook is disabled skipping webhook healthcheck setup")
+		return
+	}
 	if err := mgr.AddReadyzCheck("webhook", mgr.GetWebhookServer().StartedChecker()); err != nil {
 		setupLog.Error(err, "unable to create ready check")
 		os.Exit(1)
@@ -287,6 +291,11 @@ func setupChecks(mgr ctrl.Manager) {
 }
 
 func setupReconcilers(ctx context.Context, mgr ctrl.Manager) {
+	if webhookPort != 0 {
+		setupLog.V(0).Info("webhook is enabled skipping reconcilers setup")
+		return
+	}
+
 	secretCachingClient, err := setup.CreateSecretCachingClient(mgr)
 	if err != nil {
 		setupLog.Error(err, "unable to create secret caching client")
@@ -338,6 +347,10 @@ func setupReconcilers(ctx context.Context, mgr ctrl.Manager) {
 }
 
 func setupWebhooks(mgr ctrl.Manager) {
+	if webhookPort == 0 {
+		setupLog.V(0).Info("webhook is disabled skipping webhook setup")
+		return
+	}
 	if err := (&webhooks.KubeadmConfig{}).SetupWebhookWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create webhook", "webhook", "KubeadmConfig")
 		os.Exit(1)
