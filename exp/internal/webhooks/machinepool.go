@@ -32,7 +32,6 @@ import (
 	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
 	expv1 "sigs.k8s.io/cluster-api/exp/api/v1beta1"
 	"sigs.k8s.io/cluster-api/feature"
-	"sigs.k8s.io/cluster-api/util/version"
 )
 
 func (webhook *MachinePool) SetupWebhookWithManager(mgr ctrl.Manager) error {
@@ -173,11 +172,11 @@ func (webhook *MachinePool) validate(oldObj, newObj *expv1.MachinePool) error {
 		)
 	}
 
-	if newObj.Spec.Template.Spec.Version != nil {
-		if !version.KubeSemver.MatchString(*newObj.Spec.Template.Spec.Version) {
-			allErrs = append(allErrs, field.Invalid(specPath.Child("template", "spec", "version"), *newObj.Spec.Template.Spec.Version, "must be a valid semantic version"))
-		}
-	}
+	//if m.Spec.Template.Spec.Version != nil {
+	//	if !version.KubeSemver.MatchString(*m.Spec.Template.Spec.Version) {
+	//		allErrs = append(allErrs, field.Invalid(specPath.Child("template", "spec", "version"), *m.Spec.Template.Spec.Version, "must be a valid semantic version"))
+	//	}
+	//}
 
 	// Validate the metadata of the MachinePool template.
 	allErrs = append(allErrs, newObj.Spec.Template.ObjectMeta.Validate(specPath.Child("template", "metadata"))...)
