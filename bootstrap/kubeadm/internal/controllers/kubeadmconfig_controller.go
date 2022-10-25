@@ -277,8 +277,12 @@ func (r *KubeadmConfigReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		return ctrl.Result{}, nil
 	}
 
+	// TODO: PCP-22 check (annotation to skip handleClusterNotInitialized and go for join )
+	// how to make this condition true for new cluster as kubeadm cluster is already initialized
 	// Note: can't use IsFalse here because we need to handle the absence of the condition as well as false.
-	if !conditions.IsTrue(cluster, clusterv1.ControlPlaneInitializedCondition) {
+	log.Info("TESTING... skip handleClusterNotInitialized and push cluster for join")
+
+	if !annotations.IsTakeOverCluster(cluster.GetObjectMeta()) && !conditions.IsTrue(cluster, clusterv1.ControlPlaneInitializedCondition) {
 		return r.handleClusterNotInitialized(ctx, scope)
 	}
 
@@ -296,10 +300,12 @@ func (r *KubeadmConfigReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 
 	// it's a control plane join
 	if configOwner.IsControlPlaneMachine() {
+		log.Info("TESTING.... joinControlplane")
 		return r.joinControlplane(ctx, scope)
 	}
 
 	// It's a worker join
+	log.Info("TESTING.... It's a worker join")
 	return r.joinWorker(ctx, scope)
 }
 

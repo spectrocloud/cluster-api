@@ -115,7 +115,6 @@ const (
 	initConfiguration    = "initConfiguration"
 	joinConfiguration    = "joinConfiguration"
 	nodeRegistration     = "nodeRegistration"
-	skipPhases           = "skipPhases"
 	patches              = "patches"
 	directory            = "directory"
 	preKubeadmCommands   = "preKubeadmCommands"
@@ -127,7 +126,6 @@ const (
 	scheduler            = "scheduler"
 	ntp                  = "ntp"
 	ignition             = "ignition"
-	diskSetup            = "diskSetup"
 )
 
 const minimumCertificatesExpiryDays = 7
@@ -138,29 +136,28 @@ func (in *KubeadmControlPlane) ValidateUpdate(old runtime.Object) error {
 	// For example, {"spec", "*"} will allow any path under "spec" to change.
 	allowedPaths := [][]string{
 		{"metadata", "*"},
-		{spec, kubeadmConfigSpec, clusterConfiguration, "etcd", "local", "imageRepository"},
-		{spec, kubeadmConfigSpec, clusterConfiguration, "etcd", "local", "imageTag"},
-		{spec, kubeadmConfigSpec, clusterConfiguration, "etcd", "local", "extraArgs", "*"},
-		{spec, kubeadmConfigSpec, clusterConfiguration, "dns", "imageRepository"},
-		{spec, kubeadmConfigSpec, clusterConfiguration, "dns", "imageTag"},
-		{spec, kubeadmConfigSpec, clusterConfiguration, "imageRepository"},
-		{spec, kubeadmConfigSpec, clusterConfiguration, apiServer, "*"},
-		{spec, kubeadmConfigSpec, clusterConfiguration, controllerManager, "*"},
-		{spec, kubeadmConfigSpec, clusterConfiguration, scheduler, "*"},
-		{spec, kubeadmConfigSpec, initConfiguration, nodeRegistration, "*"},
-		{spec, kubeadmConfigSpec, initConfiguration, patches, directory},
-		{spec, kubeadmConfigSpec, initConfiguration, skipPhases},
-		{spec, kubeadmConfigSpec, joinConfiguration, nodeRegistration, "*"},
-		{spec, kubeadmConfigSpec, joinConfiguration, patches, directory},
-		{spec, kubeadmConfigSpec, joinConfiguration, skipPhases},
-		{spec, kubeadmConfigSpec, preKubeadmCommands},
-		{spec, kubeadmConfigSpec, postKubeadmCommands},
-		{spec, kubeadmConfigSpec, files},
-		{spec, kubeadmConfigSpec, "verbosity"},
-		{spec, kubeadmConfigSpec, users},
-		{spec, kubeadmConfigSpec, ntp, "*"},
-		{spec, kubeadmConfigSpec, ignition, "*"},
-		{spec, kubeadmConfigSpec, diskSetup, "*"},
+		// {spec, kubeadmConfigSpec, clusterConfiguration, "etcd", "local", "imageRepository"},
+		// {spec, kubeadmConfigSpec, clusterConfiguration, "etcd", "local", "imageTag"},
+		// {spec, kubeadmConfigSpec, clusterConfiguration, "etcd", "local", "extraArgs", "*"},
+		// {spec, kubeadmConfigSpec, clusterConfiguration, "dns", "imageRepository"},
+		// {spec, kubeadmConfigSpec, clusterConfiguration, "dns", "imageTag"},
+		// {spec, kubeadmConfigSpec, clusterConfiguration, "imageRepository"},
+		// {spec, kubeadmConfigSpec, clusterConfiguration, apiServer, "*"},
+		// {spec, kubeadmConfigSpec, clusterConfiguration, controllerManager, "*"},
+		// {spec, kubeadmConfigSpec, clusterConfiguration, scheduler, "*"},
+		// {spec, kubeadmConfigSpec, initConfiguration, nodeRegistration, "*"},
+		// {spec, kubeadmConfigSpec, initConfiguration, patches, directory},
+		// {spec, kubeadmConfigSpec, joinConfiguration, nodeRegistration, "*"},
+		// {spec, kubeadmConfigSpec, joinConfiguration, patches, directory},
+		// {spec, kubeadmConfigSpec, preKubeadmCommands},
+		// {spec, kubeadmConfigSpec, postKubeadmCommands},
+		// {spec, kubeadmConfigSpec, files},
+		// {spec, kubeadmConfigSpec, "verbosity"},
+		// {spec, kubeadmConfigSpec, users},
+		// {spec, kubeadmConfigSpec, ntp, "*"},
+		// {spec, kubeadmConfigSpec, ignition, "*"},
+		// allow all fields to be modified
+		{spec, kubeadmConfigSpec, "*"},
 		{spec, "machineTemplate", "metadata", "*"},
 		{spec, "machineTemplate", "infrastructureRef", "apiVersion"},
 		{spec, "machineTemplate", "infrastructureRef", "name"},
