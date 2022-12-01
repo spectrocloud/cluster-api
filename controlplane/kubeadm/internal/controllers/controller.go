@@ -264,12 +264,9 @@ func (r *KubeadmControlPlaneReconciler) reconcile(ctx context.Context, cluster *
 
 	//TODO: PCP-22 lookup or generate ca, sa, etcd certificates and key
 	certificates := secret.NewCertificatesForInitialControlPlane(config.ClusterConfiguration)
-	//for _, certificate := range certificates {
-	//	log.Info("TESTING.... lookup or generate ca, sa, etcd certificates and key: ", certificate)
-	//}
 	controllerRef := metav1.NewControllerRef(kcp, controlplanev1.GroupVersion.WithKind("KubeadmControlPlane"))
 	if err := certificates.LookupOrGenerate(ctx, r.Client, util.ObjectKey(cluster), *controllerRef); err != nil {
-		log.Error(err, "TESTING.... unable to lookup or create cluster certificates")
+		log.Error(err, "unable to lookup or create cluster certificates")
 		conditions.MarkFalse(kcp, controlplanev1.CertificatesAvailableCondition, controlplanev1.CertificatesGenerationFailedReason, clusterv1.ConditionSeverityWarning, err.Error())
 		return ctrl.Result{}, err
 	}

@@ -38,9 +38,7 @@ func GetFromNamespacedName(ctx context.Context, c client.Reader, clusterName cli
 	secret := &corev1.Secret{}
 	secretKey := client.ObjectKey{
 		Namespace: clusterName.Namespace,
-		//TODO: PCP-22
-		//Name:      string(purpose),
-		Name: Name(clusterName.Name, purpose),
+		Name:      Name(clusterName.Name, purpose),
 	}
 
 	if err := c.Get(ctx, secretKey, secret); err != nil {
