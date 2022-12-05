@@ -24,6 +24,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/hex"
+	"fmt"
 	"math/big"
 	"path/filepath"
 	"strings"
@@ -213,7 +214,6 @@ func (c Certificates) Lookup(ctx context.Context, ctrlclient client.Client, clus
 		}
 		certificate.KeyPair = kp
 	}
-
 	return nil
 }
 
@@ -239,6 +239,7 @@ func (c Certificates) EnsureAllExist() error {
 func (c Certificates) Generate() error {
 	for _, certificate := range c {
 		if certificate.KeyPair == nil {
+			fmt.Println("TESTING.... Generate new certificates")
 			err := certificate.Generate()
 			if err != nil {
 				return err
@@ -269,10 +270,11 @@ func (c Certificates) LookupOrGenerate(ctx context.Context, ctrlclient client.Cl
 		return err
 	}
 
-	//// Generate the certificates that don't exist
-	//if err := c.Generate(); err != nil {
-	//	return err
-	//}
+	fmt.Println("TESTING.... Generate new certificates if that don't exist")
+	// Generate the certificates that don't exist
+	if err := c.Generate(); err != nil {
+		return err
+	}
 
 	// Save any certificates that have been generated
 	return c.SaveGenerated(ctx, ctrlclient, clusterName, owner)

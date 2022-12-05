@@ -105,7 +105,8 @@ func (r *KubeadmControlPlaneReconciler) updateStatus(ctx context.Context, kcp *c
 	}
 	kcp.Status.ReadyReplicas = status.ReadyNodes
 	kcp.Status.UnavailableReplicas = replicas - status.ReadyNodes
-	
+
+	// This only gets initialized once and does not change if the kubeadm config map goes away.
 	if status.HasKubeadmConfig {
 		kcp.Status.Initialized = true
 		conditions.MarkTrue(kcp, controlplanev1.AvailableCondition)
