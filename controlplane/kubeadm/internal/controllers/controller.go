@@ -261,8 +261,6 @@ func (r *KubeadmControlPlaneReconciler) reconcile(ctx context.Context, cluster *
 	if config.ClusterConfiguration == nil {
 		config.ClusterConfiguration = &bootstrapv1.ClusterConfiguration{}
 	}
-
-	//TODO: PCP-22 lookup or generate ca, sa, etcd certificates and key
 	certificates := secret.NewCertificatesForInitialControlPlane(config.ClusterConfiguration)
 	controllerRef := metav1.NewControllerRef(kcp, controlplanev1.GroupVersion.WithKind("KubeadmControlPlane"))
 	if err := certificates.LookupOrGenerate(ctx, r.Client, util.ObjectKey(cluster), *controllerRef); err != nil {
@@ -355,7 +353,6 @@ func (r *KubeadmControlPlaneReconciler) reconcile(ctx context.Context, cluster *
 	desiredReplicas := int(*kcp.Spec.Replicas)
 
 	switch {
-	//TODO: PCP-22 skip creating new control plane
 	// We are creating the first replica
 	case numMachines < desiredReplicas && numMachines == 0:
 		// Create new Machine w/ init
