@@ -248,8 +248,7 @@ func (r *Reconciler) reconcileControlPlane(ctx context.Context, cluster *cluster
 
 		// TODO: PCP-22 set controlPlaneInitializedCondition to true for takeOver cluster
 		// as CP are already initialized in existing cluster
-		conditions.MarkTrue(cluster, clusterv1.ControlPlaneInitializedCondition)
-		if initialized {
+		if cluster.Spec.TakeOverCluster || initialized {
 			conditions.MarkTrue(cluster, clusterv1.ControlPlaneInitializedCondition)
 		} else {
 			conditions.MarkFalse(cluster, clusterv1.ControlPlaneInitializedCondition, clusterv1.WaitingForControlPlaneProviderInitializedReason, clusterv1.ConditionSeverityInfo, "Waiting for control plane provider to indicate the control plane has been initialized")
