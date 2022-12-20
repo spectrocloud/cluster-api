@@ -265,10 +265,10 @@ func (r *KubeadmConfigReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	//TODO: PCP-22 check (annotation to skip handleClusterNotInitialized and go for join )
 	//how to make this condition true for new cluster as kubeadm cluster is already initialized
 	// Note: can't use IsFalse here because we need to handle the absence of the condition as well as false.
-	log.Info("TESTING... skip handx``leClusterNotInitialized and push cluster for join")
-	//if !conditions.IsTrue(cluster, clusterv1.ControlPlaneInitializedCondition) {
-	//	return r.handleClusterNotInitialized(ctx, scope)
-	//}
+	log.Info("TESTING... skip handleClusterNotInitialized and push cluster for join")
+	if !cluster.Spec.TakeOverCluster && !conditions.IsTrue(cluster, clusterv1.ControlPlaneInitializedCondition) {
+		return r.handleClusterNotInitialized(ctx, scope)
+	}
 
 	// Every other case it's a join scenario
 	// Nb. in this case ClusterConfiguration and InitConfiguration should not be defined by users, but in case of misconfigurations, CABPK simply ignore them
