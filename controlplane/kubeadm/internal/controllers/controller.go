@@ -276,7 +276,6 @@ func (r *KubeadmControlPlaneReconciler) reconcile(ctx context.Context, cluster *
 		return ctrl.Result{}, nil
 	}
 
-	//TODO: PCP-22 adopt kubeconfig instead of generating new
 	// Generate Cluster Kubeconfig if needed
 	if result, err := r.reconcileKubeconfig(ctx, cluster, kcp); !result.IsZero() || err != nil {
 		if err != nil {
