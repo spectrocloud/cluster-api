@@ -117,6 +117,9 @@ const (
 	// An external controller must fulfill the contract of the InfraCluster resource.
 	// External infrastructure providers should ensure that the annotation, once set, cannot be removed.
 	ManagedByAnnotation = "cluster.x-k8s.io/managed-by"
+
+	// TakeOverCluster is the label used to mark the nodes that run on takeover-cluster instances.
+	TakeOverCluster = "cluster.x-k8s.io/takeover-cluster"
 )
 
 const (

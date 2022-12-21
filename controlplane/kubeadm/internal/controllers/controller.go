@@ -528,7 +528,7 @@ func (r *KubeadmControlPlaneReconciler) reconcileEtcdMembers(ctx context.Context
 	log := ctrl.LoggerFrom(ctx, "cluster", controlPlane.Cluster.Name)
 
 	// If etcd is not managed by KCP this is a no-op.
-	if controlPlane.Cluster.Spec.TakeOverCluster || !controlPlane.IsEtcdManaged() {
+	if annotations.IsTakeOverCluster(controlPlane.Cluster.GetObjectMeta()) || !controlPlane.IsEtcdManaged() {
 		return ctrl.Result{}, nil
 	}
 
