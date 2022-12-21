@@ -68,9 +68,6 @@ type ClusterSpec struct {
 	// this feature is highly experimental, and parts of it might still be not implemented.
 	// +optional
 	Topology *Topology `json:"topology,omitempty"`
-
-	// TakeOverCluster represents the cluster launch is for taking over existing pre-provisioned cluster
-	TakeOverCluster bool `json:"takeOverCluster,omitempty"`
 }
 
 // Topology encapsulates the information of the managed resources.
