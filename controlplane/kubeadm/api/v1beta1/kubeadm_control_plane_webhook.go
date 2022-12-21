@@ -109,23 +109,23 @@ func (in *KubeadmControlPlane) ValidateCreate() error {
 }
 
 const (
-	spec                 = "spec"
-	kubeadmConfigSpec    = "kubeadmConfigSpec"
-	clusterConfiguration = "clusterConfiguration"
-	initConfiguration    = "initConfiguration"
-	joinConfiguration    = "joinConfiguration"
-	nodeRegistration     = "nodeRegistration"
-	patches              = "patches"
-	directory            = "directory"
-	preKubeadmCommands   = "preKubeadmCommands"
-	postKubeadmCommands  = "postKubeadmCommands"
-	files                = "files"
-	users                = "users"
-	apiServer            = "apiServer"
-	controllerManager    = "controllerManager"
-	scheduler            = "scheduler"
-	ntp                  = "ntp"
-	ignition             = "ignition"
+	spec              = "spec"
+	kubeadmConfigSpec = "kubeadmConfigSpec"
+	// clusterConfiguration = "clusterConfiguration"
+	// initConfiguration    = "initConfiguration"
+	// joinConfiguration    = "joinConfiguration"
+	// nodeRegistration     = "nodeRegistration"
+	// patches              = "patches"
+	// directory            = "directory"
+	// preKubeadmCommands   = "preKubeadmCommands"
+	// postKubeadmCommands  = "postKubeadmCommands"
+	// files                = "files"
+	// users                = "users"
+	// apiServer            = "apiServer"
+	// controllerManager    = "controllerManager"
+	// scheduler            = "scheduler"
+	// ntp                  = "ntp"
+	// ignition             = "ignition"
 )
 
 // ValidateUpdate implements webhook.Validator so a webhook will be registered for the type.
@@ -134,26 +134,26 @@ func (in *KubeadmControlPlane) ValidateUpdate(old runtime.Object) error {
 	// For example, {"spec", "*"} will allow any path under "spec" to change.
 	allowedPaths := [][]string{
 		{"metadata", "*"},
-		//{spec, kubeadmConfigSpec, clusterConfiguration, "etcd", "local", "imageRepository"},
-		//{spec, kubeadmConfigSpec, clusterConfiguration, "etcd", "local", "imageTag"},
-		//{spec, kubeadmConfigSpec, clusterConfiguration, "etcd", "local", "extraArgs", "*"},
-		//{spec, kubeadmConfigSpec, clusterConfiguration, "dns", "imageRepository"},
-		//{spec, kubeadmConfigSpec, clusterConfiguration, "dns", "imageTag"},
-		//{spec, kubeadmConfigSpec, clusterConfiguration, "imageRepository"},
-		//{spec, kubeadmConfigSpec, clusterConfiguration, apiServer, "*"},
-		//{spec, kubeadmConfigSpec, clusterConfiguration, controllerManager, "*"},
-		//{spec, kubeadmConfigSpec, clusterConfiguration, scheduler, "*"},
-		//{spec, kubeadmConfigSpec, initConfiguration, nodeRegistration, "*"},
-		//{spec, kubeadmConfigSpec, initConfiguration, patches, directory},
-		//{spec, kubeadmConfigSpec, joinConfiguration, nodeRegistration, "*"},
-		//{spec, kubeadmConfigSpec, joinConfiguration, patches, directory},
-		//{spec, kubeadmConfigSpec, preKubeadmCommands},
-		//{spec, kubeadmConfigSpec, postKubeadmCommands},
-		//{spec, kubeadmConfigSpec, files},
-		//{spec, kubeadmConfigSpec, "verbosity"},
-		//{spec, kubeadmConfigSpec, users},
-		//{spec, kubeadmConfigSpec, ntp, "*"},
-		//{spec, kubeadmConfigSpec, ignition, "*"},
+		// {spec, kubeadmConfigSpec, clusterConfiguration, "etcd", "local", "imageRepository"},
+		// {spec, kubeadmConfigSpec, clusterConfiguration, "etcd", "local", "imageTag"},
+		// {spec, kubeadmConfigSpec, clusterConfiguration, "etcd", "local", "extraArgs", "*"},
+		// {spec, kubeadmConfigSpec, clusterConfiguration, "dns", "imageRepository"},
+		// {spec, kubeadmConfigSpec, clusterConfiguration, "dns", "imageTag"},
+		// {spec, kubeadmConfigSpec, clusterConfiguration, "imageRepository"},
+		// {spec, kubeadmConfigSpec, clusterConfiguration, apiServer, "*"},
+		// {spec, kubeadmConfigSpec, clusterConfiguration, controllerManager, "*"},
+		// {spec, kubeadmConfigSpec, clusterConfiguration, scheduler, "*"},
+		// {spec, kubeadmConfigSpec, initConfiguration, nodeRegistration, "*"},
+		// {spec, kubeadmConfigSpec, initConfiguration, patches, directory},
+		// {spec, kubeadmConfigSpec, joinConfiguration, nodeRegistration, "*"},
+		// {spec, kubeadmConfigSpec, joinConfiguration, patches, directory},
+		// {spec, kubeadmConfigSpec, preKubeadmCommands},
+		// {spec, kubeadmConfigSpec, postKubeadmCommands},
+		// {spec, kubeadmConfigSpec, files},
+		// {spec, kubeadmConfigSpec, "verbosity"},
+		// {spec, kubeadmConfigSpec, users},
+		// {spec, kubeadmConfigSpec, ntp, "*"},
+		// {spec, kubeadmConfigSpec, ignition, "*"},
 		// allow all fields to be modified
 		{spec, kubeadmConfigSpec, "*"},
 		{spec, "machineTemplate", "metadata", "*"},
