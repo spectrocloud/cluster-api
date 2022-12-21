@@ -2906,6 +2906,11 @@ spec:
                 description: Paused can be used to prevent controllers from processing
                   the Cluster and all its associated objects.
                 type: boolean
+              takeOverCluster:
+                description: 'TODO: PCP-22, create/set cluster object for imported/takeover
+                  cluster TakeOverCluster represents the cluster launch is for taking
+                  over existing pre-provisioned cluster'
+                type: boolean
               topology:
                 description: 'This encapsulates the topology for the cluster. NOTE:
                   It is required to enable the ClusterTopology feature gate flag to
@@ -9646,7 +9651,7 @@ spec:
         - --feature-gates=MachinePool=${EXP_MACHINE_POOL:=false},ClusterResourceSet=${EXP_CLUSTER_RESOURCE_SET:=false},ClusterTopology=${CLUSTER_TOPOLOGY:=false},RuntimeSDK=${EXP_RUNTIME_SDK:=false}
         command:
         - /manager
-        image: gcr.io/spectro-dev-public/release/cluster-api-controller-amd64:20220805
+        image: gcr.io/spectro-dev-public/release/cluster-api-controller-amd64:dev
         imagePullPolicy: Always
         livenessProbe:
           httpGet:
