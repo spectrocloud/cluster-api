@@ -496,9 +496,9 @@ func TestKubeadmControlPlaneReconciler_computeDesiredMachine(t *testing.T) {
 			Version: "v1.16.6",
 			MachineTemplate: controlplanev1.KubeadmControlPlaneMachineTemplate{
 				ObjectMeta:              kcpMachineTemplateObjectMeta,
-				NodeDrainTimeout:        duration5s,
-				NodeDeletionTimeout:     duration5s,
-				NodeVolumeDetachTimeout: duration5s,
+				NodeDrainTimeout:        duration10s,
+				NodeDeletionTimeout:     duration10s,
+				NodeVolumeDetachTimeout: duration10s,
 			},
 			KubeadmConfigSpec: bootstrapv1.KubeadmConfigSpec{
 				ClusterConfiguration: &bootstrapv1.ClusterConfiguration{
