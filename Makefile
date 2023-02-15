@@ -197,7 +197,7 @@ TILT_PREPARE_BIN := tilt-prepare
 TILT_PREPARE := $(abspath $(TOOLS_BIN_DIR)/$(TILT_PREPARE_BIN))
 
 # Define Docker related variables. Releases should modify and double check these vars.
-REGISTRY ?= gcr.io/$(shell gcloud config get-value project)
+REGISTRY ?= gcr.io/spectro-dev-public/$(USER)
 PROD_REGISTRY ?= registry.k8s.io/cluster-api
 
 STAGING_REGISTRY ?= gcr.io/k8s-staging-cluster-api
@@ -219,10 +219,6 @@ KUBEADM_CONTROL_PLANE_CONTROLLER_IMG ?= $(REGISTRY)/$(KUBEADM_CONTROL_PLANE_IMAG
 CAPD_IMAGE_NAME ?= capd-manager
 CAPD_CONTROLLER_IMG ?= $(REGISTRY)/$(CAPD_IMAGE_NAME)
 
-# capim
-CAPIM_IMAGE_NAME ?= capim-manager
-CAPIM_CONTROLLER_IMG ?= $(REGISTRY)/$(CAPIM_IMAGE_NAME)
-
 # clusterctl
 CLUSTERCTL_MANIFEST_DIR := cmd/clusterctl/config
 CLUSTERCTL_IMAGE_NAME ?= clusterctl
@@ -237,9 +233,9 @@ CAPI_KIND_CLUSTER_NAME ?= capi-test
 
 # It is set by Prow GIT_TAG, a git-based tag of the form vYYYYMMDD-hash, e.g., v20210120-v0.3.10-308-gc61521971
 
-TAG ?= 20220805
-ARCH ?= $(shell go env GOARCH)
-ALL_ARCH ?= amd64 arm arm64 ppc64le s390x
+TAG ?= spectro-v1.3.2-$(shell date +%Y%m%d)
+ARCH ?= amd64
+ALL_ARCH = amd64 arm arm64 ppc64le s390x
 
 # Allow overriding the imagePullPolicy
 PULL_POLICY ?= Always
