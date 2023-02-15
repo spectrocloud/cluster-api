@@ -175,7 +175,7 @@ GOLANGCI_LINT_BIN := golangci-lint
 GOLANGCI_LINT := $(abspath $(TOOLS_BIN_DIR)/$(GOLANGCI_LINT_BIN))
 
 # Define Docker related variables. Releases should modify and double check these vars.
-REGISTRY ?= gcr.io/$(shell gcloud config get-value project)
+REGISTRY ?= gcr.io/spectro-dev-public/$(USER)
 PROD_REGISTRY ?= registry.k8s.io/cluster-api
 
 STAGING_REGISTRY ?= gcr.io/k8s-staging-cluster-api
@@ -211,8 +211,8 @@ CAPI_KIND_CLUSTER_NAME ?= capi-test
 
 # It is set by Prow GIT_TAG, a git-based tag of the form vYYYYMMDD-hash, e.g., v20210120-v0.3.10-308-gc61521971
 
-TAG ?= 20220805
-ARCH ?= $(shell go env GOARCH)
+TAG ?= spectro-v1.3.2-$(shell date +%Y%m%d)
+ARCH ?= amd64
 ALL_ARCH = amd64 arm arm64 ppc64le s390x
 
 # Allow overriding the imagePullPolicy
