@@ -668,6 +668,8 @@ func (r *Reconciler) drainNode(ctx context.Context, cluster *clusterv1.Cluster, 
 		ErrOut: writer{func(msg string, keysAndValues ...interface{}) {
 			log.Error(nil, msg, keysAndValues...)
 		}},
+		// SPECTRO: Even if the node is reachable, we wait 30 minutes for drain completion else move ahead
+		SkipWaitForDeleteTimeoutSeconds: 60 * 30, // 30 minutes
 	}
 
 	if noderefutil.IsNodeUnreachable(node) {
