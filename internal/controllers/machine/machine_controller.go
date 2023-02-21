@@ -845,6 +845,9 @@ func (r *Reconciler) drainNode(ctx context.Context, s *scope) (ctrl.Result, erro
 		GracePeriodSeconds: -1,
 	}
 
+	// SPECTRO: Even if the node is reachable, we wait 30 minutes for drain completion else move ahead
+	drainer.SkipWaitForDeleteTimeoutSeconds = 60 * 30 // 30 minutes
+
 	if noderefutil.IsNodeUnreachable(node) {
 		// Kubelet is unreachable, pods will never disappear.
 
