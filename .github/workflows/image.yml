@@ -22,7 +22,7 @@ jobs:
           go-version: '1.19'
       - name: build image
         run: |
-          REGISTRY=gcr.io/spectro-image-public/release TAG=${{env.GITHUB_REF_NAME}} make docker-build
+          REGISTRY=gcr.io/spectro-image-public/release TAG=$GITHUB_REF_NAME make docker-build
       - name: push image
         run: |
-          REGISTRY=gcr.io/spectro-image-public/release TAG=${{env.GITHUB_REF_NAME}} make docker-push
+          REGISTRY=gcr.io/spectro-image-public/release TAG=$GITHUB_REF_NAME make docker-push
