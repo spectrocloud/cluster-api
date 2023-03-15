@@ -7,5 +7,5 @@ spec:
   template:
     spec:
       containers:
-        - image: gcr.io/spectro-dev-public/snehal/kubeadm-bootstrap-controller-amd64:spectro-v1.3.2-20230301
+        - image: gcr.io/spectro-dev-public/snehal/kubeadm-bootstrap-controller-amd64:spectro-v1.3.2-20230314
           name: manager
