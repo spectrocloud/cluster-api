@@ -16,22 +16,34 @@
 
 # Build the manager binary
 # Run this with docker build --build-arg builder_image=<golang:x.y.z>
-ARG builder_image
 
 # Build architecture
-ARG ARCH
+ARG BUILDER_GOLANG_VERSION
+ # First stage: build the executable.
+FROM --platform=$TARGETPLATFORM gcr.io/spectro-images-public/golang:${BUILDER_GOLANG_VERSION}-alpine as toolchain
+ARG goproxy=https://proxy.golang.org
+ENV GOPROXY=$goproxy
+
+# FIPS
+ARG CRYPTO_LIB
+ARG CGO_ENABLED_FLAG=${CRYPTO_LIB:+0}
+ENV GOEXPERIMENT=${CRYPTO_LIB:+boringcrypto}
 
 # Ignore Hadolint rule "Always tag the version of an image explicitly."
 # It's an invalid finding since the image is explicitly set in the Makefile.
 # https://github.com/hadolint/hadolint/wiki/DL3006
 # hadolint ignore=DL3006
-FROM ${builder_image} as builder
+FROM toolchain as builder
 WORKDIR /workspace
 
+ARG CRYPTO_LIB
+ENV GOEXPERIMENT=${CRYPTO_LIB:+boringcrypto}
+
+RUN apk update
+RUN apk add git gcc g++ curl binutils-gold
+
 # Run this with docker build --build-arg goproxy=$(go env GOPROXY) to override the goproxy
-ARG goproxy=https://proxy.golang.org
 # Run this with docker build --build-arg package=./controlplane/kubeadm or --build-arg package=./bootstrap/kubeadm
-ENV GOPROXY=$goproxy
 
 # Copy the Go Modules manifests
 COPY go.mod go.mod
@@ -39,31 +51,36 @@ COPY go.sum go.sum
 
 # Cache deps before building and copying source so that we don't need to re-download as much
 # and so that source changes don't invalidate our downloaded layer
-RUN --mount=type=cache,target=/go/pkg/mod \
+RUN --mount=type=cache,target=/root/.local/share/golang \
+    --mount=type=cache,target=/go/pkg/mod \
     go mod download
 
 # Copy the sources
 COPY ./ ./
 
-# Cache the go build into the Go’s compiler cache folder so we take benefits of compiler caching across docker build calls
-RUN --mount=type=cache,target=/root/.cache/go-build \
-    --mount=type=cache,target=/go/pkg/mod \
-    go build .
-
 # Build
-ARG package=.
+ARG package=sigs.k8s.io/cluster-api
 ARG ARCH
 ARG ldflags
 
 # Do not force rebuild of up-to-date packages (do not use -a) and use the compiler cache folder
-RUN --mount=type=cache,target=/root/.cache/go-build \
+RUN  --mount=type=cache,target=/root/.cache/go-build \
     --mount=type=cache,target=/go/pkg/mod \
-    CGO_ENABLED=0 GOOS=linux GOARCH=${ARCH} \
-    go build -trimpath -ldflags "${ldflags} -extldflags '-static'" \
-    -o manager ${package}
+    --mount=type=cache,target=/root/.local/share/golang \
+    if [ ${CRYPTO_LIB} ]; \
+    then \
+      GOARCH=${ARCH} go-build-fips.sh -a -o manager ${package};\
+    else \
+      GOARCH=${ARCH} go-build-static.sh -a -o manager ${package};\
+    fi
+
+RUN if [ "${CRYPTO_LIB}" ]; then assert-static.sh manager; fi
+RUN if [ "${CRYPTO_LIB}" ]; then assert-fips.sh manager; fi
+RUN scan-govulncheck.sh manager
+
 
 # Production image
-FROM gcr.io/distroless/static:nonroot-${ARCH}
+FROM gcr.io/distroless/static:nonroot
 WORKDIR /
 COPY --from=builder /workspace/manager .
 # Use uid of nonroot user (65532) because kubernetes expects numeric user when applying pod security policies
