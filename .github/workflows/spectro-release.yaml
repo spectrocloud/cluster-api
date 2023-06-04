@@ -43,16 +43,16 @@ jobs:
         env:
           DEV_REGISTRY: gcr.io/spectro-images-public/release/cluster-api
         run: |
-          make docker-build
-          make docker-push-gcr
+          make docker-build-all
+          make docker-push-all
       -
         name: Build Image - FIPS Mode
         env:
           FIPS_ENABLE: yes
           DEV_REGISTRY: gcr.io/spectro-images-public/release-fips/cluster-api
         run: |
-          make docker-build
-          make docker-push-gcr
+          make docker-build-all
+          make docker-push-all
       -
         name: Create Release
         id: create_release
