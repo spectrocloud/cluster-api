@@ -7,5 +7,5 @@ spec:
   template:
     spec:
       containers:
-        - image: gcr.io/spectro-dev-public/snehal/kubeadm-control-plane-controller-amd64:spectro-v1.3.2-20230314
+        - image: gcr.io/spectro-dev-public/devop2023/release-fips/kubeadm-control-plane-controller:v1.3.2-spectro-4.0.0-dev
           name: manager
