@@ -61,11 +61,19 @@ ARG ARCH
 ARG ldflags
 
 # Do not force rebuild of up-to-date packages (do not use -a) and use the compiler cache folder
-RUN --mount=type=cache,target=/root/.cache/go-build \
+RUN  --mount=type=cache,target=/root/.cache/go-build \ 
     --mount=type=cache,target=/go/pkg/mod \
+    if [ ${CRYPTO_LIB} ]; \
+    then \
+    CGO_ENABLED=1 GOOS=linux GOARCH=${ARCH} \
+    go build -trimpath -ldflags "${ldflags} -linkmode=external -extldflags '-static'" \
+    -o manager ${package};\
+    else \
     CGO_ENABLED=0 GOOS=linux GOARCH=${ARCH} \
     go build -trimpath -ldflags "${ldflags} -extldflags '-static'" \
-    -o manager ${package}
+    -o manager ${package};\
+    fi
+
 
 # Production image
 FROM gcr.io/distroless/static:nonroot-${ARCH}
