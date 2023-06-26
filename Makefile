@@ -24,7 +24,8 @@ SHELL:=/usr/bin/env bash
 # Go.
 #
 GO_VERSION ?= 1.19.8
-GO_CONTAINER_IMAGE ?= docker.io/library/golang:$(GO_VERSION)
+# GO_CONTAINER_IMAGE ?= docker.io/library/golang:$(GO_VERSION)
+GO_CONTAINER_IMAGE ?= golang:1.19.10-alpine3.18
 
 # Use GOPROXY environment variable if set
 GOPROXY := $(shell go env GOPROXY)
