@@ -28,6 +28,9 @@ ARG ARCH
 FROM ${builder_image} as builder
 WORKDIR /workspace
 
+RUN apk update
+RUN apk add git gcc g++ curl
+
 # Run this with docker build --build-arg goproxy=$(go env GOPROXY) to override the goproxy
 ARG goproxy=https://proxy.golang.org
 # Run this with docker build --build-arg package=./controlplane/kubeadm or --build-arg package=./bootstrap/kubeadm
@@ -35,7 +38,6 @@ ENV GOPROXY=$goproxy
 
 # FIPS
 ARG CRYPTO_LIB
-ARG CGO_ENABLED_FLAG=${CRYPTO_LIB:+0}
 ENV GOEXPERIMENT=${CRYPTO_LIB:+boringcrypto}
 
 
