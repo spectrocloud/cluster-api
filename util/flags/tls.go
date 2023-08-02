@@ -60,16 +60,28 @@ func GetTLSOptionOverrideFuncs(options TLSOptions) ([]func(*tls.Config), error) 
 	}
 	tlsOptions = append(tlsOptions, func(cfg *tls.Config) {
 		cfg.MinVersion = tlsVersion
+		cfg.CipherSuites = GetDefaultTLSCipherSuits()
 	})
+	
+	// For PEM-2613
+	//if len(options.TLSCipherSuites) != 0 {
+	//	// suites, err := cliflag.TLSCipherSuites(options.TLSCipherSuites)
+	//	// Not required PEM 2613
+	//	if err != nil {
+	//		return nil, err
+	//	}
+	//	tlsOptions = append(tlsOptions, func(cfg *tls.Config) {
+	//		cfg.CipherSuites = GetDefaultTLSCipherSuits()
+	//	})
+	//}
 
-	if len(options.TLSCipherSuites) != 0 {
-		suites, err := cliflag.TLSCipherSuites(options.TLSCipherSuites)
-		if err != nil {
-			return nil, err
-		}
-		tlsOptions = append(tlsOptions, func(cfg *tls.Config) {
-			cfg.CipherSuites = suites
-		})
-	}
 	return tlsOptions, nil
+}
+
+func GetDefaultTLSCipherSuits() []uint16 {
+	return []uint16{
+		tls.TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA,
+		tls.TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA,
+		tls.TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA,
+	}
 }
