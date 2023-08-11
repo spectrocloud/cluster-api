@@ -54,6 +54,7 @@ func AddTLSOptions(fs *pflag.FlagSet, options *TLSOptions) {
 // by the webhook server.
 func GetTLSOptionOverrideFuncs(options TLSOptions) ([]func(*tls.Config), error) {
 	var tlsOptions []func(config *tls.Config)
+	var insecureSkipVerify bool
 	tlsVersion, err := cliflag.TLSVersion(options.TLSMinVersion)
 	if err != nil {
 		return nil, err
@@ -61,8 +62,10 @@ func GetTLSOptionOverrideFuncs(options TLSOptions) ([]func(*tls.Config), error) 
 	tlsOptions = append(tlsOptions, func(cfg *tls.Config) {
 		cfg.MinVersion = tlsVersion
 		cfg.CipherSuites = GetDefaultTLSCipherSuits()
+		cfg.MaxVersion = GetTlsMaxVersion()
+		cfg.InsecureSkipVerify = InsecureSkipVerify(insecureSkipVerify)
 	})
-	
+
 	// For PEM-2613
 	//if len(options.TLSCipherSuites) != 0 {
 	//	// suites, err := cliflag.TLSCipherSuites(options.TLSCipherSuites)
@@ -81,8 +84,8 @@ func GetTLSOptionOverrideFuncs(options TLSOptions) ([]func(*tls.Config), error) 
 func GetDefaultTLSCipherSuits() []uint16 {
 	return []uint16{
 		tls.TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
- 		tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
- 		tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
- 		tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
+		tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+		tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+		tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
 	}
 }
