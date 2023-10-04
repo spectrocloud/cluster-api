@@ -36,6 +36,7 @@ jobs:
       -
         if: ${{ github.event.inputs.rel_type == 'rc' }}
         run: echo "REGISTRY=gcr.io/spectro-dev-public/release/cluster-api" >> $GITHUB_ENV
+      -
         uses: actions/checkout@v3
       -
         name: Set up Docker Buildx

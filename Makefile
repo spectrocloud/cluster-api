@@ -23,9 +23,9 @@ SHELL:=/usr/bin/env bash
 #
 # Go.
 #
-GO_VERSION ?= 1.21.5
+GO_VERSION ?= 1.21
 # GO_CONTAINER_IMAGE ?= docker.io/library/golang:$(GO_VERSION)
-# GO_CONTAINER_IMAGE ?= golang:1.19.10-alpine3.18
+GO_CONTAINER_IMAGE ?= gcr.io/spectro-images-public/golang:${GO_VERSION}-alpine
 
 # Use GOPROXY environment variable if set
 GOPROXY := $(shell go env GOPROXY)
@@ -779,7 +779,7 @@ docker-build-%:
 	$(MAKE) ARCH=$* docker-build
 
 # ALL_DOCKER_BUILD = core kubeadm-bootstrap kubeadm-control-plane docker-infrastructure test-extension clusterctl
-ALL_DOCKER_BUILD = core kubeadm-bootstrap kubeadm-control-plane clusterctl
+ALL_DOCKER_BUILD = core kubeadm-bootstrap kubeadm-control-plane
 
 .PHONY: docker-build
 docker-build: docker-pull-prerequisites ## Run docker-build-* targets for all the images
@@ -1143,8 +1143,8 @@ docker-push-core: ## Push the core docker image
 	docker push $(CONTROLLER_IMG)-$(ARCH):$(TAG)
 	docker push $(KUBEADM_BOOTSTRAP_CONTROLLER_IMG)-$(ARCH):$(TAG)
 	docker push $(KUBEADM_CONTROL_PLANE_CONTROLLER_IMG)-$(ARCH):$(TAG)
-	docker push $(CLUSTERCTL_IMG)-$(ARCH):$(TAG)
-	docker push $(CAPD_CONTROLLER_IMG)-$(ARCH):$(TAG)
+#	docker push $(CLUSTERCTL_IMG)-$(ARCH):$(TAG)
+#	docker push $(CAPD_CONTROLLER_IMG)-$(ARCH):$(TAG)
 
 .PHONY: docker-push-manifest-core
 docker-push-manifest-core: ## Push the multiarch manifest for the core docker images
