@@ -19,7 +19,7 @@
 
 ARG BUILDER_GOLANG_VERSION
  # First stage: build the executable.
-FROM gcr.io/spectro-images-public/golang:${BUILDER_GOLANG_VERSION}-alpine as toolchain
+FROM --platform=$TARGETPLATFORM gcr.io/spectro-images-public/golang:${BUILDER_GOLANG_VERSION}-alpine as toolchain
 ARG goproxy=https://proxy.golang.org
 ENV GOPROXY=$goproxy
 
