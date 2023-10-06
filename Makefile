@@ -264,7 +264,7 @@ ifeq ($(SELINUX_ENABLED),1)
 endif
 
 # Set build time variables including version details
-#LDFLAGS := $(shell hack/version.sh)
+LDFLAGS := $(shell hack/version.sh)
 
 all: test managers clusterctl
 
