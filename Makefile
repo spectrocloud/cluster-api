@@ -985,7 +985,7 @@ docker-push-all: $(addprefix docker-push-,$(ALL_ARCH))  ## Push the docker image
 	$(MAKE) docker-push-manifest-core
 	$(MAKE) docker-push-manifest-kubeadm-bootstrap
 	$(MAKE) docker-push-manifest-kubeadm-control-plane
-	$(MAKE) docker-push-manifest-docker-infrastructure
+#	$(MAKE) docker-push-manifest-docker-infrastructure
 	$(MAKE) docker-push-clusterctl
 
 docker-push-%:
@@ -997,7 +997,7 @@ docker-push: ## Push the docker images to be included in the release
 	docker push $(KUBEADM_BOOTSTRAP_CONTROLLER_IMG)-$(ARCH):$(TAG)
 	docker push $(KUBEADM_CONTROL_PLANE_CONTROLLER_IMG)-$(ARCH):$(TAG)
 	docker push $(CLUSTERCTL_IMG)-$(ARCH):$(TAG)
-	docker push $(CAPD_CONTROLLER_IMG)-$(ARCH):$(TAG)
+#	docker push $(CAPD_CONTROLLER_IMG)-$(ARCH):$(TAG)
 
 .PHONY: docker-push-manifest-core
 docker-push-manifest-core: ## Push the multiarch manifest for the core docker images
