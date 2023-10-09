@@ -35,7 +35,7 @@ FROM toolchain as builder
 WORKDIR /workspace
 
 RUN apk update
-RUN apk add git gcc g++ curl
+RUN apk add git gcc g++ curl binutils-gold
 
 # Run this with docker build --build-arg goproxy=$(go env GOPROXY) to override the goproxy
 # Run this with docker build --build-arg package=./controlplane/kubeadm or --build-arg package=./bootstrap/kubeadm
