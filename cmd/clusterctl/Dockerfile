@@ -71,7 +71,7 @@ RUN  --mount=type=cache,target=/root/.cache/go-build \
 
 RUN if [ "${CRYPTO_LIB}" ]; then assert-static.sh clusterctl; fi
 RUN if [ "${CRYPTO_LIB}" ]; then assert-fips.sh clusterctl; fi
-RUN scan-govulncheck.sh manager
+RUN scan-govulncheck.sh clusterctl
 
 
 # Production image
