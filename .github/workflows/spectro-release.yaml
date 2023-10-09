@@ -40,13 +40,6 @@ jobs:
           echo "LEGACY_REGISTRY=gcr.io/spectro-dev-public/release/cluster-api" >> $GITHUB_ENV
           echo "FIPS_REGISTRY=gcr.io/spectro-dev-public/release-fips/cluster-api" >> $GITHUB_ENV
       -
-        name: Install SSH key for remote docker build
-        uses: shimataro/ssh-key-action@v2
-        with:
-          key: ${{ secrets.SSH_KEY }}
-          known_hosts: ${{ secrets.KNOWN_HOSTS }}
-          if_key_exists: fail
-      -
         uses: actions/checkout@v3
       -
         name: Set up Docker Buildx
