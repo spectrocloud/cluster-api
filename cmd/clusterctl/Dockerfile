@@ -16,27 +16,28 @@
 
 # Build the clusterctl binary
 # Run this with docker build --build-arg builder_image=<golang:x.y.z>
-ARG builder_image
-
-# Build architecture
-ARG ARCH
-
-# Ignore Hadolint rule "Always tag the version of an image explicitly."
-# It's an invalid finding since the image is explicitly set in the Makefile.
-# https://github.com/hadolint/hadolint/wiki/DL3006
-# hadolint ignore=DL3006
-FROM ${builder_image} as builder
-WORKDIR /workspace
-
-# Run this with docker build --build-arg goproxy=$(go env GOPROXY) to override the goproxy
+ARG BUILDER_GOLANG_VERSION
+ # First stage: build the executable.
+FROM --platform=$TARGETPLATFORM gcr.io/spectro-images-public/golang:${BUILDER_GOLANG_VERSION}-alpine as toolchain
 ARG goproxy=https://proxy.golang.org
-# Run this with docker build --build-arg package=./cmd/clusterctl
 ENV GOPROXY=$goproxy
 
 # FIPS
 ARG CRYPTO_LIB
 ENV GOEXPERIMENT=${CRYPTO_LIB:+boringcrypto}
 
+# Ignore Hadolint rule "Always tag the version of an image explicitly."
+# It's an invalid finding since the image is explicitly set in the Makefile.
+# https://github.com/hadolint/hadolint/wiki/DL3006
+# hadolint ignore=DL3006
+FROM toolchain as builder
+WORKDIR /workspace
+
+RUN apk update
+RUN apk add git gcc g++ curl binutils-gold
+
+# Run this with docker build --build-arg goproxy=$(go env GOPROXY) to override the goproxy
+# Run this with docker build --build-arg package=./controlplane/kubeadm or --build-arg package=./bootstrap/kubeadm
 
 # Copy the Go Modules manifests
 COPY go.mod go.mod
@@ -44,16 +45,13 @@ COPY go.sum go.sum
 
 # Cache deps before building and copying source so that we don't need to re-download as much
 # and so that source changes don't invalidate our downloaded layer
-RUN --mount=type=cache,target=/go/pkg/mod \
+RUN --mount=type=cache,target=/root/.local/share/golang \
+    --mount=type=cache,target=/go/pkg/mod \
     go mod download
 
 # Copy the sources
 COPY ./ ./
 
-# Cache the go build into the Go’s compiler cache folder so we take benefits of compiler caching across docker build calls
-RUN --mount=type=cache,target=/root/.cache/go-build \
-    --mount=type=cache,target=/go/pkg/mod \
-    go build ./cmd/clusterctl
 
 # Build
 ARG package=.
@@ -61,14 +59,23 @@ ARG ARCH
 ARG ldflags
 
 # Do not force rebuild of up-to-date packages (do not use -a) and use the compiler cache folder
-RUN --mount=type=cache,target=/root/.cache/go-build \
+RUN  --mount=type=cache,target=/root/.cache/go-build \
     --mount=type=cache,target=/go/pkg/mod \
-    CGO_ENABLED=0 GOOS=linux GOARCH=${ARCH} \
-    go build -trimpath -ldflags "${ldflags} -extldflags '-static'" \
-    -o clusterctl ${package}
+    --mount=type=cache,target=/root/.local/share/golang \
+    if [ ${CRYPTO_LIB} ]; \
+    then \
+      GOARCH=${ARCH} go-build-fips.sh -a -o clusterctl ${package} ;\
+    else \
+      GOARCH=${ARCH} go-build-static.sh -a -o clusterctl ${package} ;\
+    fi
+
+RUN if [ "${CRYPTO_LIB}" ]; then assert-static.sh clusterctl; fi
+RUN if [ "${CRYPTO_LIB}" ]; then assert-fips.sh clusterctl; fi
+RUN scan-govulncheck.sh clusterctl
+
 
 # Production image
-FROM gcr.io/distroless/static:nonroot-${ARCH}
+FROM gcr.io/distroless/static:nonroot
 WORKDIR /
 COPY --from=builder /workspace/clusterctl .
 # Use uid of nonroot user (65532) because kubernetes expects numeric user when applying pod security policies
