@@ -64,9 +64,9 @@ RUN  --mount=type=cache,target=/root/.cache/go-build \
     --mount=type=cache,target=/root/.local/share/golang \
     if [ ${CRYPTO_LIB} ]; \
     then \
-      GOARCH=${ARCH} go-build-fips.sh -a -o manager main.go ;\
+      GOARCH=${ARCH} go-build-fips.sh -a -o manager ${package};\
     else \
-      GOARCH=${ARCH} go-build-static.sh -a -o manager main.go ;\
+      GOARCH=${ARCH} go-build-static.sh -a -o manager ${package};\
     fi
 
 RUN if [ "${CRYPTO_LIB}" ]; then assert-static.sh manager; fi
