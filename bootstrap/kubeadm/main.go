@@ -315,17 +315,17 @@ func setupReconcilers(ctx context.Context, mgr ctrl.Manager) {
 		os.Exit(1)
 	}
 	if err := (&remote.ClusterCacheReconciler{
-	if webhookPort != 0 {
-		setupLog.V(0).Info("webhook is enabled skipping reconcilers setup")
-		return
-	}
-	if err := (&kubeadmbootstrapcontrollers.KubeadmConfigReconciler{
 		Client:           mgr.GetClient(),
 		Tracker:          tracker,
 		WatchFilterValue: watchFilterValue,
 	}).SetupWithManager(ctx, mgr, concurrency(clusterCacheTrackerConcurrency)); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "ClusterCacheReconciler")
 		os.Exit(1)
+	}
+
+	if webhookPort != 0 {
+		setupLog.V(0).Info("webhook is enabled skipping reconcilers setup")
+		return
 	}
 
 	if err := (&kubeadmbootstrapcontrollers.KubeadmConfigReconciler{
