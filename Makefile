@@ -779,13 +779,13 @@ docker-build-%:
 	$(MAKE) ARCH=$* docker-build
 
 # ALL_DOCKER_BUILD = core kubeadm-bootstrap kubeadm-control-plane docker-infrastructure test-extension clusterctl
-ALL_DOCKER_BUILD = core kubeadm-bootstrap kubeadm-control-plane clusterctl
+ALL_DOCKER_BUILD = core kubeadm-bootstrap kubeadm-control-plane
 
 .PHONY: docker-build
 docker-build: docker-pull-prerequisites ## Run docker-build-* targets for all the images
 	$(MAKE) ARCH=$(ARCH) $(addprefix docker-build-,$(ALL_DOCKER_BUILD))
 
-ALL_DOCKER_BUILD_E2E = core kubeadm-bootstrap kubeadm-control-plane docker-infrastructure in-memory-infrastructure test-extension
+ALL_DOCKER_BUILD_E2E = core kubeadm-bootstrap kubeadm-control-plane
 
 .PHONY: docker-build-e2e
 docker-build-e2e: ## Run docker-build-* targets for all the images with settings to be used for the e2e tests
@@ -816,17 +816,17 @@ docker-build-kubeadm-control-plane: ## Build the docker image for kubeadm contro
 #	cd $(CAPD_DIR); DOCKER_BUILDKIT=1 docker build --build-arg CRYPTO_LIB=${FIPS_ENABLE} --build-arg builder_image=$(GO_CONTAINER_IMAGE) --build-arg goproxy=$(GOPROXY) --build-arg ARCH=$(ARCH) --build-arg ldflags="$(LDFLAGS)" ../../.. -t $(CAPD_CONTROLLER_IMG)-$(ARCH):$(TAG) --file Dockerfile
 #	$(MAKE) set-manifest-image MANIFEST_IMG=$(CAPD_CONTROLLER_IMG)-$(ARCH) MANIFEST_TAG=$(TAG) TARGET_RESOURCE="$(CAPD_DIR)/config/default/manager_image_patch.yaml"
 #	$(MAKE) set-manifest-pull-policy TARGET_RESOURCE="$(CAPD_DIR)/config/default/manager_pull_policy.yaml"
-
+#
 #.PHONY: docker-build-in-memory-infrastructure
 #docker-build-in-memory-infrastructure: ## Build the docker image for in-memory infrastructure controller manager
-#	DOCKER_BUILDKIT=1 docker build --build-arg builder_image=$(GO_CONTAINER_IMAGE) --build-arg goproxy=$(GOPROXY) --build-arg ARCH=$(ARCH) --build-arg ldflags="$(LDFLAGS)" . -t $(CAPIM_CONTROLLER_IMG)-$(ARCH):$(TAG) --file $(CAPIM_DIR)/Dockerfile
+#	DOCKER_BUILDKIT=1 docker build --build-arg CRYPTO_LIB=${FIPS_ENABLE} --build-arg builder_image=$(GO_CONTAINER_IMAGE) --build-arg goproxy=$(GOPROXY) --build-arg ARCH=$(ARCH) --build-arg ldflags="$(LDFLAGS)" . -t $(CAPIM_CONTROLLER_IMG)-$(ARCH):$(TAG) --file $(CAPIM_DIR)/Dockerfile
 #	$(MAKE) set-manifest-image MANIFEST_IMG=$(CAPIM_CONTROLLER_IMG)-$(ARCH) MANIFEST_TAG=$(TAG) TARGET_RESOURCE="$(CAPIM_DIR)/config/default/manager_image_patch.yaml"
 #	$(MAKE) set-manifest-pull-policy TARGET_RESOURCE="$(CAPIM_DIR)/config/default/manager_pull_policy.yaml"
-
+#
 #.PHONY: docker-build-clusterctl
 #docker-build-clusterctl: ## Build the docker image for clusterctl
 #	DOCKER_BUILDKIT=1 docker build --build-arg CRYPTO_LIB=${FIPS_ENABLE} --build-arg builder_image=$(GO_CONTAINER_IMAGE) --build-arg goproxy=$(GOPROXY) --build-arg ARCH=$(ARCH) --build-arg package=./cmd/clusterctl --build-arg ldflags="$(LDFLAGS)" -f ./cmd/clusterctl/Dockerfile . -t $(CLUSTERCTL_IMG)-$(ARCH):$(TAG)
-
+#
 #.PHONY: docker-build-test-extension
 #docker-build-test-extension: ## Build the docker image for core controller manager
 #	DOCKER_BUILDKIT=1 docker build --build-arg CRYPTO_LIB=${FIPS_ENABLE} --build-arg builder_image=$(GO_CONTAINER_IMAGE) --build-arg goproxy=$(GOPROXY) --build-arg ARCH=$(ARCH) --build-arg ldflags="$(LDFLAGS)" . -t $(TEST_EXTENSION_IMG)-$(ARCH):$(TAG) --file ./test/extension/Dockerfile
@@ -1130,7 +1130,7 @@ docker-push-all: $(addprefix docker-push-,$(ALL_ARCH))  ## Push the docker image
 	$(MAKE) docker-push-manifest-kubeadm-bootstrap
 	$(MAKE) docker-push-manifest-kubeadm-control-plane
 #	$(MAKE) docker-push-manifest-docker-infrastructure
-	$(MAKE) docker-push-clusterctl
+#	$(MAKE) docker-push-clusterctl
 
 docker-push-%:
 	$(MAKE) ARCH=$* docker-push
@@ -1143,7 +1143,7 @@ docker-push-core: ## Push the core docker image
 	docker push $(CONTROLLER_IMG)-$(ARCH):$(TAG)
 	docker push $(KUBEADM_BOOTSTRAP_CONTROLLER_IMG)-$(ARCH):$(TAG)
 	docker push $(KUBEADM_CONTROL_PLANE_CONTROLLER_IMG)-$(ARCH):$(TAG)
-	docker push $(CLUSTERCTL_IMG)-$(ARCH):$(TAG)
+#	docker push $(CLUSTERCTL_IMG)-$(ARCH):$(TAG)
 #	docker push $(CAPD_CONTROLLER_IMG)-$(ARCH):$(TAG)
 
 .PHONY: docker-push-manifest-core
@@ -1178,51 +1178,51 @@ docker-push-manifest-kubeadm-control-plane: ## Push the multiarch manifest for t
 	$(MAKE) set-manifest-image MANIFEST_IMG=$(KUBEADM_CONTROL_PLANE_CONTROLLER_IMG) MANIFEST_TAG=$(TAG) TARGET_RESOURCE="./controlplane/kubeadm/config/default/manager_image_patch.yaml"
 	$(MAKE) set-manifest-pull-policy TARGET_RESOURCE="./controlplane/kubeadm/config/default/manager_pull_policy.yaml"
 
-.PHONY: docker-push-docker-infrastructure
-docker-push-docker-infrastructure: ## Push the docker infrastructure provider image
-	docker push $(CAPD_CONTROLLER_IMG)-$(ARCH):$(TAG)
-
-.PHONY: docker-push-manifest-docker-infrastructure
-docker-push-manifest-docker-infrastructure: ## Push the multiarch manifest for the docker infrastructure provider images
-	docker manifest create --amend $(CAPD_CONTROLLER_IMG):$(TAG) $(shell echo $(ALL_ARCH) | sed -e "s~[^ ]*~$(CAPD_CONTROLLER_IMG)\-&:$(TAG)~g")
-	@for arch in $(ALL_ARCH); do docker manifest annotate --arch $${arch} ${CAPD_CONTROLLER_IMG}:${TAG} ${CAPD_CONTROLLER_IMG}-$${arch}:${TAG}; done
-	docker manifest push --purge $(CAPD_CONTROLLER_IMG):$(TAG)
-	$(MAKE) set-manifest-image MANIFEST_IMG=$(CAPD_CONTROLLER_IMG) MANIFEST_TAG=$(TAG) TARGET_RESOURCE="$(CAPD_DIR)/config/default/manager_image_patch.yaml"
-	$(MAKE) set-manifest-pull-policy TARGET_RESOURCE="$(CAPD_DIR)/config/default/manager_pull_policy.yaml"
-
-.PHONY: docker-push-in-memory-infrastructure
-docker-push-in-memory-infrastructure: ## Push the in-memory infrastructure provider image
-	docker push $(CAPIM_CONTROLLER_IMG)-$(ARCH):$(TAG)
-
-.PHONY: docker-push-manifest-in-memory-infrastructure
-docker-push-manifest-in-memory-infrastructure: ## Push the multiarch manifest for the in-memory infrastructure provider images
-	docker manifest create --amend $(CAPIM_CONTROLLER_IMG):$(TAG) $(shell echo $(ALL_ARCH) | sed -e "s~[^ ]*~$(CAPIM_CONTROLLER_IMG)\-&:$(TAG)~g")
-	@for arch in $(ALL_ARCH); do docker manifest annotate --arch $${arch} ${CAPIM_CONTROLLER_IMG}:${TAG} ${CAPIM_CONTROLLER_IMG}-$${arch}:${TAG}; done
-	docker manifest push --purge $(CAPIM_CONTROLLER_IMG):$(TAG)
-	$(MAKE) set-manifest-image MANIFEST_IMG=$(CAPIM_CONTROLLER_IMG) MANIFEST_TAG=$(TAG) TARGET_RESOURCE="$(CAPIM_DIR)/config/default/manager_image_patch.yaml"
-	$(MAKE) set-manifest-pull-policy TARGET_RESOURCE="$(CAPIM_DIR)/config/default/manager_pull_policy.yaml"
-
-.PHONY: docker-push-test-extension
-docker-push-test-extension: ## Push the test extension provider image
-	docker push $(TEST_EXTENSION_IMG)-$(ARCH):$(TAG)
-
-.PHONY: docker-push-manifest-test-extension
-docker-push-manifest-test-extension: ## Push the multiarch manifest for the test extension provider images
-	docker manifest create --amend $(TEST_EXTENSION_IMG):$(TAG) $(shell echo $(ALL_ARCH) | sed -e "s~[^ ]*~$(TEST_EXTENSION_IMG)\-&:$(TAG)~g")
-	@for arch in $(ALL_ARCH); do docker manifest annotate --arch $${arch} ${TEST_EXTENSION_IMG}:${TAG} ${TEST_EXTENSION_IMG}-$${arch}:${TAG}; done
-	docker manifest push --purge $(TEST_EXTENSION_IMG):$(TAG)
-	$(MAKE) set-manifest-image MANIFEST_IMG=$(TEST_EXTENSION_IMG) MANIFEST_TAG=$(TAG) TARGET_RESOURCE="./test/extension/config/default/manager_image_patch.yaml"
-	$(MAKE) set-manifest-pull-policy TARGET_RESOURCE="./test/extension/config/default/manager_pull_policy.yaml"
-
-.PHONY: docker-push-clusterctl
-docker-push-clusterctl: ## Push the clusterctl image
-	docker push $(CLUSTERCTL_IMG)-$(ARCH):$(TAG)
-
-.PHONY: docker-push-manifest-clusterctl
-docker-push-manifest-clusterctl: ## Push the multiarch manifest for the clusterctl images
-	docker manifest create --amend $(CLUSTERCTL_IMG):$(TAG) $(shell echo $(ALL_ARCH) | sed -e "s~[^ ]*~$(CLUSTERCTL_IMG)\-&:$(TAG)~g")
-	@for arch in $(ALL_ARCH); do docker manifest annotate --arch $${arch} ${CLUSTERCTL_IMG}:${TAG} ${CLUSTERCTL_IMG}-$${arch}:${TAG}; done
-	docker manifest push --purge $(CLUSTERCTL_IMG):$(TAG)
+#.PHONY: docker-push-docker-infrastructure
+#docker-push-docker-infrastructure: ## Push the docker infrastructure provider image
+#	docker push $(CAPD_CONTROLLER_IMG)-$(ARCH):$(TAG)
+#
+#.PHONY: docker-push-manifest-docker-infrastructure
+#docker-push-manifest-docker-infrastructure: ## Push the multiarch manifest for the docker infrastructure provider images
+#	docker manifest create --amend $(CAPD_CONTROLLER_IMG):$(TAG) $(shell echo $(ALL_ARCH) | sed -e "s~[^ ]*~$(CAPD_CONTROLLER_IMG)\-&:$(TAG)~g")
+#	@for arch in $(ALL_ARCH); do docker manifest annotate --arch $${arch} ${CAPD_CONTROLLER_IMG}:${TAG} ${CAPD_CONTROLLER_IMG}-$${arch}:${TAG}; done
+#	docker manifest push --purge $(CAPD_CONTROLLER_IMG):$(TAG)
+#	$(MAKE) set-manifest-image MANIFEST_IMG=$(CAPD_CONTROLLER_IMG) MANIFEST_TAG=$(TAG) TARGET_RESOURCE="$(CAPD_DIR)/config/default/manager_image_patch.yaml"
+#	$(MAKE) set-manifest-pull-policy TARGET_RESOURCE="$(CAPD_DIR)/config/default/manager_pull_policy.yaml"
+#
+#.PHONY: docker-push-in-memory-infrastructure
+#docker-push-in-memory-infrastructure: ## Push the in-memory infrastructure provider image
+#	docker push $(CAPIM_CONTROLLER_IMG)-$(ARCH):$(TAG)
+#
+#.PHONY: docker-push-manifest-in-memory-infrastructure
+#docker-push-manifest-in-memory-infrastructure: ## Push the multiarch manifest for the in-memory infrastructure provider images
+#	docker manifest create --amend $(CAPIM_CONTROLLER_IMG):$(TAG) $(shell echo $(ALL_ARCH) | sed -e "s~[^ ]*~$(CAPIM_CONTROLLER_IMG)\-&:$(TAG)~g")
+#	@for arch in $(ALL_ARCH); do docker manifest annotate --arch $${arch} ${CAPIM_CONTROLLER_IMG}:${TAG} ${CAPIM_CONTROLLER_IMG}-$${arch}:${TAG}; done
+#	docker manifest push --purge $(CAPIM_CONTROLLER_IMG):$(TAG)
+#	$(MAKE) set-manifest-image MANIFEST_IMG=$(CAPIM_CONTROLLER_IMG) MANIFEST_TAG=$(TAG) TARGET_RESOURCE="$(CAPIM_DIR)/config/default/manager_image_patch.yaml"
+#	$(MAKE) set-manifest-pull-policy TARGET_RESOURCE="$(CAPIM_DIR)/config/default/manager_pull_policy.yaml"
+#
+#.PHONY: docker-push-test-extension
+#docker-push-test-extension: ## Push the test extension provider image
+#	docker push $(TEST_EXTENSION_IMG)-$(ARCH):$(TAG)
+#
+#.PHONY: docker-push-manifest-test-extension
+#docker-push-manifest-test-extension: ## Push the multiarch manifest for the test extension provider images
+#	docker manifest create --amend $(TEST_EXTENSION_IMG):$(TAG) $(shell echo $(ALL_ARCH) | sed -e "s~[^ ]*~$(TEST_EXTENSION_IMG)\-&:$(TAG)~g")
+#	@for arch in $(ALL_ARCH); do docker manifest annotate --arch $${arch} ${TEST_EXTENSION_IMG}:${TAG} ${TEST_EXTENSION_IMG}-$${arch}:${TAG}; done
+#	docker manifest push --purge $(TEST_EXTENSION_IMG):$(TAG)
+#	$(MAKE) set-manifest-image MANIFEST_IMG=$(TEST_EXTENSION_IMG) MANIFEST_TAG=$(TAG) TARGET_RESOURCE="./test/extension/config/default/manager_image_patch.yaml"
+#	$(MAKE) set-manifest-pull-policy TARGET_RESOURCE="./test/extension/config/default/manager_pull_policy.yaml"
+#
+#.PHONY: docker-push-clusterctl
+#docker-push-clusterctl: ## Push the clusterctl image
+#	docker push $(CLUSTERCTL_IMG)-$(ARCH):$(TAG)
+#
+#.PHONY: docker-push-manifest-clusterctl
+#docker-push-manifest-clusterctl: ## Push the multiarch manifest for the clusterctl images
+#	docker manifest create --amend $(CLUSTERCTL_IMG):$(TAG) $(shell echo $(ALL_ARCH) | sed -e "s~[^ ]*~$(CLUSTERCTL_IMG)\-&:$(TAG)~g")
+#	@for arch in $(ALL_ARCH); do docker manifest annotate --arch $${arch} ${CLUSTERCTL_IMG}:${TAG} ${CLUSTERCTL_IMG}-$${arch}:${TAG}; done
+#	docker manifest push --purge $(CLUSTERCTL_IMG):$(TAG)
 
 .PHONY: set-manifest-pull-policy
 set-manifest-pull-policy:
