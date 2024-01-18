@@ -143,9 +143,6 @@ func InitFlags(fs *pflag.FlagSet) {
 	fs.DurationVar(&tokenTTL, "bootstrap-token-ttl", kubeadmbootstrapcontrollers.DefaultTokenTTL,
 		"The amount of time the bootstrap token will be valid")
 
-	fs.StringVar(&watchFilterValue, "watch-filter", "",
-		fmt.Sprintf("Label value that the controller watches to reconcile cluster-api objects. Label key is always %s. If unspecified, the controller watches for all cluster-api objects.", clusterv1.WatchLabel))
-
 	fs.IntVar(&webhookPort, "webhook-port", 0,
 		"Webhook Server port")
 
