@@ -285,6 +285,11 @@ func setupChecks(mgr ctrl.Manager) {
 }
 
 func setupReconcilers(ctx context.Context, mgr ctrl.Manager) {
+	if webhookPort != 0 {
+		setupLog.V(0).Info("webhook is enabled skipping reconcilers setup")
+		return
+	}
+
 	secretCachingClient, err := client.New(mgr.GetConfig(), client.Options{
 		HTTPClient: mgr.GetHTTPClient(),
 		Cache: &client.CacheOptions{
@@ -318,11 +323,6 @@ func setupReconcilers(ctx context.Context, mgr ctrl.Manager) {
 	}).SetupWithManager(ctx, mgr, concurrency(clusterCacheTrackerConcurrency)); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "ClusterCacheReconciler")
 		os.Exit(1)
-	}
-
-	if webhookPort != 0 {
-		setupLog.V(0).Info("webhook is enabled skipping reconcilers setup")
-		return
 	}
 
 	if err := (&kubeadmbootstrapcontrollers.KubeadmConfigReconciler{
