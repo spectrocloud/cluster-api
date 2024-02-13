@@ -54,7 +54,7 @@ RUN --mount=type=cache,target=/root/.local/share/golang \
 COPY ./ ./
 
 # Build
-ARG package=.
+ARG package=sigs.k8s.io/cluster-api
 ARG ARCH
 ARG ldflags
 
