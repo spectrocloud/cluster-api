@@ -34,6 +34,9 @@ ENV GOEXPERIMENT=${CRYPTO_LIB:+boringcrypto}
 FROM toolchain as builder
 WORKDIR /workspace
 
+ARG CRYPTO_LIB
+ENV GOEXPERIMENT=${CRYPTO_LIB:+boringcrypto}
+
 RUN apk update
 RUN apk add git gcc g++ curl binutils-gold
 
@@ -54,7 +57,7 @@ RUN --mount=type=cache,target=/root/.local/share/golang \
 COPY ./ ./
 
 # Build
-ARG package=.
+ARG package=sigs.k8s.io/cluster-api
 ARG ARCH
 ARG ldflags
 
