@@ -25,7 +25,7 @@ SHELL:=/usr/bin/env bash
 #
 GO_VERSION ?= 1.22
 # GO_CONTAINER_IMAGE ?= docker.io/library/golang:$(GO_VERSION)
-GO_CONTAINER_IMAGE ?= gcr.io/spectro-images-public/golang:${GO_VERSION}-alpine
+GO_CONTAINER_IMAGE ?= gcr.io/spectro-images-public/golang:${BUILDER_GOLANG_VERSION}-alpine
 
 # Use GOPROXY environment variable if set
 GOPROXY := $(shell go env GOPROXY)
@@ -932,7 +932,7 @@ release-binary: $(RELEASE_DIR)
 		-e GOARCH=$(GOARCH) \
 		-v "$$(pwd):/workspace$(DOCKER_VOL_OPTS)" \
 		-w /workspace \
-		golang:$(GO_VERSION) \
+		golang:$(BUILDER_GOLANG_VERSION) \
 		go build -a -trimpath -ldflags "$(LDFLAGS) -extldflags '-static'" \
 		-o $(RELEASE_DIR)/$(notdir $(RELEASE_BINARY)) $(BUILD_PATH)
 
