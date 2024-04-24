@@ -2,6 +2,8 @@ module sigs.k8s.io/cluster-api
 
 go 1.22
 
+toolchain go1.22.2
+
 require (
 	github.com/MakeNowJust/heredoc v1.0.0
 	github.com/Masterminds/sprig/v3 v3.2.3
