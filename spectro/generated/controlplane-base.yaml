@@ -21,13 +21,40 @@ spec:
       containers:
       - args:
         - --leader-elect
-        - --metrics-bind-addr=localhost:8080
-        - --feature-gates=ClusterTopology=${CLUSTER_TOPOLOGY:=false},KubeadmBootstrapFormatIgnition=${EXP_KUBEADM_BOOTSTRAP_FORMAT_IGNITION:=false}
+        - --diagnostics-address=${CAPI_DIAGNOSTICS_ADDRESS:=:8443}
+        - --insecure-diagnostics=${CAPI_INSECURE_DIAGNOSTICS:=false}
+        - --use-deprecated-infra-machine-naming=${CAPI_USE_DEPRECATED_INFRA_MACHINE_NAMING:=false}
+        - --feature-gates=MachinePool=${EXP_MACHINE_POOL:=true},ClusterTopology=${CLUSTER_TOPOLOGY:=false},KubeadmBootstrapFormatIgnition=${EXP_KUBEADM_BOOTSTRAP_FORMAT_IGNITION:=false}
         command:
         - /manager
-        image: gcr.io/spectro-dev-public/release/kubeadm-control-plane-controller-amd64:20220805
+        env:
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: POD_UID
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.uid
+        image: gcr.io/spectro-dev-public/devop2023/release-fips/kubeadm-control-plane-controller:v1.3.2-spectro-4.0.0-dev
         imagePullPolicy: Always
         name: manager
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          privileged: false
+          runAsGroup: 65532
+          runAsUser: 65532
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
       terminationGracePeriodSeconds: 10
       tolerations:
       - effect: NoSchedule

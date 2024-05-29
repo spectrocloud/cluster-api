@@ -7,5 +7,5 @@ spec:
   template:
     spec:
       containers:
-      - image: gcr.io/spectro-dev-public/devop2023/release-fips/cluster-api-controller:v1.3.2-spectro-4.0.0-dev
+      - image: gcr.io/spectro-dev-public/snehal/release/cluster-api-controller-amd64:v1.3.2-spectro-4.0.0-dev
         name: manager
