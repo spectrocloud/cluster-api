@@ -183,6 +183,9 @@ const (
 	// VariableDefinitionFromInline indicates a patch or variable was defined in the `.spec` of a ClusterClass
 	// rather than from an external patch extension.
 	VariableDefinitionFromInline = "inline"
+
+	// TakeOverCluster is the label used to mark the nodes that run on takeover-cluster instances.
+	TakeOverCluster = "cluster.x-k8s.io/takeover-cluster"
 )
 
 // MachineSetPreflightCheck defines a valid MachineSet preflight check.
