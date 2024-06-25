@@ -399,7 +399,7 @@ func (r *KubeadmControlPlaneReconciler) reconcile(ctx context.Context, cluster *
 		conditions.MarkFalse(controlPlane.KCP, controlplanev1.AvailableCondition, controlplanev1.WaitingForKubeadmInitReason, clusterv1.ConditionSeverityInfo, "")
 		return r.initializeControlPlane(ctx, cluster, kcp, controlPlane)
 	// We are scaling up
-	case numMachines < desiredReplicas && numMachines > 0:
+	case numMachines < desiredReplicas && numMachines >= 0:
 		// Create a new Machine w/ join
 		log.Info("Scaling up control plane", "Desired", desiredReplicas, "Existing", numMachines)
 		return r.scaleUpControlPlane(ctx, cluster, kcp, controlPlane)
@@ -568,7 +568,7 @@ func (r *KubeadmControlPlaneReconciler) reconcileEtcdMembers(ctx context.Context
 	log := ctrl.LoggerFrom(ctx)
 
 	// If etcd is not managed by KCP this is a no-op.
-	if !controlPlane.IsEtcdManaged() {
+	if annotations.IsTakeOverCluster(controlPlane.Cluster.GetObjectMeta()) || !controlPlane.IsEtcdManaged() {
 		return ctrl.Result{}, nil
 	}
 
