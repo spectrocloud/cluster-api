@@ -278,7 +278,7 @@ func (r *KubeadmConfigReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	}
 
 	// Note: can't use IsFalse here because we need to handle the absence of the condition as well as false.
-	if !conditions.IsTrue(cluster, clusterv1.ControlPlaneInitializedCondition) {
+	if !annotations.IsTakeOverCluster(cluster.GetObjectMeta()) && !conditions.IsTrue(cluster, clusterv1.ControlPlaneInitializedCondition) {
 		return r.handleClusterNotInitialized(ctx, scope)
 	}
 
