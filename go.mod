@@ -2,7 +2,7 @@ module sigs.k8s.io/cluster-api
 
 go 1.22
 
-toolchain go1.22.2
+toolchain go1.22.4
 
 require (
 	github.com/MakeNowJust/heredoc v1.0.0
@@ -10,7 +10,7 @@ require (
 	github.com/blang/semver v3.5.1+incompatible
 	github.com/coredns/corefile-migration v1.0.21
 	github.com/davecgh/go-spew v1.1.1
-	github.com/docker/distribution v2.8.1+incompatible
+	github.com/docker/distribution v2.8.2-beta.1+incompatible
 	github.com/drone/envsubst/v2 v2.0.0-20210730161058-179042472c46
 	github.com/evanphx/json-patch/v5 v5.6.0
 	github.com/fatih/color v1.13.0
@@ -116,7 +116,7 @@ require (
 	github.com/prometheus/common v0.37.0 // indirect
 	github.com/prometheus/procfs v0.8.0 // indirect
 	github.com/rivo/uniseg v0.4.2 // indirect
-	github.com/russross/blackfriday v1.5.2 // indirect
+	github.com/russross/blackfriday v1.6.0 // indirect
 	github.com/shopspring/decimal v1.3.1 // indirect
 	github.com/spf13/afero v1.9.2 // indirect
 	github.com/spf13/cast v1.5.0 // indirect
