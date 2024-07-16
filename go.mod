@@ -32,7 +32,7 @@ require (
 	go.etcd.io/etcd/client/v3 v3.5.9
 	golang.org/x/net v0.23.0 // indirect
 	golang.org/x/oauth2 v0.10.0
-	google.golang.org/grpc v1.55.0
+	google.golang.org/grpc v1.56.3
 	k8s.io/api v0.27.2
 	k8s.io/apiextensions-apiserver v0.27.2
 	k8s.io/apimachinery v0.27.2
