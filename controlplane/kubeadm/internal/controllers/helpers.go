@@ -74,8 +74,12 @@ func (r *KubeadmControlPlaneReconciler) reconcileKubeconfig(ctx context.Context,
 		return ctrl.Result{}, errors.Wrap(err, "failed to retrieve kubeconfig Secret")
 	}
 
-	if err := r.adoptKubeconfigSecret(ctx, cluster, configSecret, kcp); err != nil {
-		return ctrl.Result{}, err
+	// check if the kubeconfig secret was created by v1alpha2 controllers, and thus it has the Cluster as the owner instead of KCP;
+	// if yes, adopt it.
+	if util.IsOwnedByObject(configSecret, cluster) && !util.IsControlledBy(configSecret, kcp) {
+		if err := r.adoptKubeconfigSecret(ctx, cluster, configSecret, kcp); err != nil {
+			return ctrl.Result{}, err
+		}
 	}
 
 	// only do rotation on owned secrets

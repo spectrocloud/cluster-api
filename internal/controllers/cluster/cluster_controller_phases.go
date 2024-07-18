@@ -245,7 +245,10 @@ func (r *Reconciler) reconcileControlPlane(ctx context.Context, cluster *cluster
 		if err != nil {
 			return ctrl.Result{}, err
 		}
-		if initialized {
+
+		// TODO: PCP-22 set controlPlaneInitializedCondition to true for takeOver cluster
+		// as CP are already initialized in existing cluster
+		if annotations.IsTakeOverCluster(cluster.GetObjectMeta()) || initialized {
 			conditions.MarkTrue(cluster, clusterv1.ControlPlaneInitializedCondition)
 		} else {
 			conditions.MarkFalse(cluster, clusterv1.ControlPlaneInitializedCondition, clusterv1.WaitingForControlPlaneProviderInitializedReason, clusterv1.ConditionSeverityInfo, "Waiting for control plane provider to indicate the control plane has been initialized")
@@ -270,11 +273,16 @@ func (r *Reconciler) reconcileKubeconfig(ctx context.Context, cluster *clusterv1
 	}
 
 	_, err := secret.Get(ctx, r.Client, util.ObjectKey(cluster), secret.Kubeconfig)
+
+	if err != nil {
+		log.Info("TESTING.... error getting kubeconfig", "err", err)
+	}
+
 	switch {
 	case apierrors.IsNotFound(err):
 		if err := kubeconfig.CreateSecret(ctx, r.Client, cluster); err != nil {
 			if err == kubeconfig.ErrDependentCertificateNotFound {
-				log.Info("Could not find secret for cluster, requeuing", "Secret", secret.ClusterCA)
+				log.Info("could not find secret for cluster, requeuing", "secret", secret.ClusterCA)
 				return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 			}
 			return ctrl.Result{}, err

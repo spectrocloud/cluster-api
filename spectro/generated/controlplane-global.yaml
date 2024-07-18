@@ -3,7 +3,8 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     cert-manager.io/inject-ca-from: capi-webhook-system/capi-kubeadm-control-plane-serving-cert
-    controller-gen.kubebuilder.io/version: v0.8.0
+    controller-gen.kubebuilder.io/version: v0.10.0
+  creationTimestamp: "null"
   labels:
     cluster.x-k8s.io/provider: control-plane-kubeadm
     cluster.x-k8s.io/v1alpha3: v1alpha3
@@ -125,6 +126,7 @@ spec:
                     description: 'UID of the referent. More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#uids'
                     type: string
                 type: object
+                x-kubernetes-map-type: atomic
               kubeadmConfigSpec:
                 description: KubeadmConfigSpec is a KubeadmConfigSpec to use for initializing
                   and joining machines to the control plane.
@@ -1497,12 +1499,12 @@ spec:
                         type: object
                       imageRepository:
                         description: ImageRepository sets the container registry to
-                          pull images from. If empty, `k8s.gcr.io` will be used by
-                          default; in case of kubernetes version is a CI build (kubernetes
-                          version starts with `ci/` or `ci-cross/`) `gcr.io/k8s-staging-ci-images`
+                          pull images from. If empty, `registry.k8s.io` will be used
+                          by default; in case of kubernetes version is a CI build
+                          (kubernetes version starts with `ci/` or `ci-cross/`) `gcr.io/k8s-staging-ci-images`
                           will be used as a default for control plane components and
-                          for kube-proxy, while `k8s.gcr.io` will be used for all
-                          the other images.
+                          for kube-proxy, while `registry.k8s.io` will be used for
+                          all the other images.
                         type: string
                       kind:
                         description: 'Kind is a string value representing the REST
@@ -2225,6 +2227,7 @@ spec:
                         description: 'UID of the referent. More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#uids'
                         type: string
                     type: object
+                    x-kubernetes-map-type: atomic
                   metadata:
                     description: 'Standard object''s metadata. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata'
                     properties:
@@ -2715,13 +2718,20 @@ spec:
                         description: FeatureGates enabled by the user.
                         type: object
                       imageRepository:
-                        description: ImageRepository sets the container registry to
-                          pull images from. If empty, `k8s.gcr.io` will be used by
-                          default; in case of kubernetes version is a CI build (kubernetes
-                          version starts with `ci/` or `ci-cross/`) `gcr.io/k8s-staging-ci-images`
+                        description: 'ImageRepository sets the container registry
+                          to pull images from. * If not set, the default registry
+                          of kubeadm will be used, i.e. * registry.k8s.io (new registry):
+                          >= v1.22.17, >= v1.23.15, >= v1.24.9, >= v1.25.0 * k8s.gcr.io
+                          (old registry): all older versions Please note that when
+                          imageRepository is not set we don''t allow upgrades to versions
+                          >= v1.22.0 which use the old registry (k8s.gcr.io). Please
+                          use a newer patch version with the new registry instead
+                          (i.e. >= v1.22.17, >= v1.23.15, >= v1.24.9, >= v1.25.0).
+                          * If the version is a CI build (kubernetes version starts
+                          with `ci/` or `ci-cross/`) `gcr.io/k8s-staging-ci-images`
                           will be used as a default for control plane components and
-                          for kube-proxy, while `k8s.gcr.io` will be used for all
-                          the other images.
+                          for kube-proxy, while `registry.k8s.io` will be used for
+                          all the other images.'
                         type: string
                       kind:
                         description: 'Kind is a string value representing the REST
@@ -3103,7 +3113,7 @@ spec:
                               i.e. nil, in the `kubeadm init` process it will be defaulted
                               to []v1.Taint{''node-role.kubernetes.io/master=""''}.
                               If you don''t want to taint your control-plane node,
-                              set this field to an empty slice, i.e. `taints: {}`
+                              set this field to an empty slice, i.e. `taints: []`
                               in the YAML file. This field is solely used for Node
                               registration.'
                             items:
@@ -3323,7 +3333,7 @@ spec:
                               i.e. nil, in the `kubeadm init` process it will be defaulted
                               to []v1.Taint{''node-role.kubernetes.io/master=""''}.
                               If you don''t want to taint your control-plane node,
-                              set this field to an empty slice, i.e. `taints: {}`
+                              set this field to an empty slice, i.e. `taints: []`
                               in the YAML file. This field is solely used for Node
                               registration.'
                             items:
@@ -3428,7 +3438,10 @@ spec:
                       environments where joins fail due to timing (and other issues).
                       The long term goal is to add retries to kubeadm proper and use
                       that functionality. \n This will add about 40KB to userdata
-                      \n For more information, refer to https://github.com/kubernetes-sigs/cluster-api/pull/2763#discussion_r397306055."
+                      \n For more information, refer to https://github.com/kubernetes-sigs/cluster-api/pull/2763#discussion_r397306055.
+                      \n Deprecated: This experimental fix is no longer needed and
+                      this field will be removed in a future release. When removing
+                      also remove from staticcheck exclude-rules for SA1019 in golangci.yml"
                     type: boolean
                   users:
                     description: Users specifies extra users to add
@@ -3552,6 +3565,7 @@ spec:
                         description: 'UID of the referent. More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#uids'
                         type: string
                     type: object
+                    x-kubernetes-map-type: atomic
                   metadata:
                     description: 'Standard object''s metadata. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata'
                     properties:
@@ -3588,6 +3602,12 @@ spec:
                       any time limitations. NOTE: NodeDrainTimeout is different from
                       `kubectl drain --timeout`'
                     type: string
+                  nodeVolumeDetachTimeout:
+                    description: NodeVolumeDetachTimeout is the total amount of time
+                      that the controller will spend on waiting for all volumes to
+                      be detached. The default value is 0, meaning that the volumes
+                      can be detached without any time limitations.
+                    type: string
                 required:
                 - infrastructureRef
                 type: object
@@ -3603,6 +3623,17 @@ spec:
                   made to the KubeadmControlPlane.
                 format: date-time
                 type: string
+              rolloutBefore:
+                description: RolloutBefore is a field to indicate a rollout should
+                  be performed if the specified criteria is met.
+                properties:
+                  certificatesExpiryDays:
+                    description: CertificatesExpiryDays indicates a rollout needs
+                      to be performed if the certificates of the machine will expire
+                      within the specified days.
+                    format: int32
+                    type: integer
+                type: object
               rolloutStrategy:
                 default:
                   rollingUpdate:
@@ -3632,7 +3663,13 @@ spec:
                     type: string
                 type: object
               version:
-                description: Version defines the desired Kubernetes version.
+                description: 'Version defines the desired Kubernetes version. Please
+                  note that if kubeadmConfigSpec.ClusterConfiguration.imageRepository
+                  is not set we don''t allow upgrades to versions >= v1.22.0 for which
+                  kubeadm uses the old registry (k8s.gcr.io). Please use a newer patch
+                  version with the new registry instead. The default registries of
+                  kubeadm are: * registry.k8s.io (new registry): >= v1.22.17, >= v1.23.15,
+                  >= v1.24.9, >= v1.25.0 * k8s.gcr.io (old registry): all older versions'
                 type: string
             required:
             - kubeadmConfigSpec
@@ -3753,19 +3790,14 @@ spec:
         specReplicasPath: .spec.replicas
         statusReplicasPath: .status.replicas
       status: {}
-status:
-  acceptedNames:
-    kind: ""
-    plural: ""
-  conditions: []
-  storedVersions: []
 ---
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
     cert-manager.io/inject-ca-from: capi-webhook-system/capi-kubeadm-control-plane-serving-cert
-    controller-gen.kubebuilder.io/version: v0.8.0
+    controller-gen.kubebuilder.io/version: v0.10.0
+  creationTimestamp: "null"
   labels:
     cluster.x-k8s.io/provider: control-plane-kubeadm
     cluster.x-k8s.io/v1alpha3: v1alpha3
@@ -4082,13 +4114,13 @@ spec:
                                 type: object
                               imageRepository:
                                 description: ImageRepository sets the container registry
-                                  to pull images from. If empty, `k8s.gcr.io` will
-                                  be used by default; in case of kubernetes version
+                                  to pull images from. If empty, `registry.k8s.io`
+                                  will be used by default; in case of kubernetes version
                                   is a CI build (kubernetes version starts with `ci/`
                                   or `ci-cross/`) `gcr.io/k8s-staging-ci-images` will
                                   be used as a default for control plane components
-                                  and for kube-proxy, while `k8s.gcr.io` will be used
-                                  for all the other images.
+                                  and for kube-proxy, while `registry.k8s.io` will
+                                  be used for all the other images.
                                 type: string
                               kind:
                                 description: 'Kind is a string value representing
@@ -4860,6 +4892,7 @@ spec:
                                 description: 'UID of the referent. More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#uids'
                                 type: string
                             type: object
+                            x-kubernetes-map-type: atomic
                           metadata:
                             description: 'Standard object''s metadata. More info:
                               https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata'
@@ -5243,14 +5276,21 @@ spec:
                                 description: FeatureGates enabled by the user.
                                 type: object
                               imageRepository:
-                                description: ImageRepository sets the container registry
-                                  to pull images from. If empty, `k8s.gcr.io` will
-                                  be used by default; in case of kubernetes version
-                                  is a CI build (kubernetes version starts with `ci/`
-                                  or `ci-cross/`) `gcr.io/k8s-staging-ci-images` will
-                                  be used as a default for control plane components
-                                  and for kube-proxy, while `k8s.gcr.io` will be used
-                                  for all the other images.
+                                description: 'ImageRepository sets the container registry
+                                  to pull images from. * If not set, the default registry
+                                  of kubeadm will be used, i.e. * registry.k8s.io
+                                  (new registry): >= v1.22.17, >= v1.23.15, >= v1.24.9,
+                                  >= v1.25.0 * k8s.gcr.io (old registry): all older
+                                  versions Please note that when imageRepository is
+                                  not set we don''t allow upgrades to versions >=
+                                  v1.22.0 which use the old registry (k8s.gcr.io).
+                                  Please use a newer patch version with the new registry
+                                  instead (i.e. >= v1.22.17, >= v1.23.15, >= v1.24.9,
+                                  >= v1.25.0). * If the version is a CI build (kubernetes
+                                  version starts with `ci/` or `ci-cross/`) `gcr.io/k8s-staging-ci-images`
+                                  will be used as a default for control plane components
+                                  and for kube-proxy, while `registry.k8s.io` will
+                                  be used for all the other images.'
                                 type: string
                               kind:
                                 description: 'Kind is a string value representing
@@ -5659,7 +5699,7 @@ spec:
                                       init` process it will be defaulted to []v1.Taint{''node-role.kubernetes.io/master=""''}.
                                       If you don''t want to taint your control-plane
                                       node, set this field to an empty slice, i.e.
-                                      `taints: {}` in the YAML file. This field is
+                                      `taints: []` in the YAML file. This field is
                                       solely used for Node registration.'
                                     items:
                                       description: The node this Taint is attached
@@ -5895,7 +5935,7 @@ spec:
                                       init` process it will be defaulted to []v1.Taint{''node-role.kubernetes.io/master=""''}.
                                       If you don''t want to taint your control-plane
                                       node, set this field to an empty slice, i.e.
-                                      `taints: {}` in the YAML file. This field is
+                                      `taints: []` in the YAML file. This field is
                                       solely used for Node registration.'
                                     items:
                                       description: The node this Taint is attached
@@ -6006,7 +6046,11 @@ spec:
                               to timing (and other issues). The long term goal is
                               to add retries to kubeadm proper and use that functionality.
                               \n This will add about 40KB to userdata \n For more
-                              information, refer to https://github.com/kubernetes-sigs/cluster-api/pull/2763#discussion_r397306055."
+                              information, refer to https://github.com/kubernetes-sigs/cluster-api/pull/2763#discussion_r397306055.
+                              \n Deprecated: This experimental fix is no longer needed
+                              and this field will be removed in a future release.
+                              When removing also remove from staticcheck exclude-rules
+                              for SA1019 in golangci.yml"
                             type: boolean
                           users:
                             description: Users specifies extra users to add
@@ -6112,6 +6156,13 @@ spec:
                               be drained without any time limitations. NOTE: NodeDrainTimeout
                               is different from `kubectl drain --timeout`'
                             type: string
+                          nodeVolumeDetachTimeout:
+                            description: NodeVolumeDetachTimeout is the total amount
+                              of time that the controller will spend on waiting for
+                              all volumes to be detached. The default value is 0,
+                              meaning that the volumes can be detached without any
+                              time limitations.
+                            type: string
                         type: object
                       rolloutAfter:
                         description: RolloutAfter is a field to indicate a rollout
@@ -6119,6 +6170,17 @@ spec:
                           changes have been made to the KubeadmControlPlane.
                         format: date-time
                         type: string
+                      rolloutBefore:
+                        description: RolloutBefore is a field to indicate a rollout
+                          should be performed if the specified criteria is met.
+                        properties:
+                          certificatesExpiryDays:
+                            description: CertificatesExpiryDays indicates a rollout
+                              needs to be performed if the certificates of the machine
+                              will expire within the specified days.
+                            format: int32
+                            type: integer
+                        type: object
                       rolloutStrategy:
                         default:
                           rollingUpdate:
@@ -6161,12 +6223,6 @@ spec:
     served: true
     storage: true
     subresources: {}
-status:
-  acceptedNames:
-    kind: ""
-    plural: ""
-  conditions: []
-  storedVersions: []
 ---
 apiVersion: v1
 kind: Service
@@ -6209,7 +6265,20 @@ spec:
         - --feature-gates=ClusterTopology=${CLUSTER_TOPOLOGY:=false},KubeadmBootstrapFormatIgnition=${EXP_KUBEADM_BOOTSTRAP_FORMAT_IGNITION:=false}
         command:
         - /manager
-        image: gcr.io/spectro-dev-public/release/kubeadm-control-plane-controller-amd64:20220805
+        env:
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: POD_UID
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.uid
+        image: gcr.io/spectro-dev-public/devop2023/release-fips/kubeadm-control-plane-controller:v1.3.2-spectro-4.0.0-dev
         imagePullPolicy: Always
         livenessProbe:
           httpGet:
@@ -6276,6 +6345,7 @@ kind: MutatingWebhookConfiguration
 metadata:
   annotations:
     cert-manager.io/inject-ca-from: capi-webhook-system/capi-kubeadm-control-plane-serving-cert
+  creationTimestamp: null
   labels:
     cluster.x-k8s.io/provider: control-plane-kubeadm
   name: capi-kubeadm-control-plane-mutating-webhook-configuration
@@ -6329,6 +6399,7 @@ kind: ValidatingWebhookConfiguration
 metadata:
   annotations:
     cert-manager.io/inject-ca-from: capi-webhook-system/capi-kubeadm-control-plane-serving-cert
+  creationTimestamp: null
   labels:
     cluster.x-k8s.io/provider: control-plane-kubeadm
   name: capi-kubeadm-control-plane-validating-webhook-configuration
