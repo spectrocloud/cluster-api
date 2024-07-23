@@ -23,7 +23,7 @@ SHELL:=/usr/bin/env bash
 #
 # Go.
 #
-GO_VERSION ?= 1.21
+GO_VERSION ?= 1.22
 # GO_CONTAINER_IMAGE ?= docker.io/library/golang:$(GO_VERSION)
 GO_CONTAINER_IMAGE ?= gcr.io/spectro-images-public/golang:${BUILDER_GOLANG_VERSION}-alpine
 
@@ -178,7 +178,7 @@ GOLANGCI_LINT := $(abspath $(TOOLS_BIN_DIR)/$(GOLANGCI_LINT_BIN))
 # It is set by Prow GIT_TAG, a git-based tag of the form vYYYYMMDD-hash, e.g., v20210120-v0.3.10-308-gc61521971
 # Fips Flags
 FIPS_ENABLE ?= ""
-BUILDER_GOLANG_VERSION ?= 1.21.6
+BUILDER_GOLANG_VERSION ?= 1.22
 BUILD_ARGS = --build-arg CRYPTO_LIB=${FIPS_ENABLE} --build-arg BUILDER_GOLANG_VERSION=${BUILDER_GOLANG_VERSION}
 
 RELEASE_LOC := release
