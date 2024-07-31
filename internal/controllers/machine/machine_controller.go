@@ -620,6 +620,9 @@ func (r *Reconciler) drainNode(ctx context.Context, cluster *clusterv1.Cluster, 
 		}},
 		// SPECTRO: Even if the node is reachable, we wait 30 minutes for drain completion else move ahead
 		SkipWaitForDeleteTimeoutSeconds: 60 * 30, // 30 minutes
+		AdditionalFilters: []kubedrain.PodFilter{
+			additionalFilerToSkipDrainCSI,
+		},
 	}
 
 	if noderefutil.IsNodeUnreachable(node) {
@@ -641,6 +644,17 @@ func (r *Reconciler) drainNode(ctx context.Context, cluster *clusterv1.Cluster, 
 
 	log.Info("Drain successful")
 	return ctrl.Result{}, nil
+}
+
+// additionalFilerToSkipDrainCSI skips drainning px-[cluster-name]-drain pods  
+func additionalFilerToSkipDrainCSI(pod corev1.Pod) kubedrain.PodDeleteStatus {
+	if pod.Labels == nil {
+		return kubedrain.MakePodDeleteStatusOkay()
+	}
+	if pod.Labels["storage"] == "true" {
+		return kubedrain.MakePodDeleteStatusSkip()
+	}
+	return kubedrain.MakePodDeleteStatusOkay()
 }
 
 // shouldWaitForNodeVolumes returns true if node status still have volumes attached
