@@ -624,7 +624,7 @@ func (r *Reconciler) drainNode(ctx context.Context, cluster *clusterv1.Cluster, 
 			additionalFilerToSkipDrainCSI,
 		},
 	}
-
+	log.Info("Applied additional filters", "filters", additionalFilerToSkipDrainCSI)
 	if noderefutil.IsNodeUnreachable(node) {
 		// When the node is unreachable and some pods are not evicted for as long as this timeout, we ignore them.
 		drainer.SkipWaitForDeleteTimeoutSeconds = 60 * 5 // 5 minutes
@@ -651,7 +651,7 @@ func additionalFilerToSkipDrainCSI(pod corev1.Pod) kubedrain.PodDeleteStatus {
 	if pod.Labels == nil {
 		return kubedrain.MakePodDeleteStatusOkay()
 	}
-	if pod.Labels["storage"] == "true" {
+	if pod.Labels["name"] == "portworx" {
 		return kubedrain.MakePodDeleteStatusSkip()
 	}
 	return kubedrain.MakePodDeleteStatusOkay()
