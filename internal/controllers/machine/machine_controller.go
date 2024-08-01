@@ -651,7 +651,7 @@ func additionalFilerToSkipDrainCSI(pod corev1.Pod) kubedrain.PodDeleteStatus {
 	if pod.Labels == nil {
 		return kubedrain.MakePodDeleteStatusOkay()
 	}
-	if pod.Labels["name"] == "portworx" {
+	if pod.Labels["storage"] == "true" {
 		return kubedrain.MakePodDeleteStatusSkip()
 	}
 	return kubedrain.MakePodDeleteStatusOkay()
