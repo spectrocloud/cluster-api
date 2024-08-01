@@ -646,12 +646,12 @@ func (r *Reconciler) drainNode(ctx context.Context, cluster *clusterv1.Cluster, 
 	return ctrl.Result{}, nil
 }
 
-// additionalFilerToSkipDrainCSI skips drainning px-[cluster-name]-drain pods  
+// additionalFilerToSkipDrainCSI skips drainning px-[cluster-name] and portworx-api pods  
 func additionalFilerToSkipDrainCSI(pod corev1.Pod) kubedrain.PodDeleteStatus {
 	if pod.Labels == nil {
 		return kubedrain.MakePodDeleteStatusOkay()
 	}
-	if pod.Labels["storage"] == "true" {
+	if pod.Labels["name"] == "portworx" || pod.Labels["name"] == "portworx-api" {
 		return kubedrain.MakePodDeleteStatusSkip()
 	}
 	return kubedrain.MakePodDeleteStatusOkay()
