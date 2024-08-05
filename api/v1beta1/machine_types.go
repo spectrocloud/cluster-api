@@ -122,7 +122,7 @@ type MachineSpec struct {
 	// +optional
 	NodeDeletionTimeout *metav1.Duration `json:"nodeDeletionTimeout,omitempty"`
 
-	// AdditionalFilters are applied sequentially after base drain filters to
+	// NodeDrainPodFilters are applied as AdditionalFilters after base drain filters to
 	// exclude pods using custom logic.  Any filter that returns PodDeleteStatus
 	// with Delete == false will immediately stop execution of further filters.
 	// +optional
