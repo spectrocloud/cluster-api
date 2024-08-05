@@ -25,7 +25,20 @@ spec:
         - --feature-gates=MachinePool=${EXP_MACHINE_POOL:=false},ClusterResourceSet=${EXP_CLUSTER_RESOURCE_SET:=false},ClusterTopology=${CLUSTER_TOPOLOGY:=false},RuntimeSDK=${EXP_RUNTIME_SDK:=false}
         command:
         - /manager
-        image: gcr.io/spectro-dev-public/release/cluster-api-controller-amd64:20220805
+        env:
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: POD_UID
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.uid
+        image: gcr.io/spectro-dev-public/devop2023/release-fips/cluster-api-controller:v1.3.2-spectro-4.0.0-dev
         imagePullPolicy: Always
         name: manager
       terminationGracePeriodSeconds: 10
