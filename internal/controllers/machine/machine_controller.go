@@ -26,6 +26,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
 	kerrors "k8s.io/apimachinery/pkg/util/errors"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -621,7 +622,9 @@ func (r *Reconciler) drainNode(ctx context.Context, cluster *clusterv1.Cluster, 
 		}},
 		// SPECTRO: Even if the node is reachable, we wait 30 minutes for drain completion else move ahead
 		SkipWaitForDeleteTimeoutSeconds: 60 * 30, // 30 minutes
-		AdditionalFilters: m.Spec.NodeDrainPodFilters,
+		AdditionalFilters: []kubedrain.PodFilter{
+			SkipFuncGenerator(m.Spec.NodeDrainPodFilters),
+		},
 	}
 	if noderefutil.IsNodeUnreachable(node) {
 		// When the node is unreachable and some pods are not evicted for as long as this timeout, we ignore them.
@@ -642,6 +645,18 @@ func (r *Reconciler) drainNode(ctx context.Context, cluster *clusterv1.Cluster, 
 
 	log.Info("Drain successful")
 	return ctrl.Result{}, nil
+}
+
+func SkipFuncGenerator(labelSelector *metav1.LabelSelector) func(pod corev1.Pod) kubedrain.PodDeleteStatus {
+	return func(pod corev1.Pod) kubedrain.PodDeleteStatus {
+		if pod.Labels == nil {
+			return kubedrain.MakePodDeleteStatusOkay()
+		}
+		if labels.Equals(labelSelector.MatchLabels, pod.ObjectMeta.Labels) {
+			return kubedrain.MakePodDeleteStatusSkip()
+		}
+		return kubedrain.MakePodDeleteStatusOkay()
+	}
 }
 
 // shouldWaitForNodeVolumes returns true if node status still have volumes attached

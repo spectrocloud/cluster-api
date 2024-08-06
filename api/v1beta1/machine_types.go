@@ -19,7 +19,6 @@ package v1beta1
 import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	kubedrain "k8s.io/kubectl/pkg/drain"
 	capierrors "sigs.k8s.io/cluster-api/errors"
 )
 
@@ -122,11 +121,9 @@ type MachineSpec struct {
 	// +optional
 	NodeDeletionTimeout *metav1.Duration `json:"nodeDeletionTimeout,omitempty"`
 
-	// NodeDrainPodFilters are applied as AdditionalFilters after base drain filters to
-	// exclude pods using custom logic.  Any filter that returns PodDeleteStatus
-	// with Delete == false will immediately stop execution of further filters.
+	// NodeDrainPodFilters allows to specify filters for pods to be excluded during node drain
 	// +optional
-	NodeDrainPodFilters []kubedrain.PodFilter `json:"nodeDrainPodFilters,omitempty"`
+	NodeDrainPodFilters *metav1.LabelSelector `json:"nodeDrainPodFilters,omitempty"`
 }
 
 // ANCHOR_END: MachineSpec
