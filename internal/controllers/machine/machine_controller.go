@@ -352,7 +352,7 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, cluster *clusterv1.Clu
 				return ctrl.Result{}, errors.Wrap(err, "failed to patch Machine")
 			}
 
-			if result, err := r.drainNode(ctx, cluster, m.Status.NodeRef.Name); !result.IsZero() || err != nil {
+			if result, err := r.drainNode(ctx, cluster, m); !result.IsZero() || err != nil {
 				if err != nil {
 					conditions.MarkFalse(m, clusterv1.DrainingSucceededCondition, clusterv1.DrainingFailedReason, clusterv1.ConditionSeverityWarning, err.Error())
 					r.recorder.Eventf(m, corev1.EventTypeWarning, "FailedDrainNode", "error draining Machine's node %q: %v", m.Status.NodeRef.Name, err)
@@ -572,7 +572,8 @@ func (r *Reconciler) isDeleteNodeAllowed(ctx context.Context, cluster *clusterv1
 	return nil
 }
 
-func (r *Reconciler) drainNode(ctx context.Context, cluster *clusterv1.Cluster, nodeName string) (ctrl.Result, error) {
+func (r *Reconciler) drainNode(ctx context.Context, cluster *clusterv1.Cluster, m *clusterv1.Machine) (ctrl.Result, error) {
+	nodeName := m.Status.NodeRef.Name
 	log := ctrl.LoggerFrom(ctx, "Node", klog.KRef("", nodeName))
 
 	restConfig, err := remote.RESTConfig(ctx, controllerName, r.Client, util.ObjectKey(cluster))
@@ -620,8 +621,10 @@ func (r *Reconciler) drainNode(ctx context.Context, cluster *clusterv1.Cluster, 
 		}},
 		// SPECTRO: Even if the node is reachable, we wait 30 minutes for drain completion else move ahead
 		SkipWaitForDeleteTimeoutSeconds: 60 * 30, // 30 minutes
+		AdditionalFilters: []kubedrain.PodFilter{
+			SkipFuncGenerator(m.Spec.NodeDrainPodFilters),
+		},
 	}
-
 	if noderefutil.IsNodeUnreachable(node) {
 		// When the node is unreachable and some pods are not evicted for as long as this timeout, we ignore them.
 		drainer.SkipWaitForDeleteTimeoutSeconds = 60 * 5 // 5 minutes
@@ -641,6 +644,18 @@ func (r *Reconciler) drainNode(ctx context.Context, cluster *clusterv1.Cluster, 
 
 	log.Info("Drain successful")
 	return ctrl.Result{}, nil
+}
+
+func SkipFuncGenerator(labelSelector *metav1.LabelSelector) func(pod corev1.Pod) kubedrain.PodDeleteStatus {
+	return func(pod corev1.Pod) kubedrain.PodDeleteStatus {
+		if pod.Labels == nil {
+			return kubedrain.MakePodDeleteStatusOkay()
+		}
+		if HasMatchingLabels(*labelSelector, pod.ObjectMeta.Labels) {
+			return kubedrain.MakePodDeleteStatusSkip()
+		}
+		return kubedrain.MakePodDeleteStatusOkay()
+	}
 }
 
 // shouldWaitForNodeVolumes returns true if node status still have volumes attached

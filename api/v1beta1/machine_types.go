@@ -19,7 +19,6 @@ package v1beta1
 import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-
 	capierrors "sigs.k8s.io/cluster-api/errors"
 )
 
@@ -121,6 +120,10 @@ type MachineSpec struct {
 	// Defaults to 10 seconds.
 	// +optional
 	NodeDeletionTimeout *metav1.Duration `json:"nodeDeletionTimeout,omitempty"`
+
+	// NodeDrainPodFilters allows to specify filters for pods to be excluded during node drain
+	// +optional
+	NodeDrainPodFilters *metav1.LabelSelector `json:"nodeDrainPodFilters,omitempty"`
 }
 
 // ANCHOR_END: MachineSpec
