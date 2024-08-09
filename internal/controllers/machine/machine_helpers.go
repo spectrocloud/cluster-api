@@ -17,6 +17,7 @@ limitations under the License.
 package machine
 
 import (
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 )
@@ -36,4 +37,13 @@ func HasMatchingLabels(matchSelector metav1.LabelSelector, matchLabels map[strin
 		return false
 	}
 	return true
+}
+
+func HasTolerations(pod *corev1.Pod, toleration *corev1.Toleration) bool {
+	for _, t := range pod.Spec.Tolerations {
+		if t.MatchToleration(toleration) {
+			return true
+		}
+	}
+	return false
 }

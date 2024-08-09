@@ -57,7 +57,8 @@ import (
 
 const (
 	// controllerName defines the controller used when creating clients.
-	controllerName = "machine-controller"
+	controllerName     = "machine-controller"
+	nodeUnreachableKey = "node.kubernetes.io/unschedulable"
 )
 
 var (
@@ -66,6 +67,11 @@ var (
 	errNoControlPlaneNodes        = errors.New("no control plane members")
 	errClusterIsBeingDeleted      = errors.New("cluster is being deleted")
 	errControlPlaneIsBeingDeleted = errors.New("control plane is being deleted")
+	unreachableToleration         = corev1.Toleration{
+		Key:      nodeUnreachableKey,
+		Effect:   corev1.TaintEffectNoSchedule,
+		Operator: corev1.TolerationOpExists,
+	}
 )
 
 // +kubebuilder:rbac:groups=core,resources=events,verbs=get;list;watch;create;patch
@@ -618,6 +624,9 @@ func (r *Reconciler) drainNode(ctx context.Context, cluster *clusterv1.Cluster, 
 		ErrOut: writer{func(msg string, keysAndValues ...interface{}) {
 			log.Error(nil, msg, keysAndValues...)
 		}},
+		AdditionalFilters: []kubedrain.PodFilter{
+			skipUnreachableTolerationPods,
+		},
 		// SPECTRO: Even if the node is reachable, we wait 30 minutes for drain completion else move ahead
 		SkipWaitForDeleteTimeoutSeconds: 60 * 30, // 30 minutes
 	}
@@ -641,6 +650,16 @@ func (r *Reconciler) drainNode(ctx context.Context, cluster *clusterv1.Cluster, 
 
 	log.Info("Drain successful")
 	return ctrl.Result{}, nil
+}
+
+func skipUnreachableTolerationPods(pod corev1.Pod) kubedrain.PodDeleteStatus {
+	if pod.Spec.Tolerations == nil {
+		return kubedrain.MakePodDeleteStatusOkay()
+	}
+	if HasTolerations(&pod, &unreachableToleration) {
+		return kubedrain.MakePodDeleteStatusSkip()
+	}
+	return kubedrain.MakePodDeleteStatusOkay()
 }
 
 // shouldWaitForNodeVolumes returns true if node status still have volumes attached
