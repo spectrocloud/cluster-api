@@ -19,6 +19,7 @@ package cluster
 import (
 	"context"
 	"fmt"
+	controlplanev1 "sigs.k8s.io/cluster-api/controlplane/kubeadm/api/v1beta1"
 	"strings"
 
 	"github.com/pkg/errors"
@@ -397,6 +398,55 @@ func (o *objectGraph) getDiscoveryTypes(ctx context.Context) error {
 	return nil
 }
 
+func (o *objectGraph) getPaletteCRDDiscoveryTypes() error {
+	//clusterTypeMeta := metav1.TypeMeta{Kind: "Cluster", APIVersion: "v1"}
+	//o.types[getKindAPIString(secretTypeMeta)] = &discoveryTypeInfo{typeMeta: secretTypeMeta}
+	return nil
+}
+
+func (o *objectGraph) getPaletteTemplateDiscoveryTypes(ctx context.Context) error {
+	crdList := &apiextensionsv1.CustomResourceDefinitionList{}
+	getDiscoveryTypesBackoff := newReadBackoff()
+	if err := retryWithExponentialBackoff(ctx, getDiscoveryTypesBackoff, func(ctx context.Context) error {
+		return getCRDList(ctx, o.proxy, crdList)
+	}); err != nil {
+		return err
+	}
+
+	o.types = map[string]*discoveryTypeInfo{}
+
+	for _, crd := range crdList.Items {
+		for _, version := range crd.Spec.Versions {
+			if !version.Storage {
+				continue
+			}
+			if crd.Spec.Names.Kind == "KubeadmControlPlane" ||
+				crd.Spec.Names.Kind == "AWSMachineTemplate" ||
+				crd.Spec.Names.Kind == "AWSCluster" ||
+				crd.Spec.Names.Kind == "MachineDeployment" ||
+				crd.Spec.Names.Kind == "KubeadmConfigTemplate" ||
+				(crd.Spec.Group == clusterv1.GroupVersion.Group && crd.Spec.Names.Kind == "Cluster") {
+				typeMeta := metav1.TypeMeta{
+					Kind: crd.Spec.Names.Kind,
+					APIVersion: metav1.GroupVersion{
+						Group:   crd.Spec.Group,
+						Version: version.Name,
+					}.String(),
+				}
+				forceMove := true
+				forceMoveHierarchy := true
+				o.types[getKindAPIString(typeMeta)] = &discoveryTypeInfo{
+					typeMeta:           typeMeta,
+					forceMove:          forceMove,
+					forceMoveHierarchy: forceMoveHierarchy,
+					scope:              crd.Spec.Scope,
+				}
+			}
+		}
+	}
+	return nil
+}
+
 // getKindAPIString returns a concatenated string of the API name and the plural of the kind
 // Ex: KIND=Foo API NAME=foo.bar.domain.tld => foos.foo.bar.domain.tld.
 func getKindAPIString(typeMeta metav1.TypeMeta) string {
@@ -418,22 +468,37 @@ func getCRDList(ctx context.Context, proxy Proxy, crdList *apiextensionsv1.Custo
 
 // Discovery reads all the Kubernetes objects existing in a namespace (or in all namespaces if empty) for the types received in input, and then adds
 // everything to the objects graph.
-func (o *objectGraph) Discovery(ctx context.Context, namespace string) error {
+func (o *objectGraph) Discovery(ctx context.Context, namespace string, clusterName string) error {
 	log := logf.Log
-	log.Info("Discovering Cluster API objects")
-
-	selectors := []client.ListOption{}
-	if namespace != "" {
-		selectors = append(selectors, client.InNamespace(namespace))
-	}
+	log.Info("Discovering Cluster API objects for", "cluster", clusterName, "namespace", namespace)
 
 	discoveryBackoff := newReadBackoff()
 	for _, discoveryType := range o.types {
+		currentKind := discoveryType.typeMeta.GetObjectKind().GroupVersionKind().Kind
 		typeMeta := discoveryType.typeMeta
 		objList := new(unstructured.UnstructuredList)
 
+		selectors := []client.ListOption{}
+		if namespace != "" {
+			selectors = append(selectors, client.InNamespace(namespace))
+		}
+
+		if currentKind == "Cluster" {
+			selectors = append(selectors, client.MatchingLabels{"tkg.tanzu.vmware.com/cluster-name": clusterName})
+		} else if currentKind != "KubeadmConfigTemplate" && currentKind != "AWSMachineTemplate" {
+			selectors = append(selectors, client.MatchingLabels{"cluster.x-k8s.io/cluster-name": clusterName})
+		}
+
 		if err := retryWithExponentialBackoff(ctx, discoveryBackoff, func(ctx context.Context) error {
-			return getObjList(ctx, o.proxy, typeMeta, selectors, objList)
+			err := getObjList(ctx, o.proxy, typeMeta, selectors, objList)
+			if err != nil {
+				return err
+			}
+			if currentKind == "KubeadmConfigTemplate" || currentKind == "AWSMachineTemplate" {
+				list := filterByClusterOwnerReference(typeMeta, clusterName, objList)
+				objList = list
+			}
+			return nil
 		}); err != nil {
 			return err
 		}
@@ -499,6 +564,22 @@ func getObjList(ctx context.Context, proxy Proxy, typeMeta metav1.TypeMeta, sele
 		return errors.Wrapf(err, "failed to list %q resources", objList.GroupVersionKind())
 	}
 	return nil
+}
+
+// filters the given by the owner reference where owner is the given cluster name
+func filterByClusterOwnerReference(typeMeta metav1.TypeMeta, clusterName string, objList *unstructured.UnstructuredList) *unstructured.UnstructuredList {
+	list := new(unstructured.UnstructuredList)
+	list.SetAPIVersion(typeMeta.APIVersion)
+	list.SetKind(typeMeta.Kind)
+	for _, obj := range objList.Items {
+		owners := obj.GetOwnerReferences()
+		for _, owner := range owners {
+			if owner.Name == clusterName {
+				list.Items = append(list.Items, obj)
+			}
+		}
+	}
+	return list
 }
 
 // getClusters returns the list of Clusters existing in the object graph.
@@ -575,6 +656,63 @@ func (o *objectGraph) getMoveNodes() []*node {
 		}
 	}
 	return nodes
+}
+
+func (o *objectGraph) getKCP() *node {
+	for _, node := range o.uidToNode {
+		if node.identity.GroupVersionKind().GroupKind() == controlplanev1.GroupVersion.WithKind("KubeadmControlPlane").GroupKind() {
+			return node
+		}
+	}
+	return nil
+}
+
+func (o *objectGraph) GetMachineDeployments() []*node {
+	nodes := []*node{}
+	for _, node := range o.uidToNode {
+		if node.identity.Kind == "MachineDeployment" {
+			nodes = append(nodes, node)
+		}
+	}
+	return nodes
+}
+
+func (o *objectGraph) getCluster() *node {
+	for _, node := range o.uidToNode {
+		if node.identity.Kind == "Cluster" {
+			return node
+		}
+	}
+	return nil
+}
+
+func (o *objectGraph) getAWSCluster() *node {
+	for _, node := range o.uidToNode {
+		if node.identity.Kind == "AWSCluster" {
+			return node
+		}
+	}
+	return nil
+}
+
+func (o *objectGraph) getAWSMT() []*node {
+	mts := []*node{}
+	for _, node := range o.uidToNode {
+		if node.identity.Kind == "AWSMachineTemplate" {
+			mts = append(mts, node)
+		}
+	}
+	return mts
+}
+
+func (o *objectGraph) getMD() []*node {
+	md := []*node{}
+	for _, node := range o.uidToNode {
+		if node.identity.GroupVersionKind().GroupKind() == clusterv1.GroupVersion.WithKind("MachineDeployment").GroupKind() {
+			md = append(md, node)
+		}
+	}
+	return md
 }
 
 // getMachines returns the list of Machine existing in the object graph.

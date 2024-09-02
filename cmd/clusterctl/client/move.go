@@ -18,6 +18,8 @@ package client
 
 import (
 	"context"
+	"fmt"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"os"
 
 	"github.com/pkg/errors"
@@ -35,6 +37,9 @@ type MoveOptions struct {
 	// default rules for kubeconfig discovery will be used.
 	ToKubeconfig Kubeconfig
 
+	// Convert to palette CRD input
+	ToPaletteCRD string
+
 	// Namespace where the objects describing the workload cluster exists. If unspecified, the current
 	// namespace will be used.
 	Namespace string
@@ -51,6 +56,11 @@ type MoveOptions struct {
 
 	// DryRun means the move action is a dry run, no real action will be performed.
 	DryRun bool
+
+	// palette specific options
+	IgnoreClusterClass bool
+	ClusterName        string
+	ToNamespace        string
 }
 
 func (c *clusterctlClient) Move(ctx context.Context, options MoveOptions) error {
@@ -62,8 +72,13 @@ func (c *clusterctlClient) Move(ctx context.Context, options MoveOptions) error 
 	if !options.DryRun &&
 		options.FromDirectory == "" &&
 		options.ToDirectory == "" &&
+		options.ToPaletteCRD == "" &&
 		options.ToKubeconfig == (Kubeconfig{}) {
 		return errors.Errorf("at least one of FromDirectory, ToDirectory and ToKubeconfig must be set")
+	}
+
+	if options.ToPaletteCRD != "" {
+		return c.toPaletteCRD(ctx, options)
 	}
 
 	if options.ToDirectory != "" {
@@ -99,7 +114,9 @@ func (c *clusterctlClient) move(ctx context.Context, options MoveOptions) error 
 		}
 	}
 
-	return fromCluster.ObjectMover().Move(ctx, options.Namespace, toCluster, options.DryRun, options.ExperimentalResourceMutators...)
+	mutators := getPaletteMutators(options.Namespace, options.ClusterName, options.ToNamespace)
+
+	return fromCluster.ObjectMover().Move(ctx, options.Namespace, options.ClusterName, toCluster, options.DryRun, mutators...)
 }
 
 func (c *clusterctlClient) fromDirectory(ctx context.Context, options MoveOptions) error {
@@ -134,7 +151,32 @@ func (c *clusterctlClient) toDirectory(ctx context.Context, options MoveOptions)
 		return err
 	}
 
-	return fromCluster.ObjectMover().ToDirectory(ctx, options.Namespace, options.ToDirectory)
+	mutators := getPaletteMutators(options.Namespace, options.ClusterName, options.ToNamespace)
+
+	return fromCluster.ObjectMover().ToDirectory(ctx, options.Namespace, options.ClusterName, options.ToDirectory, mutators...)
+}
+
+func (c *clusterctlClient) toPaletteCRD(ctx context.Context, options MoveOptions) error {
+	fromCluster, err := c.getClusterClient(ctx, options.FromKubeconfig)
+	if err != nil {
+		return err
+	}
+
+	// If the option specifying the Namespace is empty, try to detect it.
+	if options.Namespace == "" {
+		currentNamespace, err := fromCluster.Proxy().CurrentNamespace()
+		if err != nil {
+			return err
+		}
+		options.Namespace = currentNamespace
+	}
+
+	if _, err := os.Stat(options.ToPaletteCRD); os.IsNotExist(err) {
+		return err
+	}
+
+	mutators := GetClusterTemplateMutator()
+	return fromCluster.ObjectMover().ToPaletteCRD(ctx, options.Namespace, options.ClusterName, options.ToPaletteCRD, mutators)
 }
 
 func (c *clusterctlClient) getClusterClient(ctx context.Context, kubeconfig Kubeconfig) (cluster.Client, error) {
@@ -153,4 +195,157 @@ func (c *clusterctlClient) getClusterClient(ctx context.Context, kubeconfig Kube
 		return nil, err
 	}
 	return cluster, nil
+}
+
+func getPaletteMutators(currentNamespace, clusterName, targetNamespace string) []cluster.ResourceMutatorFunc {
+	fmt.Println("Applying palette namespace mutators")
+	return []cluster.ResourceMutatorFunc{getNamespaceMutator(targetNamespace)}
+}
+
+func getTemplateMutatorKinds() map[string][][]string {
+	kindsToUpdate := map[string][][]string{
+		"Cluster": {
+			//{"metadata", "annotations", "kubectl.kubernetes.io/last-applied-configuration"},
+			//{"metadata", "annotations", "TKGOperationInfo"},
+			//{"metadata", "annotations", "TKGOperationLastObservedTimestamp"},
+			{"metadata", "annotations"},
+			{"metadata", "creationTimestamp"},
+			{"metadata", "finalizers"},
+			{"metadata", "generation"},
+			{"metadata", "managedFields"},
+			{"metadata", "namespace"},
+			{"metadata", "resourceVersion"},
+			{"metadata", "uid"},
+			{"status"},
+		},
+		"AWSCluster": {
+			{"metadata", "annotations"},
+			{"metadata", "creationTimestamp"},
+			{"metadata", "ownerReferences"},
+			{"metadata", "finalizers"},
+			{"metadata", "generation"},
+			{"metadata", "managedFields"},
+			{"metadata", "namespace"},
+			{"metadata", "resourceVersion"},
+			{"metadata", "uid"},
+			{"status"},
+		},
+		"AWSMachineTemplate": {
+			{"metadata", "annotations"},
+			{"metadata", "creationTimestamp"},
+			{"metadata", "ownerReferences"},
+			{"metadata", "generation"},
+			{"metadata", "managedFields"},
+			{"metadata", "namespace"},
+			{"metadata", "resourceVersion"},
+			{"metadata", "uid"},
+			{"status"},
+		},
+		"KubeadmControlPlane": {
+			{"metadata", "annotations"},
+			{"metadata", "creationTimestamp"},
+			{"metadata", "ownerReferences"},
+			{"metadata", "finalizers"},
+			{"metadata", "generation"},
+			{"metadata", "managedFields"},
+			{"metadata", "namespace"},
+			{"metadata", "resourceVersion"},
+			{"metadata", "uid"},
+			{"status"},
+		},
+		"MachineDeployment": {
+			{"metadata", "annotations", "kubectl.kubernetes.io/last-applied-configuration"},
+			{"metadata", "annotations", "machinedeployment.clusters.x-k8s.io/revision"},
+			{"metadata", "creationTimestamp"},
+			{"metadata", "ownerReferences"},
+			{"metadata", "generation"},
+			{"metadata", "managedFields"},
+			{"metadata", "namespace"},
+			{"metadata", "resourceVersion"},
+			{"metadata", "uid"},
+			{"status"},
+		},
+		"KubeadmConfigTemplate": {
+			{"metadata", "annotations"},
+			{"metadata", "creationTimestamp"},
+			{"metadata", "ownerReferences"},
+			{"metadata", "generation"},
+			{"metadata", "managedFields"},
+			{"metadata", "namespace"},
+			{"metadata", "resourceVersion"},
+			{"metadata", "uid"},
+		},
+	}
+	return kindsToUpdate
+}
+
+func GetClusterTemplateMutator() cluster.ResourceMutatorFunc {
+	kinds := getTemplateMutatorKinds()
+	var mutator cluster.ResourceMutatorFunc = func(u *unstructured.Unstructured) error {
+		if u == nil || u.Object == nil {
+			return nil
+		}
+		if fields, knownKind := kinds[u.GetKind()]; knownKind {
+			for _, nsField := range fields {
+				_, exists, err := unstructured.NestedFieldNoCopy(u.Object, nsField...)
+				if err != nil {
+					fmt.Println("Failed to get field")
+					return err
+				}
+				if exists {
+					unstructured.RemoveNestedField(u.Object, nsField...)
+				}
+			}
+		}
+		return nil
+	}
+	return mutator
+}
+
+func getNamespaceMutator(targetNamespace string) cluster.ResourceMutatorFunc {
+	kinds := getNamespaceFieldsToBeUpdated()
+	var namespaceMutator cluster.ResourceMutatorFunc = func(u *unstructured.Unstructured) error {
+		if u == nil || u.Object == nil {
+			return nil
+		}
+		if u.GetNamespace() != "" {
+			u.SetNamespace(targetNamespace)
+		}
+		if fields, knownKind := kinds[u.GetKind()]; knownKind {
+			for _, nsField := range fields {
+				_, exists, err := unstructured.NestedFieldNoCopy(u.Object, nsField...)
+				if err != nil {
+					fmt.Println("Failed to get field")
+					return err
+				}
+				if exists {
+					err := unstructured.SetNestedField(u.Object, targetNamespace, nsField...)
+					if err != nil {
+						fmt.Println("Failed to set field")
+						return err
+					}
+				}
+			}
+		}
+		return nil
+	}
+	return namespaceMutator
+}
+
+func getNamespaceFieldsToBeUpdated() map[string][][]string {
+	kindsToUpdate := map[string][][]string{
+		"Cluster": {
+			{"metadata", "namespace"},
+			{"spec", "controlPlaneRef", "namespace"},
+			{"spec", "infrastructureRef", "namespace"},
+		},
+		"KubeadmControlPlane": {
+			{"spec", "machineTemplate", "infrastructureRef", "namespace"},
+		},
+		"Machine": {
+			{"spec", "bootstrap", "configRef", "namespace"},
+			{"spec", "infrastructureRef", "namespace"},
+		},
+	}
+	return kindsToUpdate
 }

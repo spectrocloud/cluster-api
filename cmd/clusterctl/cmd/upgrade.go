@@ -35,9 +35,9 @@ var upgradeCmd = &cobra.Command{
 }
 
 func init() {
-	upgradeCmd.AddCommand(upgradePlanCmd)
-	upgradeCmd.AddCommand(upgradeApplyCmd)
-	RootCmd.AddCommand(upgradeCmd)
+	//upgradeCmd.AddCommand(upgradePlanCmd)
+	//upgradeCmd.AddCommand(upgradeApplyCmd)
+	//RootCmd.AddCommand(upgradeCmd)
 }
 
 func sortUpgradeItems(plan client.UpgradePlan) {

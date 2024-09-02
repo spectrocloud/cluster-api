@@ -1790,7 +1790,7 @@ func TestObjectGraph_Discovery(t *testing.T) {
 			g.Expect(err).ToNot(HaveOccurred())
 
 			// finally test discovery
-			err = graph.Discovery(ctx, "")
+			err = graph.Discovery(ctx, "", "")
 			if tt.wantErr {
 				g.Expect(err).To(HaveOccurred())
 				return
@@ -1948,7 +1948,7 @@ func TestObjectGraph_DiscoveryByNamespace(t *testing.T) {
 			g.Expect(err).ToNot(HaveOccurred())
 
 			// finally test discovery
-			err = graph.Discovery(ctx, tt.args.namespace)
+			err = graph.Discovery(ctx, tt.args.namespace, "")
 			if tt.wantErr {
 				g.Expect(err).To(HaveOccurred())
 				return

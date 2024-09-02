@@ -118,7 +118,7 @@ func init() {
 	deleteCmd.Flags().BoolVar(&dd.deleteAll, "all", false,
 		"Force deletion of all the providers")
 
-	RootCmd.AddCommand(deleteCmd)
+	//RootCmd.AddCommand(deleteCmd)
 }
 
 func runDelete() error {

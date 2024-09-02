@@ -118,7 +118,7 @@ func init() {
 		"If true, clusterctl will validate that the deployments will succeed on the management cluster.")
 
 	initCmd.AddCommand(initListImagesCmd)
-	RootCmd.AddCommand(initCmd)
+	//RootCmd.AddCommand(initCmd)
 }
 
 func runInit() error {

@@ -76,7 +76,7 @@ func init() {
 		"cluster",
 	)
 
-	getCmd.AddCommand(getKubeconfigCmd)
+	//getCmd.AddCommand(getKubeconfigCmd)
 }
 
 func runGetKubeconfig(workloadClusterName string) error {

@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/pkg/errors"
@@ -48,16 +49,25 @@ import (
 // ResourceMutatorFunc holds the type for mutators to be applied on resources during a move operation.
 type ResourceMutatorFunc func(u *unstructured.Unstructured) error
 
+const (
+	clusterTemplate      = "clusterTemplate"
+	controlPlaneTemplate = "controlPlaneTemplate"
+	workerTemplate       = "workerTemplate"
+)
+
 // ObjectMover defines methods for moving Cluster API objects to another management cluster.
 type ObjectMover interface {
 	// Move moves all the Cluster API objects existing in a namespace (or from all the namespaces if empty) to a target management cluster.
-	Move(ctx context.Context, namespace string, toCluster Client, dryRun bool, mutators ...ResourceMutatorFunc) error
+	Move(ctx context.Context, namespace string, clusterName string, toCluster Client, dryRun bool, mutators ...ResourceMutatorFunc) error
 
 	// ToDirectory writes all the Cluster API objects existing in a namespace (or from all the namespaces if empty) to a target directory.
-	ToDirectory(ctx context.Context, namespace string, directory string) error
+	ToDirectory(ctx context.Context, namespace string, clusterName string, directory string, mutators ...ResourceMutatorFunc) error
 
 	// FromDirectory reads all the Cluster API objects existing in a configured directory to a target management cluster.
 	FromDirectory(ctx context.Context, toCluster Client, directory string) error
+
+	// ToPaletteCRD's
+	ToPaletteCRD(ctx context.Context, namespace string, clusterName string, directory string, mutators ...ResourceMutatorFunc) error
 }
 
 // objectMover implements the ObjectMover interface.
@@ -70,9 +80,9 @@ type objectMover struct {
 // ensure objectMover implements the ObjectMover interface.
 var _ ObjectMover = &objectMover{}
 
-func (o *objectMover) Move(ctx context.Context, namespace string, toCluster Client, dryRun bool, mutators ...ResourceMutatorFunc) error {
+func (o *objectMover) Move(ctx context.Context, namespace string, clusterName string, toCluster Client, dryRun bool, mutators ...ResourceMutatorFunc) error {
 	log := logf.Log
-	log.Info("Performing move...")
+	log.Info("Performing move operation", "clusterName", clusterName, "namespace", namespace)
 	o.dryRun = dryRun
 	if o.dryRun {
 		log.Info("********************************************************")
@@ -87,7 +97,7 @@ func (o *objectMover) Move(ctx context.Context, namespace string, toCluster Clie
 		}
 	}
 
-	objectGraph, err := o.getObjectGraph(ctx, namespace)
+	objectGraph, err := o.getObjectGraph(ctx, namespace, clusterName, "")
 	if err != nil {
 		return errors.Wrap(err, "failed to get object graph")
 	}
@@ -101,16 +111,38 @@ func (o *objectMover) Move(ctx context.Context, namespace string, toCluster Clie
 	return o.move(ctx, objectGraph, proxy, mutators...)
 }
 
-func (o *objectMover) ToDirectory(ctx context.Context, namespace string, directory string) error {
+func (o *objectMover) ToDirectory(ctx context.Context, namespace string, clusterName string, directory string, mutators ...ResourceMutatorFunc) error {
 	log := logf.Log
 	log.Info("Moving to directory...")
 
-	objectGraph, err := o.getObjectGraph(ctx, namespace)
+	objectGraph, err := o.getObjectGraph(ctx, namespace, clusterName, "")
 	if err != nil {
 		return errors.Wrap(err, "failed to get object graph")
 	}
 
-	return o.toDirectory(ctx, objectGraph, directory)
+	return o.toDirectory(ctx, objectGraph, directory, mutators...)
+}
+
+func (o *objectMover) ToPaletteCRD(ctx context.Context, namespace string, clusterName string, directory string, mutators ...ResourceMutatorFunc) error {
+	log := logf.Log
+
+	objectGraph, err := o.getObjectGraph(ctx, namespace, clusterName, clusterTemplate)
+	if err != nil {
+		return errors.Wrap(err, "failed to get object graph")
+	}
+
+	templates := getPaletteMoveSequence(objectGraph)
+	// Save all objects group by group
+	log.Info(fmt.Sprintf("Saving template files to directory  %s", directory))
+
+	for template, moveGroup := range templates.groups {
+		for _, group := range moveGroup {
+			if err := o.backupTemplate(ctx, group, directory, template, mutators...); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func (o *objectMover) FromDirectory(ctx context.Context, toCluster Client, directory string) error {
@@ -184,19 +216,26 @@ func (o *objectMover) filesToObjs(dir string) ([]unstructured.Unstructured, erro
 	return objs, nil
 }
 
-func (o *objectMover) getObjectGraph(ctx context.Context, namespace string) (*objectGraph, error) {
+func (o *objectMover) getObjectGraph(ctx context.Context, namespace string, clusterName string, graphType string) (*objectGraph, error) {
 	objectGraph := newObjectGraph(o.fromProxy, o.fromProviderInventory)
 
 	// Gets all the types defined by the CRDs installed by clusterctl plus the ConfigMap/Secret core types.
-	err := objectGraph.getDiscoveryTypes(ctx)
-	if err != nil {
-		return nil, errors.Wrap(err, "failed to retrieve discovery types")
+	if graphType == clusterTemplate {
+		err := objectGraph.getPaletteTemplateDiscoveryTypes(ctx)
+		if err != nil {
+			return nil, errors.Wrap(err, "failed to retrieve discovery types")
+		}
+	} else {
+		err := objectGraph.getDiscoveryTypes(ctx)
+		if err != nil {
+			return nil, errors.Wrap(err, "failed to retrieve discovery types")
+		}
 	}
 
 	// Discovery the object graph for the selected types:
 	// - Nodes are defined the Kubernetes objects (Clusters, Machines etc.) identified during the discovery process.
 	// - Edges are derived by the OwnerReferences between nodes.
-	if err := objectGraph.Discovery(ctx, namespace); err != nil {
+	if err := objectGraph.Discovery(ctx, namespace, clusterName); err != nil {
 		return nil, errors.Wrap(err, "failed to discover the object graph")
 	}
 
@@ -204,8 +243,10 @@ func (o *objectMover) getObjectGraph(ctx context.Context, namespace string) (*ob
 	// This is required because if the infrastructure is provisioned, then we can reasonably assume that the objects we are moving/backing up are
 	// not currently waiting for long-running reconciliation loops, and so we can safely rely on the pause field on the Cluster object
 	// for blocking any further object reconciliation on the source objects.
-	if err := o.checkProvisioningCompleted(ctx, objectGraph); err != nil {
-		return nil, errors.Wrap(err, "failed to check for provisioned infrastructure")
+	if graphType == "" {
+		if err := o.checkProvisioningCompleted(ctx, objectGraph); err != nil {
+			return nil, errors.Wrap(err, "failed to check for provisioned infrastructure")
+		}
 	}
 
 	// Check whether nodes are not included in GVK considered for move
@@ -390,7 +431,7 @@ func (o *objectMover) move(ctx context.Context, graph *objectGraph, toProxy Prox
 	return setClusterPause(ctx, toProxy, clusters, false, o.dryRun, mutators...)
 }
 
-func (o *objectMover) toDirectory(ctx context.Context, graph *objectGraph, directory string) error {
+func (o *objectMover) toDirectory(ctx context.Context, graph *objectGraph, directory string, mutators ...ResourceMutatorFunc) error {
 	log := logf.Log
 
 	clusters := graph.getClusters()
@@ -420,7 +461,7 @@ func (o *objectMover) toDirectory(ctx context.Context, graph *objectGraph, direc
 	// Save all objects group by group
 	log.Info(fmt.Sprintf("Saving files to %s", directory))
 	for groupIndex := range len(moveSequence.groups) {
-		if err := o.backupGroup(ctx, moveSequence.getGroup(groupIndex), directory); err != nil {
+		if err := o.backupGroup(ctx, moveSequence.getGroup(groupIndex), directory, mutators...); err != nil {
 			return err
 		}
 	}
@@ -517,7 +558,7 @@ func getMoveSequence(graph *objectGraph) *moveSequence {
 		// NB. it is necessary to filter out nodes not belonging to a cluster because e.g. discovery reads all the secrets,
 		// but only few of them are related to Clusters/Machines etc.
 		moveGroup := moveGroup{}
-
+		
 		for _, n := range graph.getMoveNodes() {
 			// If the node was already included in the moveSequence, skip it.
 			if moveSequence.hasNode(n) {
@@ -550,6 +591,57 @@ func getMoveSequence(graph *objectGraph) *moveSequence {
 		}
 		moveSequence.addGroup(moveGroup)
 	}
+	return moveSequence
+}
+
+type paletteTemplate struct {
+	groups map[string][]moveGroup
+}
+
+// Define the move sequence by processing the ownerReference chain.
+func getPaletteMoveSequence(graph *objectGraph) *paletteTemplate {
+	moveSequence := &paletteTemplate{
+		groups: map[string][]moveGroup{},
+	}
+
+	// Get Cluster template which includes Cluster and AWSCluster object
+	var clusterGroup []*node
+	clusterNode := graph.getCluster()
+	awsClusterNode := graph.getAWSCluster()
+	clusterGroup = append(clusterGroup, clusterNode, awsClusterNode)
+	moveSequence.groups[clusterTemplate] = []moveGroup{clusterGroup}
+
+	// Get Control plane template
+	var cpGroup []*node
+	kcpNode := graph.getKCP()
+	cpGroup = append(cpGroup, kcpNode)
+	for _, n := range graph.getMoveNodes() {
+		if n.identity.Kind == "AWSMachineTemplate" {
+			if strings.HasSuffix(n.identity.Name, kcpNode.identity.Name) {
+				cpGroup = append(cpGroup, n)
+			}
+		}
+	}
+	moveSequence.groups[controlPlaneTemplate] = []moveGroup{cpGroup}
+
+	// Get worker templates
+	var workerGroups []moveGroup
+	mdNodes := graph.GetMachineDeployments()
+	for _, mdNode := range mdNodes {
+		var mdGroup []*node
+		mdGroup = append(mdGroup, mdNode)
+		// Add corresponding Machine templates to this group
+		for _, n := range graph.getMoveNodes() {
+			if n.identity.Kind == "AWSMachineTemplate" || n.identity.Kind == "KubeadmConfigTemplate" {
+				if strings.HasSuffix(n.identity.Name, mdNode.identity.Name) {
+					mdGroup = append(mdGroup, n)
+				}
+			}
+		}
+		workerGroups = append(workerGroups, mdGroup)
+	}
+	moveSequence.groups[workerTemplate] = workerGroups
+
 	return moveSequence
 }
 
@@ -884,7 +976,7 @@ func (o *objectMover) createGroup(ctx context.Context, group moveGroup, toProxy 
 	return nil
 }
 
-func (o *objectMover) backupGroup(ctx context.Context, group moveGroup, directory string) error {
+func (o *objectMover) backupGroup(ctx context.Context, group moveGroup, directory string, mutators ...ResourceMutatorFunc) error {
 	backupTargetObjectBackoff := newWriteBackoff()
 	errList := []error{}
 
@@ -892,7 +984,7 @@ func (o *objectMover) backupGroup(ctx context.Context, group moveGroup, director
 		// Backs-up the Kubernetes object corresponding to the nodeToBackup.
 		// Nb. The operation is wrapped in a retry loop to make move more resilient to unexpected conditions.
 		err := retryWithExponentialBackoff(ctx, backupTargetObjectBackoff, func(ctx context.Context) error {
-			return o.backupTargetObject(ctx, nodeToBackup, directory)
+			return o.backupTargetObject(ctx, nodeToBackup, directory, mutators)
 		})
 		if err != nil {
 			errList = append(errList, err)
@@ -904,6 +996,96 @@ func (o *objectMover) backupGroup(ctx context.Context, group moveGroup, director
 	}
 
 	return nil
+}
+
+func (o *objectMover) backupTemplate(ctx context.Context, group moveGroup, directory string, template string, mutators ...ResourceMutatorFunc) error {
+	var objList []unstructured.Unstructured
+	workerTemplateIdentifier := ""
+	for _, nodeToBackup := range group {
+		obj, err := o.getTargetObject(ctx, nodeToBackup, directory, mutators)
+		if err != nil {
+			return err
+		}
+		if obj.GetKind() == "MachineDeployment" {
+			workerTemplateIdentifier = obj.GetName()
+			splits := strings.Split(workerTemplateIdentifier, "-md-")
+			if len(splits) == 2 {
+				workerTemplateIdentifier = splits[1]
+			}
+		}
+		objList = append(objList, obj)
+	}
+	byObj, err := yaml.FromUnstructured(objList)
+	if err != nil {
+		return err
+	}
+
+	objectFile := filepath.Join(directory, getFileName(template, workerTemplateIdentifier))
+
+	// If file exists, then remove it to be written again
+	_, err = os.Stat(objectFile)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if err == nil {
+		if err := os.Remove(objectFile); err != nil {
+			return err
+		}
+	}
+
+	err = os.WriteFile(objectFile, byObj, 0600)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func getFileName(template string, identifier string) string {
+	fileName := ""
+	switch template {
+	case clusterTemplate:
+		return "ClusterTemplate.yaml"
+	case controlPlaneTemplate:
+		return "ControlPlaneTemplate.yaml"
+	case "workerTemplate":
+		if identifier != "" {
+			return fmt.Sprintf("WorkerTemplate-%s.yaml", identifier)
+		}
+		return "WorkerTemplate.yaml"
+	}
+	return fileName
+}
+
+func (o *objectMover) getTargetObject(ctx context.Context, nodeToCreate *node, directory string, mutators []ResourceMutatorFunc) (unstructured.Unstructured, error) {
+	log := logf.Log
+	log.V(1).Info("Saving", nodeToCreate.identity.Kind, nodeToCreate.identity.Name, "Namespace", nodeToCreate.identity.Namespace)
+
+	obj := &unstructured.Unstructured{}
+
+	cFrom, err := o.fromProxy.NewClient(ctx)
+	if err != nil {
+		return *obj, err
+	}
+
+	// Get the source object
+	obj.SetAPIVersion(nodeToCreate.identity.APIVersion)
+	obj.SetKind(nodeToCreate.identity.Kind)
+	objKey := client.ObjectKey{
+		Namespace: nodeToCreate.identity.Namespace,
+		Name:      nodeToCreate.identity.Name,
+	}
+
+	if err := cFrom.Get(ctx, objKey, obj); err != nil {
+		return *obj, errors.Wrapf(err, "error reading %q %s/%s",
+			obj.GroupVersionKind(), obj.GetNamespace(), obj.GetName())
+	}
+
+	// Apply mutators before writing to directory
+	obj, err = applyMutators(obj, mutators...)
+	if err != nil {
+		return *obj, err
+	}
+	return *obj, nil
 }
 
 func (o *objectMover) restoreGroup(ctx context.Context, group moveGroup, toProxy Proxy) error {
@@ -1028,7 +1210,7 @@ func (o *objectMover) createTargetObject(ctx context.Context, nodeToCreate *node
 	return nil
 }
 
-func (o *objectMover) backupTargetObject(ctx context.Context, nodeToCreate *node, directory string) error {
+func (o *objectMover) backupTargetObject(ctx context.Context, nodeToCreate *node, directory string, mutators []ResourceMutatorFunc) error {
 	log := logf.Log
 	log.V(1).Info("Saving", nodeToCreate.identity.Kind, nodeToCreate.identity.Name, "Namespace", nodeToCreate.identity.Namespace)
 
@@ -1049,6 +1231,12 @@ func (o *objectMover) backupTargetObject(ctx context.Context, nodeToCreate *node
 	if err := cFrom.Get(ctx, objKey, obj); err != nil {
 		return errors.Wrapf(err, "error reading %q %s/%s",
 			obj.GroupVersionKind(), obj.GetNamespace(), obj.GetName())
+	}
+
+	// Apply mutators before writing to directory
+	obj, err = applyMutators(obj, mutators...)
+	if err != nil {
+		return err
 	}
 
 	// Get JSON for object and write it into the configured directory

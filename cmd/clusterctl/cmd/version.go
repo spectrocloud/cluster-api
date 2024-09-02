@@ -41,7 +41,7 @@ var vo = &versionOptions{}
 var versionCmd = &cobra.Command{
 	Use:     "version",
 	GroupID: groupOther,
-	Short:   "Print clusterctl version",
+	Short:   "Print palettectl version",
 	Args:    cobra.NoArgs,
 	RunE: func(*cobra.Command, []string) error {
 		return runVersion()

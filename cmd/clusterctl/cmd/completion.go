@@ -118,7 +118,7 @@ func GetSupportedShells() []string {
 }
 
 func init() {
-	RootCmd.AddCommand(completionCmd)
+	//RootCmd.AddCommand(completionCmd)
 }
 
 func runCompletion(out io.Writer, cmd *cobra.Command, shell string) error {

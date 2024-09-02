@@ -781,6 +781,10 @@ verify-import-restrictions: $(IMPORT_BOSS) ## Verify import restrictions with im
 clusterctl: ## Build the clusterctl binary
 	go build -trimpath -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/clusterctl sigs.k8s.io/cluster-api/cmd/clusterctl
 
+.PHONY: palettectl
+palettectl: ## Build the clusterctl binary
+	go build -trimpath -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/palettectl sigs.k8s.io/cluster-api/cmd/clusterctl
+
 ALL_MANAGERS = core kubeadm-bootstrap kubeadm-control-plane docker-infrastructure in-memory-infrastructure
 
 .PHONY: managers

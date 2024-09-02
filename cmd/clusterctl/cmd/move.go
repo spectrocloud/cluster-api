@@ -34,6 +34,12 @@ type moveOptions struct {
 	fromDirectory         string
 	toDirectory           string
 	dryRun                bool
+
+	// palette specific options
+	toNamespace        string
+	clusterName        string
+	ignoreClusterClass bool
+	toPaletteCRD       string
 }
 
 var mo = &moveOptions{}
@@ -43,19 +49,16 @@ var moveCmd = &cobra.Command{
 	GroupID: groupManagement,
 	Short:   "Move Cluster API objects and all dependencies between management clusters",
 	Long: LongDesc(`
-		Move Cluster API objects and all dependencies between management clusters.
+		Move Cluster API objects and all dependencies between management/workload clusters.
 
 		Note: The destination cluster MUST have the required provider components installed.`),
 
 	Example: Examples(`
 		Move Cluster API objects and all dependencies between management clusters.
-		clusterctl move --to-kubeconfig=target-kubeconfig.yaml
+		palettectl move -n source-namespace --clusterName cluster-to-be-moved --to-namespace cluster-87wekfg858qwefgqliufgp578 --to-kubeconfig=target-kubeconfig.yaml
 
-		Write Cluster API objects and all dependencies from a management cluster to directory.
-		clusterctl move --to-directory /tmp/backup-directory
-
-		Read Cluster API objects and all dependencies from a directory into a management cluster.
-		clusterctl move --from-directory /tmp/backup-directory
+		Write Cluster API objects in palette consumable template format from a management cluster to directory.
+		palettectl move -n source-namespace --clusterName cluster-to-be-moved --to-template-directory /tmp/backup-directory
 	`),
 	Args: cobra.NoArgs,
 	RunE: func(*cobra.Command, []string) error {
@@ -76,14 +79,24 @@ func init() {
 		"The namespace where the workload cluster is hosted. If unspecified, the current context's namespace is used.")
 	moveCmd.Flags().BoolVar(&mo.dryRun, "dry-run", false,
 		"Enable dry run, don't really perform the move actions")
-	moveCmd.Flags().StringVar(&mo.toDirectory, "to-directory", "",
-		"Write Cluster API objects and all dependencies from a management cluster to directory.")
-	moveCmd.Flags().StringVar(&mo.fromDirectory, "from-directory", "",
-		"Read Cluster API objects and all dependencies from a directory into a management cluster.")
+	//moveCmd.Flags().StringVar(&mo.toDirectory, "to-directory", "",
+	//	"Write Cluster API objects and all dependencies from a management cluster to directory.")
+	//moveCmd.Flags().StringVar(&mo.fromDirectory, "from-directory", "",
+	//	"Read Cluster API objects and all dependencies from a directory into a management cluster.")
 
-	moveCmd.MarkFlagsMutuallyExclusive("to-directory", "to-kubeconfig")
-	moveCmd.MarkFlagsMutuallyExclusive("from-directory", "to-directory")
-	moveCmd.MarkFlagsMutuallyExclusive("from-directory", "kubeconfig")
+	// palette specific flags
+	moveCmd.Flags().StringVar(&mo.toPaletteCRD, "to-template-directory", "",
+		"Write Cluster API objects output in palette template format to directory")
+	moveCmd.Flags().StringVar(&mo.toNamespace, "to-namespace", "",
+		"Namespace where the cluster needs to be moved on destination cluster")
+	moveCmd.Flags().StringVar(&mo.clusterName, "clusterName", "",
+		"The cluster that needs to be moved")
+	//moveCmd.Flags().BoolVar(&mo.ignoreClusterClass, "ignore-cluster-class", false,
+	//	"Ignore cluster class while moving the resources to target cluster")
+
+	moveCmd.MarkFlagsMutuallyExclusive("to-template-directory", "to-kubeconfig")
+	//moveCmd.MarkFlagsMutuallyExclusive("from-directory", "to-directory")
+	//moveCmd.MarkFlagsMutuallyExclusive("from-directory", "kubeconfig")
 
 	RootCmd.AddCommand(moveCmd)
 }
@@ -94,6 +107,7 @@ func runMove() error {
 	if mo.toDirectory == "" &&
 		mo.fromDirectory == "" &&
 		mo.toKubeconfig == "" &&
+		mo.toPaletteCRD == "" &&
 		!mo.dryRun {
 		return errors.New("please specify a target cluster using the --to-kubeconfig flag when not using --dry-run, --to-directory or --from-directory")
 	}
@@ -106,9 +120,12 @@ func runMove() error {
 	return c.Move(ctx, client.MoveOptions{
 		FromKubeconfig: client.Kubeconfig{Path: mo.fromKubeconfig, Context: mo.fromKubeconfigContext},
 		ToKubeconfig:   client.Kubeconfig{Path: mo.toKubeconfig, Context: mo.toKubeconfigContext},
-		FromDirectory:  mo.fromDirectory,
-		ToDirectory:    mo.toDirectory,
-		Namespace:      mo.namespace,
-		DryRun:         mo.dryRun,
+		//FromDirectory:  mo.fromDirectory,
+		//ToDirectory:    mo.toDirectory,
+		Namespace:    mo.namespace,
+		DryRun:       mo.dryRun,
+		ClusterName:  mo.clusterName,
+		ToNamespace:  mo.toNamespace,
+		ToPaletteCRD: mo.toPaletteCRD,
 	})
 }

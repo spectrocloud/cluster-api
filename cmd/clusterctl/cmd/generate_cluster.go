@@ -143,7 +143,7 @@ func init() {
 		"Returns the list of variables expected by the template instead of the template yaml")
 	generateClusterClusterCmd.Flags().StringVar(&gc.output, "write-to", "", "Specify the output file to write the template to, defaults to STDOUT if the flag is not set")
 
-	generateCmd.AddCommand(generateClusterClusterCmd)
+	//generateCmd.AddCommand(generateClusterClusterCmd)
 }
 
 func runGenerateClusterTemplate(cmd *cobra.Command, name string) error {

@@ -103,7 +103,7 @@ func init() {
 
 	generateProviderCmd.Flags().StringVar(&gpo.outputFile, "write-to", "", "Specify the output file to write the template to, defaults to STDOUT if the flag is not set")
 
-	generateCmd.AddCommand(generateProviderCmd)
+	//generateCmd.AddCommand(generateProviderCmd)
 }
 
 func runGenerateProviderComponents() error {

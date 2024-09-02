@@ -74,7 +74,7 @@ var configRepositoryCmd = &cobra.Command{
 func init() {
 	configRepositoryCmd.Flags().StringVarP(&cro.output, "output", "o", RepositoriesOutputText,
 		fmt.Sprintf("Output format. Valid values: %v.", RepositoriesOutputs))
-	configCmd.AddCommand(configRepositoryCmd)
+	//configCmd.AddCommand(configRepositoryCmd)
 }
 
 func runGetRepositories(cfgFile string, out io.Writer) error {

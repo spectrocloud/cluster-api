@@ -109,7 +109,7 @@ func init() {
 
 	topologyPlanCmd.Deprecated = "it will be removed in one of the upcoming releases.\n"
 
-	topologyCmd.AddCommand(topologyPlanCmd)
+	//topologyCmd.AddCommand(topologyPlanCmd)
 }
 
 func runTopologyPlan() error {

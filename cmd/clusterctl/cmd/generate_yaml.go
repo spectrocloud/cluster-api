@@ -76,7 +76,7 @@ func init() {
 	generateYamlCmd.Flags().BoolVar(&gyOpts.listVariables, "list-variables", false,
 		"Returns the list of variables expected by the template instead of the template yaml")
 
-	generateCmd.AddCommand(generateYamlCmd)
+	//.AddCommand(generateYamlCmd)
 }
 
 func generateYAML(r io.Reader, w io.Writer) error {

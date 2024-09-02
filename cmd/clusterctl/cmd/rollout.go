@@ -18,8 +18,6 @@ package cmd
 
 import (
 	"github.com/spf13/cobra"
-
-	"sigs.k8s.io/cluster-api/cmd/clusterctl/cmd/rollout"
 )
 
 var (
@@ -57,8 +55,8 @@ var (
 
 func init() {
 	// subcommands
-	rolloutCmd.AddCommand(rollout.NewCmdRolloutRestart(cfgFile))
-	rolloutCmd.AddCommand(rollout.NewCmdRolloutPause(cfgFile))
-	rolloutCmd.AddCommand(rollout.NewCmdRolloutResume(cfgFile))
-	rolloutCmd.AddCommand(rollout.NewCmdRolloutUndo(cfgFile))
+	//rolloutCmd.AddCommand(rollout.NewCmdRolloutRestart(cfgFile))
+	//rolloutCmd.AddCommand(rollout.NewCmdRolloutPause(cfgFile))
+	//rolloutCmd.AddCommand(rollout.NewCmdRolloutResume(cfgFile))
+	//rolloutCmd.AddCommand(rollout.NewCmdRolloutUndo(cfgFile))
 }

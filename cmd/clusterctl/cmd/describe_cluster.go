@@ -143,7 +143,7 @@ func init() {
 		"cluster",
 	)
 
-	describeCmd.AddCommand(describeClusterClusterCmd)
+	//describeCmd.AddCommand(describeClusterClusterCmd)
 }
 
 func runDescribeCluster(cmd *cobra.Command, name string) error {

@@ -53,12 +53,12 @@ var (
 
 // RootCmd is clusterctl root CLI command.
 var RootCmd = &cobra.Command{
-	Use:          "clusterctl",
+	Use:          "palettectl",
 	SilenceUsage: true,
-	Short:        "clusterctl controls the lifecycle of a Cluster API management cluster",
+	Short:        "palettectl manages pivot for CAPI based clusters",
 	Long: LongDesc(`
-		Get started with Cluster API using clusterctl to create a management cluster,
-		install providers, and create templates for your workload cluster.`),
+		Get started with Pivot for Cluster API based clusters using palettectl to move clusters from mgmt to workload
+		and generating templates to be consumed by palette for takeover process`),
 	PersistentPostRunE: func(*cobra.Command, []string) error {
 		ctx := context.Background()
 
@@ -70,6 +70,11 @@ var RootCmd = &cobra.Command{
 		}
 		disable, err := configClient.Variables().Get("CLUSTERCTL_DISABLE_VERSIONCHECK")
 		if err == nil && disable == "true" {
+			// version check is disabled. Return early.
+			return nil
+		}
+		clusterctlVersionCheckDisabled := true
+		if clusterctlVersionCheckDisabled {
 			// version check is disabled. Return early.
 			return nil
 		}
@@ -124,44 +129,44 @@ func Execute() {
 func init() {
 	flag.CommandLine = flag.NewFlagSet(os.Args[0], flag.ExitOnError)
 
-	verbosity = flag.CommandLine.Int("v", 0, "Set the log level verbosity. This overrides the CLUSTERCTL_LOG_LEVEL environment variable.")
+	verbosity = flag.CommandLine.Int("v", 0, "Set the log level verbosity. This overrides the PALETTECTL_LOG_LEVEL environment variable.")
 
 	RootCmd.PersistentFlags().AddGoFlagSet(flag.CommandLine)
-	RootCmd.PersistentFlags().StringVar(&cfgFile, "config", "",
-		"Path to clusterctl configuration (default is `$XDG_CONFIG_HOME/cluster-api/clusterctl.yaml`) or to a remote location (i.e. https://example.com/clusterctl.yaml)")
+	//RootCmd.PersistentFlags().StringVar(&cfgFile, "config", "",
+	//	"Path to clusterctl configuration (default is `$XDG_CONFIG_HOME/cluster-api/clusterctl.yaml`) or to a remote location (i.e. https://example.com/clusterctl.yaml)")
 
 	RootCmd.AddGroup(
 		&cobra.Group{
 			ID:    groupManagement,
-			Title: "Cluster Management Commands:",
+			Title: "Cluster takeover Commands:",
 		},
-		&cobra.Group{
-			ID:    groupDebug,
-			Title: "Troubleshooting and Debugging Commands:",
-		},
+		//&cobra.Group{
+		//	ID:    groupDebug,
+		//	Title: "Troubleshooting and Debugging Commands:",
+		//},
 		&cobra.Group{
 			ID:    groupOther,
 			Title: "Other Commands:",
 		})
 
 	RootCmd.SetHelpCommandGroupID(groupOther)
-	RootCmd.SetCompletionCommandGroupID(groupOther)
+	//RootCmd.SetCompletionCommandGroupID(groupOther)
 
-	cobra.OnInitialize(initConfig, registerCompletionFuncForCommonFlags)
+	cobra.OnInitialize(initConfig) //, registerCompletionFuncForCommonFlags)
 }
 
 func initConfig() {
 	ctx := context.Background()
 
-	// check if the CLUSTERCTL_LOG_LEVEL was set via env var or in the config file
+	// check if the PALETTECTL_LOG_LEVEL was set via env var or in the config file
 	if *verbosity == 0 {
 		configClient, err := config.New(ctx, cfgFile)
 		if err == nil {
-			v, err := configClient.Variables().Get("CLUSTERCTL_LOG_LEVEL")
+			v, err := configClient.Variables().Get("PALETTECTL_LOG_LEVEL")
 			if err == nil && v != "" {
 				verbosityFromEnv, err := strconv.Atoi(v)
 				if err != nil {
-					fmt.Fprintf(os.Stderr, "Failed to convert CLUSTERCTL_LOG_LEVEL string to an int. err=%s\n", err.Error())
+					fmt.Fprintf(os.Stderr, "Failed to convert PALETTECTL_LOG_LEVEL string to an int. err=%s\n", err.Error())
 					os.Exit(1)
 				}
 				verbosity = &verbosityFromEnv
