@@ -216,6 +216,8 @@ func getTemplateMutatorKinds() map[string][][]string {
 			{"metadata", "namespace"},
 			{"metadata", "resourceVersion"},
 			{"metadata", "uid"},
+			{"spec", "controlPlaneRef", "namespace"},
+			{"spec", "infrastructureRef", "namespace"},
 			{"status"},
 		},
 		"AWSCluster": {
@@ -251,6 +253,7 @@ func getTemplateMutatorKinds() map[string][][]string {
 			{"metadata", "namespace"},
 			{"metadata", "resourceVersion"},
 			{"metadata", "uid"},
+			{"spec", "machineTemplate", "infrastructureRef", "namespace"},
 			{"status"},
 		},
 		"MachineDeployment": {
