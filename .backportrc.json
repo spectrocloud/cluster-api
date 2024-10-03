@@ -1,6 +1,6 @@
 {
   "repoOwner": "spectrocloud",
-  "repoName": "palette",
+  "repoName": "cluster-api",
   "editor": "code",
 
   "targetBranchChoices": ["spectro-master", "spectro-release-4.5"],
