@@ -590,6 +590,7 @@ func (r *KubeadmConfigReconciler) joinWorker(ctx context.Context, scope *Scope) 
 			DiskSetup:            scope.Config.Spec.DiskSetup,
 			KubeadmVerbosity:     verbosityFlag,
 			UseExperimentalRetry: scope.Config.Spec.UseExperimentalRetryJoin,
+			KubernetesVersion:    parsedVersion,
 		},
 		JoinConfiguration: joinData,
 	}
