@@ -88,6 +88,10 @@ func (r *KubeadmControlPlaneReconciler) upgradeControlPlane(
 		if err := workloadCluster.UpdateImageRepositoryInKubeadmConfigMap(ctx, imageRepository, parsedVersion); err != nil {
 			return ctrl.Result{}, errors.Wrap(err, "failed to update the image repository in the kubeadm config map")
 		}
+
+		if err := workloadCluster.UpdateFeatureGatesInKubeadmConfigMap(ctx, controlPlane.KCP.Spec.KubeadmConfigSpec, parsedVersionTolerant); err != nil {
+			return ctrl.Result{}, errors.Wrap(err, "failed to update feature gates in the kubeadm config map")
+		}
 	}
 
 	if kcp.Spec.KubeadmConfigSpec.ClusterConfiguration != nil && kcp.Spec.KubeadmConfigSpec.ClusterConfiguration.Etcd.Local != nil {
