@@ -89,6 +89,13 @@ var (
 	// ErrControlPlaneMinNodes signals that a cluster doesn't meet the minimum required nodes
 	// to remove an etcd member.
 	ErrControlPlaneMinNodes = errors.New("cluster has fewer than 2 control plane nodes; removing an etcd member is not supported")
+
+	// minKubernetesVersionControlPlaneKubeletLocalMode is the min version from which
+	// we will enable the ControlPlaneKubeletLocalMode kubeadm feature gate.
+	// Note: We have to do this with Kubernetes 1.31. Because with that version we encountered
+	// a case where it's not okay anymore to ignore the Kubernetes version skew (kubelet 1.31 uses
+	// the spec.clusterIP field selector that is only implemented in kube-apiserver >= 1.31.0).
+	minKubernetesVersionControlPlaneKubeletLocalMode = semver.MustParse("1.31.0")
 )
 
 // WorkloadCluster defines all behaviors necessary to upgrade kubernetes on a workload cluster
@@ -107,6 +114,7 @@ type WorkloadCluster interface {
 	ReconcileKubeletRBACRole(ctx context.Context, version semver.Version) error
 	UpdateKubernetesVersionInKubeadmConfigMap(ctx context.Context, version semver.Version) error
 	UpdateImageRepositoryInKubeadmConfigMap(ctx context.Context, imageRepository string, version semver.Version) error
+	UpdateFeatureGatesInKubeadmConfigMap(ctx context.Context, kubeadmConfigSpec bootstrapv1.KubeadmConfigSpec, kubernetesVersion semver.Version) error
 	UpdateEtcdVersionInKubeadmConfigMap(ctx context.Context, imageRepository, imageTag string, version semver.Version) error
 	UpdateEtcdExtraArgsInKubeadmConfigMap(ctx context.Context, extraArgs map[string]string, version semver.Version) error
 	UpdateAPIServerInKubeadmConfigMap(ctx context.Context, apiServer bootstrapv1.APIServer, version semver.Version) error
@@ -179,6 +187,44 @@ func (w *Workload) UpdateImageRepositoryInKubeadmConfigMap(ctx context.Context, 
 		}
 		c.ImageRepository = imageRepository
 	}, version)
+}
+
+// UpdateFeatureGatesInKubeadmConfigMap updates the feature gates in the kubeadm config map.
+func (w *Workload) UpdateFeatureGatesInKubeadmConfigMap(ctx context.Context, kubeadmConfigSpec bootstrapv1.KubeadmConfigSpec, kubernetesVersion semver.Version) error {
+	return w.updateClusterConfiguration(ctx, func(c *bootstrapv1.ClusterConfiguration) {
+		// We use DeepCopy here to avoid modifying the KCP object in the apiserver.
+		kubeadmConfigSpec := kubeadmConfigSpec.DeepCopy()
+		DefaultFeatureGates(kubeadmConfigSpec, kubernetesVersion)
+
+		// Even if featureGates is nil, reset it to ClusterConfiguration
+		// to override any previously set feature gates.
+		c.FeatureGates = kubeadmConfigSpec.ClusterConfiguration.FeatureGates
+	}, kubernetesVersion)
+}
+
+const (
+	// ControlPlaneKubeletLocalMode is a feature gate of kubeadm that ensures
+	// kubelets only communicate with the local apiserver.
+	ControlPlaneKubeletLocalMode = "ControlPlaneKubeletLocalMode"
+)
+
+// DefaultFeatureGates defaults the feature gates field.
+func DefaultFeatureGates(kubeadmConfigSpec *bootstrapv1.KubeadmConfigSpec, kubernetesVersion semver.Version) {
+	if kubernetesVersion.LT(minKubernetesVersionControlPlaneKubeletLocalMode) {
+		return
+	}
+
+	if kubeadmConfigSpec.ClusterConfiguration == nil {
+		kubeadmConfigSpec.ClusterConfiguration = &bootstrapv1.ClusterConfiguration{}
+	}
+
+	if kubeadmConfigSpec.ClusterConfiguration.FeatureGates == nil {
+		kubeadmConfigSpec.ClusterConfiguration.FeatureGates = map[string]bool{}
+	}
+
+	if _, ok := kubeadmConfigSpec.ClusterConfiguration.FeatureGates[ControlPlaneKubeletLocalMode]; !ok {
+		kubeadmConfigSpec.ClusterConfiguration.FeatureGates[ControlPlaneKubeletLocalMode] = true
+	}
 }
 
 // UpdateKubernetesVersionInKubeadmConfigMap updates the kubernetes version in the kubeadm config map.

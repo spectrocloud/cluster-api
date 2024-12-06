@@ -1,5 +1,5 @@
 #!/bin/bash
-# Copyright 2024 The Kubernetes Authors.
+# Copyright 2020 The Kubernetes Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -106,6 +106,7 @@ function retry-command() {
   fi
 }
 
+# {{ if .ControlPlane }}
 function try-or-die-command() {
   local kubeadm_return
   log::info "running '$*'"
@@ -117,6 +118,7 @@ function try-or-die-command() {
     log::error_exit "fatal error, exiting" "${kubeadm_return}"
   fi
 }
+# {{ end }}
 
 retry-command kubeadm join phase preflight --ignore-preflight-errors=DirAvailable--etc-kubernetes-manifests
 # {{ if .ControlPlane }}
@@ -126,8 +128,10 @@ retry-command kubeadm join phase control-plane-prepare kubeconfig
 retry-command kubeadm join phase control-plane-prepare control-plane
 # {{ end }}
 retry-command kubeadm join phase kubelet-start
-
-# Run kubeadm join and skip all already executed phases.
-try-or-die-command kubeadm join --skip-phases preflight,control-plane-prepare,kubelet-start
+# {{ if .ControlPlane }}
+try-or-die-command kubeadm join phase control-plane-join etcd
+retry-command kubeadm join phase control-plane-join update-status
+retry-command kubeadm join phase control-plane-join mark-control-plane
+# {{ end }}
 
 log::success_exit

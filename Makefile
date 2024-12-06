@@ -23,7 +23,7 @@ SHELL:=/usr/bin/env bash
 #
 # Go.
 #
-GO_VERSION ?= 1.21
+GO_VERSION ?= 1.22
 # GO_CONTAINER_IMAGE ?= docker.io/library/golang:$(GO_VERSION)
 GO_CONTAINER_IMAGE ?= gcr.io/spectro-images-public/golang:${BUILDER_GOLANG_VERSION}-alpine
 
