@@ -420,12 +420,14 @@ func (o *objectGraph) getPaletteTemplateDiscoveryTypes(ctx context.Context) erro
 			if !version.Storage {
 				continue
 			}
-			if crd.Spec.Names.Kind == "KubeadmControlPlane" ||
+			if (crd.Spec.Names.Kind == "KubeadmControlPlane" && version.Name == clusterv1.GroupVersion.Version) ||
 				crd.Spec.Names.Kind == "AWSMachineTemplate" ||
 				crd.Spec.Names.Kind == "AWSCluster" ||
 				crd.Spec.Names.Kind == "MachineDeployment" ||
 				crd.Spec.Names.Kind == "KubeadmConfigTemplate" ||
-				(crd.Spec.Group == clusterv1.GroupVersion.Group && crd.Spec.Names.Kind == "Cluster") {
+				(crd.Spec.Group == clusterv1.GroupVersion.Group &&
+					version.Name == clusterv1.GroupVersion.Version &&
+					crd.Spec.Names.Kind == "Cluster") {
 				typeMeta := metav1.TypeMeta{
 					Kind: crd.Spec.Names.Kind,
 					APIVersion: metav1.GroupVersion{
