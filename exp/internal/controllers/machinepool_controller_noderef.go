@@ -184,7 +184,7 @@ func (r *MachinePoolReconciler) getNodeReferences(ctx context.Context, c client.
 				continue
 			}
 
-			nodeRefsMap[nodeProviderID.String()] = node
+			nodeRefsMap[nodeProviderID.ID()] = node
 		}
 
 		if nodeList.Continue == "" {
@@ -199,7 +199,7 @@ func (r *MachinePoolReconciler) getNodeReferences(ctx context.Context, c client.
 			log.V(2).Info("Failed to parse ProviderID, skipping", "err", err, "providerID", providerID)
 			continue
 		}
-		if node, ok := nodeRefsMap[pid.String()]; ok {
+		if node, ok := nodeRefsMap[pid.ID()]; ok {
 			available++
 			if nodeIsReady(&node) {
 				ready++
