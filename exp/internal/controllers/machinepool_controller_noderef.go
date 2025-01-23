@@ -74,7 +74,14 @@ func (r *MachinePoolReconciler) reconcileNodeRefs(ctx context.Context, cluster *
 		return ctrl.Result{}, err
 	}
 
+	// │   providerIDList:                                                                                                                                                                                                                                                                                │
+	// │   - aws:///us-isob-east-1b/i-02af554ceefe09039                                                                                                                                                                                                                                                   │
+	// │   - aws:///us-isob-east-1a/i-0592ff6ee6f3a9ae9
+	// 
+	//    providerID: aws:///us-east-1a/i-0592ff6ee6f3a9ae9
+	//    providerID: aws:///us-east-1b/i-02af554ceefe09039
 	// Get the Node references.
+	log.Info("Getting NodeRefs for MachinePool", "providerIDList", mp.Spec.ProviderIDList)
 	nodeRefsResult, err := r.getNodeReferences(ctx, clusterClient, mp.Spec.ProviderIDList)
 	if err != nil {
 		if err == errNoAvailableNodes {
@@ -174,16 +181,19 @@ func (r *MachinePoolReconciler) getNodeReferences(ctx context.Context, c client.
 	nodeList := corev1.NodeList{}
 	for {
 		if err := c.List(ctx, &nodeList, client.Continue(nodeList.Continue)); err != nil {
+			log.Error(err, "Failed to List nodes")
 			return getNodeReferencesResult{}, errors.Wrapf(err, "failed to List nodes")
 		}
 
 		for _, node := range nodeList.Items {
+			log.Info("Checking Node", "node", node.Name, "providerID", node.Spec.ProviderID)
 			nodeProviderID, err := noderefutil.NewProviderID(node.Spec.ProviderID)
 			if err != nil {
-				log.V(2).Info("Failed to parse ProviderID, skipping", "err", err, "providerID", node.Spec.ProviderID)
+				log.V(0).Info("Failed to parse ProviderID, skipping", "err", err, "providerID", node.Spec.ProviderID)
 				continue
 			}
 
+			log.Info("nodeRefsMap", "providerID", nodeProviderID.String())
 			nodeRefsMap[nodeProviderID.String()] = node
 		}
 
@@ -194,15 +204,20 @@ func (r *MachinePoolReconciler) getNodeReferences(ctx context.Context, c client.
 
 	var nodeRefs []corev1.ObjectReference
 	for _, providerID := range providerIDList {
+		log.Info("Checking ProviderID", "providerID", providerID)
 		pid, err := noderefutil.NewProviderID(providerID)
 		if err != nil {
-			log.V(2).Info("Failed to parse ProviderID, skipping", "err", err, "providerID", providerID)
+			log.Error(err, "Failed to parse ProviderID", "providerID", providerID)
+			log.V(0).Info("Failed to parse ProviderID, skipping", "err", err, "providerID", providerID)
 			continue
 		}
+		log.Info("Checking Node", "providerID", pid.String())
 		if node, ok := nodeRefsMap[pid.String()]; ok {
+			log.Info("Found Node", "node", node.Name)
 			available++
 			if nodeIsReady(&node) {
 				ready++
+				log.Info("Node is ready", "node", node.Name)
 			}
 			nodeRefs = append(nodeRefs, corev1.ObjectReference{
 				Kind:       node.Kind,
@@ -213,6 +228,10 @@ func (r *MachinePoolReconciler) getNodeReferences(ctx context.Context, c client.
 		}
 	}
 
+	log.Info("NodeRefs", "nodeRefs", nodeRefs)
+	log.Info("Available", "available", available)
+	log.Info("Ready", "ready", ready)
+	log.Info("ProviderIDList", "providerIDList", providerIDList)
 	if len(nodeRefs) == 0 && len(providerIDList) != 0 {
 		return getNodeReferencesResult{}, errNoAvailableNodes
 	}

@@ -51,6 +51,16 @@ func TestNewProviderID(t *testing.T) {
 			input:      "aws://bar/baz/instance-id",
 			expectedID: "instance-id",
 		},
+		{
+			name:       "multiple filled-in segments",
+			input:      "aws:///us-east-1a/i-0592ff6ee6f3a9ae9",
+			expectedID: "i-0592ff6ee6f3a9ae9",
+		},
+		{
+			name:       "multiple filled-in segments",
+			input:      "aws:///us-isob-east-1b/i-02af554ceefe09039",
+			expectedID: "i-02af554ceefe09039",
+		},
 	}
 
 	for _, tc := range tests {
