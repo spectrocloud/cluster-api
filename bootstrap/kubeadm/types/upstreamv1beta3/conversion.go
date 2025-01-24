@@ -64,3 +64,8 @@ func Convert_upstreamv1beta3_JoinControlPlane_To_v1beta1_JoinControlPlane(in *Jo
 	// JoinControlPlane.CertificateKey does not exist in CABPK v1beta1 version, because Cluster API does not use automatic copy certs.
 	return autoConvert_upstreamv1beta3_JoinControlPlane_To_v1beta1_JoinControlPlane(in, out, s)
 }
+
+func Convert_v1beta1_NodeRegistrationOptions_To_upstreamv1beta3_NodeRegistrationOptions(in *bootstrapv1.NodeRegistrationOptions, out *NodeRegistrationOptions, s apimachineryconversion.Scope) error {
+	// NodeRegistrationOptions.ImagePullSerial does not exist in kubeadm v1beta3, dropping this info.
+	return autoConvert_v1beta1_NodeRegistrationOptions_To_upstreamv1beta3_NodeRegistrationOptions(in, out, s)
+}

@@ -355,11 +355,6 @@ func RegisterConversions(s *runtime.Scheme) error {
 	}); err != nil {
 		return err
 	}
-	if err := s.AddGeneratedConversionFunc((*v1beta1.NodeRegistrationOptions)(nil), (*NodeRegistrationOptions)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_v1beta1_NodeRegistrationOptions_To_v1alpha4_NodeRegistrationOptions(a.(*v1beta1.NodeRegistrationOptions), b.(*NodeRegistrationOptions), scope)
-	}); err != nil {
-		return err
-	}
 	if err := s.AddGeneratedConversionFunc((*Partition)(nil), (*v1beta1.Partition)(nil), func(a, b interface{}, scope conversion.Scope) error {
 		return Convert_v1alpha4_Partition_To_v1beta1_Partition(a.(*Partition), b.(*v1beta1.Partition), scope)
 	}); err != nil {
@@ -402,6 +397,11 @@ func RegisterConversions(s *runtime.Scheme) error {
 	}
 	if err := s.AddConversionFunc((*v1beta1.KubeadmConfigSpec)(nil), (*KubeadmConfigSpec)(nil), func(a, b interface{}, scope conversion.Scope) error {
 		return Convert_v1beta1_KubeadmConfigSpec_To_v1alpha4_KubeadmConfigSpec(a.(*v1beta1.KubeadmConfigSpec), b.(*KubeadmConfigSpec), scope)
+	}); err != nil {
+		return err
+	}
+	if err := s.AddConversionFunc((*v1beta1.NodeRegistrationOptions)(nil), (*NodeRegistrationOptions)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_v1beta1_NodeRegistrationOptions_To_v1alpha4_NodeRegistrationOptions(a.(*v1beta1.NodeRegistrationOptions), b.(*NodeRegistrationOptions), scope)
 	}); err != nil {
 		return err
 	}

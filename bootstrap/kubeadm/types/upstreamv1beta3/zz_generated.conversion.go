@@ -223,11 +223,6 @@ func RegisterConversions(s *runtime.Scheme) error {
 	}); err != nil {
 		return err
 	}
-	if err := s.AddGeneratedConversionFunc((*v1beta1.NodeRegistrationOptions)(nil), (*NodeRegistrationOptions)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_v1beta1_NodeRegistrationOptions_To_upstreamv1beta3_NodeRegistrationOptions(a.(*v1beta1.NodeRegistrationOptions), b.(*NodeRegistrationOptions), scope)
-	}); err != nil {
-		return err
-	}
 	if err := s.AddGeneratedConversionFunc((*Patches)(nil), (*v1beta1.Patches)(nil), func(a, b interface{}, scope conversion.Scope) error {
 		return Convert_upstreamv1beta3_Patches_To_v1beta1_Patches(a.(*Patches), b.(*v1beta1.Patches), scope)
 	}); err != nil {
@@ -245,6 +240,11 @@ func RegisterConversions(s *runtime.Scheme) error {
 	}
 	if err := s.AddConversionFunc((*JoinControlPlane)(nil), (*v1beta1.JoinControlPlane)(nil), func(a, b interface{}, scope conversion.Scope) error {
 		return Convert_upstreamv1beta3_JoinControlPlane_To_v1beta1_JoinControlPlane(a.(*JoinControlPlane), b.(*v1beta1.JoinControlPlane), scope)
+	}); err != nil {
+		return err
+	}
+	if err := s.AddConversionFunc((*v1beta1.NodeRegistrationOptions)(nil), (*NodeRegistrationOptions)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_v1beta1_NodeRegistrationOptions_To_upstreamv1beta3_NodeRegistrationOptions(a.(*v1beta1.NodeRegistrationOptions), b.(*NodeRegistrationOptions), scope)
 	}); err != nil {
 		return err
 	}

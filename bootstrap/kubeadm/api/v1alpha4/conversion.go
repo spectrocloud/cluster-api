@@ -165,6 +165,12 @@ func Convert_v1beta1_InitConfiguration_To_v1alpha4_InitConfiguration(in *bootstr
 	return autoConvert_v1beta1_InitConfiguration_To_v1alpha4_InitConfiguration(in, out, s)
 }
 
+func Convert_v1beta1_NodeRegistrationOptions_To_v1alpha4_NodeRegistrationOptions(in *bootstrapv1.NodeRegistrationOptions, out *NodeRegistrationOptions, s apiconversion.Scope) error {
+	// NodeRegistrationOptions.ImagePullPolicy does not exit in
+	// kubeadm v1alpha4 API.
+	return autoConvert_v1beta1_NodeRegistrationOptions_To_v1alpha4_NodeRegistrationOptions(in, out, s)
+}
+
 func Convert_v1beta1_JoinConfiguration_To_v1alpha4_JoinConfiguration(in *bootstrapv1.JoinConfiguration, out *JoinConfiguration, s apiconversion.Scope) error {
 	// InitConfiguration.Patches does not exist in kubeadm v1alpha4 API.
 	return autoConvert_v1beta1_JoinConfiguration_To_v1alpha4_JoinConfiguration(in, out, s)
