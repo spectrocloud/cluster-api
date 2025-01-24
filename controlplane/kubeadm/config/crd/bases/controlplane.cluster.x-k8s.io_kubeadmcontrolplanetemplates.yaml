@@ -1860,6 +1860,26 @@ spec:
                                     items:
                                       type: string
                                     type: array
+                                  imagePullPolicy:
+                                    description: imagePullPolicy specifies the policy
+                                      for image pulling during kubeadm "init" and
+                                      "join" operations. The value of this field must
+                                      be one of "Always", "IfNotPresent" or "Never".
+                                      Defaults to "IfNotPresent". This can be used
+                                      only with Kubernetes version equal to 1.22 and
+                                      later.
+                                    enum:
+                                    - Always
+                                    - IfNotPresent
+                                    - Never
+                                    type: string
+                                  imagePullSerial:
+                                    description: 'imagePullSerial specifies if image
+                                      pulling performed by kubeadm must be done serially
+                                      or in parallel. This option takes effect only
+                                      on Kubernetes >=1.31.0. Default: true (defaulted
+                                      in kubeadm)'
+                                    type: boolean
                                   kubeletExtraArgs:
                                     additionalProperties:
                                       type: string
@@ -2096,6 +2116,26 @@ spec:
                                     items:
                                       type: string
                                     type: array
+                                  imagePullPolicy:
+                                    description: imagePullPolicy specifies the policy
+                                      for image pulling during kubeadm "init" and
+                                      "join" operations. The value of this field must
+                                      be one of "Always", "IfNotPresent" or "Never".
+                                      Defaults to "IfNotPresent". This can be used
+                                      only with Kubernetes version equal to 1.22 and
+                                      later.
+                                    enum:
+                                    - Always
+                                    - IfNotPresent
+                                    - Never
+                                    type: string
+                                  imagePullSerial:
+                                    description: 'imagePullSerial specifies if image
+                                      pulling performed by kubeadm must be done serially
+                                      or in parallel. This option takes effect only
+                                      on Kubernetes >=1.31.0. Default: true (defaulted
+                                      in kubeadm)'
+                                    type: boolean
                                   kubeletExtraArgs:
                                     additionalProperties:
                                       type: string

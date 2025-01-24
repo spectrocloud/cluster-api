@@ -251,6 +251,21 @@ type NodeRegistrationOptions struct {
 	// IgnorePreflightErrors provides a slice of pre-flight errors to be ignored when the current node is registered.
 	// +optional
 	IgnorePreflightErrors []string `json:"ignorePreflightErrors,omitempty"`
+
+	// imagePullPolicy specifies the policy for image pulling
+	// during kubeadm "init" and "join" operations. The value of
+	// this field must be one of "Always", "IfNotPresent" or
+	// "Never". Defaults to "IfNotPresent". This can be used only
+	// with Kubernetes version equal to 1.22 and later.
+	// +kubebuilder:validation:Enum=Always;IfNotPresent;Never
+	// +optional
+	ImagePullPolicy string `json:"imagePullPolicy,omitempty"`
+
+	// imagePullSerial specifies if image pulling performed by kubeadm must be done serially or in parallel.
+	// This option takes effect only on Kubernetes >=1.31.0.
+	// Default: true (defaulted in kubeadm)
+	// +optional
+	ImagePullSerial *bool `json:"imagePullSerial,omitempty"`
 }
 
 // MarshalJSON marshals NodeRegistrationOptions in a way that an empty slice in Taints is preserved.

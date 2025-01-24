@@ -49,7 +49,7 @@ func (a *actionFactory) action(name string) action {
 }
 
 type action interface {
-	Unmarshal(userData []byte) error
+	Unmarshal(userData []byte, kindMapping Mapping) error
 	Commands() ([]provisioning.Cmd, error)
 }
 
@@ -97,7 +97,7 @@ func getActions(userData []byte) ([]action, error) {
 			// converts the file fragment scanned up to now into the current action, if any
 			if act != nil {
 				actionBlock := strings.Join(lines, "\n")
-				if err := act.Unmarshal([]byte(actionBlock)); err != nil {
+				if err := act.Unmarshal([]byte(actionBlock), Mapping{}); err != nil {
 					return nil, errors.WithStack(err)
 				}
 				actions = append(actions, act)
@@ -115,7 +115,7 @@ func getActions(userData []byte) ([]action, error) {
 	// converts the last file fragment scanned into the current action, if any
 	if act != nil {
 		actionBlock := strings.Join(lines, "\n")
-		if err := act.Unmarshal([]byte(actionBlock)); err != nil {
+		if err := act.Unmarshal([]byte(actionBlock), Mapping{}); err != nil {
 			return nil, errors.WithStack(err)
 		}
 		actions = append(actions, act)
