@@ -48,6 +48,7 @@ func (c *clusterctlClient) PlanCertManagerUpgrade(options PlanUpgradeOptions) (C
 }
 
 func (c *clusterctlClient) PlanUpgrade(options PlanUpgradeOptions) ([]UpgradePlan, error) {
+
 	// Get the client for interacting with the management cluster.
 	clusterClient, err := c.clusterClientFactory(ClusterClientFactoryInput{Kubeconfig: options.Kubeconfig})
 	if err != nil {
@@ -56,7 +57,6 @@ func (c *clusterctlClient) PlanUpgrade(options PlanUpgradeOptions) ([]UpgradePla
 
 	// Ensure this command only runs against management clusters with the current Cluster API contract (default) or the previous one.
 	if err := clusterClient.ProviderInventory().CheckCAPIContract(
-		ctx,
 		cluster.AllowCAPIContract{Contract: clusterv1alpha4.GroupVersion.Version},
 	); err != nil {
 		return nil, err
@@ -132,7 +132,6 @@ func (c *clusterctlClient) ApplyUpgrade(options ApplyUpgradeOptions) error {
 
 	// Ensure this command only runs against management clusters with the current Cluster API contract (default) or the previous one.
 	if err := clusterClient.ProviderInventory().CheckCAPIContract(
-		ctx,
 		cluster.AllowCAPIContract{Contract: clusterv1alpha4.GroupVersion.Version},
 	); err != nil {
 		return err
