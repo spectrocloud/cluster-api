@@ -239,6 +239,8 @@ func unmarshalFromVersions(yaml string, kubeadmAPIVersions map[schema.GroupVersi
 				return errors.Wrapf(err, "failed to convert kubeadm types to Cluster API types")
 			}
 			return nil
+		} else {
+			return errors.Wrapf(err, "TESTING.... failed to decode yaml for the Kubeadm API for version %s", gvk)
 		}
 	}
 	return errors.New("unknown kubeadm types")
