@@ -23,8 +23,8 @@ SHELL:=/usr/bin/env bash
 #
 # Go.
 #
-GO_VERSION ?= 1.22.10
-GO_CONTAINER_IMAGE ?= gcr.io/spectro-images-public/golang:${GO_VERSION}-alpine
+GO_VERSION ?= 1.23
+GO_CONTAINER_IMAGE ?= us-docker.pkg.dev/palette-images/build-base-images/golang:${GO_VERSION}-alpine
 
 # Use GOPROXY environment variable if set
 GOPROXY := $(shell go env GOPROXY)
@@ -203,7 +203,7 @@ GOLANGCI_LINT := $(abspath $(TOOLS_BIN_DIR)/$(GOLANGCI_LINT_BIN))
 # It is set by Prow GIT_TAG, a git-based tag of the form vYYYYMMDD-hash, e.g., v20210120-v0.3.10-308-gc61521971
 # Fips Flags
 FIPS_ENABLE ?= ""
-BUILDER_GOLANG_VERSION ?= 1.22
+BUILDER_GOLANG_VERSION ?= 1.23
 BUILD_ARGS = --build-arg CRYPTO_LIB=${FIPS_ENABLE} --build-arg BUILDER_GOLANG_VERSION=${BUILDER_GOLANG_VERSION}
 
 RELEASE_LOC := release
