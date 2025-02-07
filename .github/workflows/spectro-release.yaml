@@ -40,17 +40,16 @@ jobs:
           echo "LEGACY_REGISTRY=us-east1-docker.pkg.dev/spectro-images/dev/cluster-api" >> $GITHUB_ENV
           echo "FIPS_REGISTRY=us-east1-docker.pkg.dev/spectro-images/dev-fips/cluster-api" >> $GITHUB_ENV
       -
-        name: Necessary Setup
-        run: |
-          sudo groupadd docker || true
-          sudo usermod -aG docker $USER
-          sudo chmod 666 /var/run/docker.sock
-          sudo systemctl restart docker
-      -
         uses: actions/checkout@v3
       -
         name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v1
+      -
+        name: Necessary Setup
+        run: |
+          sudo usermod -aG docker $USER
+          sudo chmod 666 /var/run/docker.sock
+          sudo systemctl restart docker
       -
         name: Login to private registry
         uses: docker/login-action@v1
