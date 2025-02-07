@@ -42,6 +42,7 @@ jobs:
       -
         name: Necessary Setup
         run: |
+          sudo groupadd docker || true
           sudo usermod -aG docker $USER
           sudo chmod 666 /var/run/docker.sock
           sudo systemctl restart docker
