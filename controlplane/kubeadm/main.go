@@ -25,6 +25,7 @@ import (
 	"net/http"
 	_ "net/http/pprof"
 	"os"
+	expv1 "sigs.k8s.io/cluster-api/exp/api/v1beta1"
 	"time"
 
 	// +kubebuilder:scaffold:imports
@@ -47,7 +48,6 @@ import (
 	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
 	bootstrapv1 "sigs.k8s.io/cluster-api/bootstrap/kubeadm/api/v1beta1"
 	"sigs.k8s.io/cluster-api/controllers/remote"
-	controlplanev1alpha3 "sigs.k8s.io/cluster-api/controlplane/kubeadm/api/v1alpha3"
 	controlplanev1alpha4 "sigs.k8s.io/cluster-api/controlplane/kubeadm/api/v1alpha4"
 	controlplanev1 "sigs.k8s.io/cluster-api/controlplane/kubeadm/api/v1beta1"
 	kubeadmcontrolplanecontrollers "sigs.k8s.io/cluster-api/controlplane/kubeadm/controllers"
@@ -67,7 +67,7 @@ func init() {
 
 	_ = clientgoscheme.AddToScheme(scheme)
 	_ = clusterv1.AddToScheme(scheme)
-	_ = controlplanev1alpha3.AddToScheme(scheme)
+	_ = expv1.AddToScheme(scheme)
 	_ = controlplanev1alpha4.AddToScheme(scheme)
 	_ = controlplanev1.AddToScheme(scheme)
 	_ = bootstrapv1.AddToScheme(scheme)

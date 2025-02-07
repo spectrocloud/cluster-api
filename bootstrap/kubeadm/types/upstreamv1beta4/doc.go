@@ -1,5 +1,5 @@
 /*
-Copyright 2021 The Kubernetes Authors.
+Copyright 2024 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -14,18 +14,11 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package v1alpha3
-
-import (
-	"testing"
-
-	infraexpv1 "sigs.k8s.io/cluster-api/test/infrastructure/docker/exp/api/v1beta1"
-	utilconversion "sigs.k8s.io/cluster-api/util/conversion"
-)
-
-func TestFuzzyConversion(t *testing.T) {
-	t.Run("for DockerMachinePool", utilconversion.FuzzTestFunc(utilconversion.FuzzTestFuncInput{
-		Hub:   &infraexpv1.DockerMachinePool{},
-		Spoke: &DockerMachinePool{},
-	}))
-}
+// Package upstreamv1beta4 contains a mirror of kubeadm API v1beta4 API, required because it is not possible to import k/K.
+//
+// IMPORTANT: Do not change these files!
+// IMPORTANT: only for KubeadmConfig serialization/deserialization, and should not be used for other purposes.
+//
+// +k8s:conversion-gen=sigs.k8s.io/cluster-api/bootstrap/kubeadm/api/v1beta1
+// +k8s:deepcopy-gen=package
+package upstreamv1beta4 // import "sigs.k8s.io/cluster-api/bootstrap/kubeadm/types/upstreamv1beta4"
