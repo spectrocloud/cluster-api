@@ -16,7 +16,7 @@ on:
 jobs:
   builder:
     # edge-runner machine group is a bunch of machines in US Datacenter
-    runs-on: github-capi-runner
+    runs-on: [self-hosted, Linux, X64, capi]
     # Initialize all secrets required for the job
     # Ensure that the credentials are provided as encrypted secrets
     env:
