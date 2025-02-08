@@ -16,7 +16,7 @@ on:
 jobs:
   builder:
     # edge-runner machine group is a bunch of machines in US Datacenter
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, capi]
     # Initialize all secrets required for the job
     # Ensure that the credentials are provided as encrypted secrets
     env:
@@ -41,6 +41,11 @@ jobs:
           echo "FIPS_REGISTRY=us-east1-docker.pkg.dev/spectro-images/dev-fips/cluster-api" >> $GITHUB_ENV
       -
         uses: actions/checkout@v3
+      -
+        name: Necessary Setup
+        run: |
+          sudo chmod 666 /var/run/docker.sock
+          sudo systemctl restart docker
       -
         name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v1
