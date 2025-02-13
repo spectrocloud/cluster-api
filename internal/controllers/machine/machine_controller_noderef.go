@@ -24,6 +24,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/klog/v2"
+	"sigs.k8s.io/cluster-api/internal/util/taints"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -114,6 +115,11 @@ func (r *Reconciler) reconcileNode(ctx context.Context, cluster *clusterv1.Clust
 			log.V(2).Info("Failed patch node to set annotations", "err", err, "node name", node.Name)
 			return ctrl.Result{}, err
 		}
+	}
+
+	// Reconcile node taints
+	if err := r.reconcileNodeTaints(ctx, remoteClient, node); err != nil {
+		return ctrl.Result{}, errors.Wrapf(err, "failed to reconcile taints on Node %s", klog.KObj(node))
 	}
 
 	// Do the remaining node health checks, then set the node health to true if all checks pass.
@@ -211,4 +217,18 @@ func (r *Reconciler) getNode(ctx context.Context, c client.Reader, providerID *n
 	}
 
 	return &nodeList.Items[0], nil
+}
+
+func (r *Reconciler) reconcileNodeTaints(ctx context.Context, remoteClient client.Client, node *corev1.Node) error {
+	patchHelper, err := patch.NewHelper(node, remoteClient)
+	if err != nil {
+		return errors.Wrapf(err, "failed to create patch helper for Node %s", klog.KObj(node))
+	}
+	// Drop the NodeUninitializedTaint taint on the node.
+	if taints.RemoveNodeTaint(node, clusterv1.NodeUninitializedTaint) {
+		if err := patchHelper.Patch(ctx, node); err != nil {
+			return errors.Wrapf(err, "failed to patch Node %s to modify taints", klog.KObj(node))
+		}
+	}
+	return nil
 }
