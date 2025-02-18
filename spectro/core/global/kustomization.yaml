@@ -1,13 +1,14 @@
-namespace: capi-system
+namespace: capi-webhook-system
 
 namePrefix: capi-
 
 #configurations:
-#- ../../../config/default/kustomizeconfig.yaml
+#- ../../../config/default/kustomizeconfig.yamlq
 
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:
+- ../../../config/default/namespace.yaml
 - ../../../config/crd
 - ../../../config/manager
 - ../../../config/webhook
