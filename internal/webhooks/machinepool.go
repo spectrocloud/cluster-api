@@ -32,7 +32,6 @@ import (
 
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/cluster-api/feature"
-	"sigs.k8s.io/cluster-api/util/version"
 )
 
 func (webhook *MachinePool) SetupWebhookWithManager(mgr ctrl.Manager) error {
@@ -157,11 +156,15 @@ func (webhook *MachinePool) validate(oldObj, newObj *clusterv1.MachinePool) erro
 		)
 	}
 
-	if newObj.Spec.Template.Spec.Version != "" {
-		if !version.KubeSemver.MatchString(newObj.Spec.Template.Spec.Version) {
-			allErrs = append(allErrs, field.Invalid(specPath.Child("template", "spec", "version"), newObj.Spec.Template.Spec.Version, "must be a valid semantic version"))
-		}
-	}
+	// Spectro fork (9a1ef38d "remove patch version check for managed clusters"):
+	// the semantic-version validation is intentionally disabled so managed
+	// clusters may set non-strict-semver versions. Adapted to target v1beta2
+	// where Spec.Template.Spec.Version is a string (was *string upstream).
+	// if newObj.Spec.Template.Spec.Version != "" {
+	// 	if !version.KubeSemver.MatchString(newObj.Spec.Template.Spec.Version) {
+	// 		allErrs = append(allErrs, field.Invalid(specPath.Child("template", "spec", "version"), newObj.Spec.Template.Spec.Version, "must be a valid semantic version"))
+	// 	}
+	// }
 
 	if len(newObj.Spec.Template.Spec.Taints) > 0 {
 		allErrs = append(allErrs, field.Forbidden(specPath.Child("taints"), "taints feature for MachinePools is not yet implemented"))
