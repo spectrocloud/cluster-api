@@ -32,6 +32,7 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/client-go/tools/clientcmd/api"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
 	"sigs.k8s.io/cluster-api/util"
@@ -99,6 +100,9 @@ func New(clusterName, endpoint string, caCert *x509.Certificate, caKey crypto.Si
 
 // CreateSecret creates the Kubeconfig secret for the given cluster.
 func CreateSecret(ctx context.Context, c client.Client, cluster *clusterv1.Cluster) error {
+	logger := log.FromContext(ctx)
+	logger.Info("kundebug======================>Creating kubeconfig secret for cluster", "cluster", cluster.Name, "namespace", cluster.Namespace)
+
 	name := util.ObjectKey(cluster)
 	return CreateSecretWithOwner(ctx, c, name, cluster.Spec.ControlPlaneEndpoint.String(), metav1.OwnerReference{
 		APIVersion: clusterv1.GroupVersion.String(),
@@ -110,6 +114,12 @@ func CreateSecret(ctx context.Context, c client.Client, cluster *clusterv1.Clust
 
 // CreateSecretWithOwner creates the Kubeconfig secret for the given cluster name, namespace, endpoint, and owner reference.
 func CreateSecretWithOwner(ctx context.Context, c client.Client, clusterName client.ObjectKey, endpoint string, owner metav1.OwnerReference) error {
+	logger := log.FromContext(ctx)
+	logger.Info("kundebug======================>Creating kubeconfig secret with owner",
+		"cluster", clusterName.Name,
+		"namespace", clusterName.Namespace,
+		"endpoint", endpoint)
+
 	server, err := url.JoinPath("https://", endpoint)
 	if err != nil {
 		return err
@@ -124,6 +134,12 @@ func CreateSecretWithOwner(ctx context.Context, c client.Client, clusterName cli
 
 // GenerateSecret returns a Kubernetes secret for the given Cluster and kubeconfig data.
 func GenerateSecret(cluster *clusterv1.Cluster, data []byte) *corev1.Secret {
+	logger := log.FromContext(context.Background())
+	logger.Info("kundebug======================>Generating secret for cluster",
+		"cluster", cluster.Name,
+		"namespace", cluster.Namespace,
+		"dataLength", len(data))
+
 	name := util.ObjectKey(cluster)
 	return GenerateSecretWithOwner(name, data, metav1.OwnerReference{
 		APIVersion: clusterv1.GroupVersion.String(),
@@ -182,6 +198,11 @@ func NeedsClientCertRotation(configSecret *corev1.Secret, threshold time.Duratio
 
 // RegenerateSecret creates and stores a new Kubeconfig in the given secret.
 func RegenerateSecret(ctx context.Context, c client.Client, configSecret *corev1.Secret) error {
+	logger := log.FromContext(ctx)
+	logger.Info("kundebug======================>Regenerating kubeconfig secret",
+		"secret", configSecret.Name,
+		"namespace", configSecret.Namespace)
+
 	clusterName, _, err := secret.ParseSecretName(configSecret.Name)
 	if err != nil {
 		return errors.Wrap(err, "failed to parse secret name")

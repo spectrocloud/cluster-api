@@ -355,6 +355,7 @@ func (r *Reconciler) reconcileKubeconfig(ctx context.Context, s *scope) (ctrl.Re
 	// responsible for the management of the Kubeconfig. We continue to manage it here only for backward
 	// compatibility when a Control Plane provider is not in use.
 	if cluster.Spec.ControlPlaneRef != nil {
+		log.Info("kundebug======================>ControlPlaneRef is set, skipping Kubeconfig generation")
 		return ctrl.Result{}, nil
 	}
 
