@@ -136,6 +136,9 @@ const (
 	// instead of being a source of truth for eventual consistency.
 	// This annotation can be used to inform MachinePool status during in-progress scaling scenarios.
 	ReplicasManagedByAnnotation = "cluster.x-k8s.io/replicas-managed-by"
+
+	// TakeOverCluster is the label used to mark the nodes that run on takeover-cluster instances.
+	TakeOverCluster = "cluster.x-k8s.io/takeover-cluster"
 )
 
 // NodeUninitializedTaint can be added to Nodes at creation by the bootstrap provider, e.g. the
