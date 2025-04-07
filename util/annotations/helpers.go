@@ -25,6 +25,11 @@ import (
 	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
 )
 
+// IsTakeOverCluster returns true if the object has the `managed-by` annotation.
+func IsTakeOverCluster(o metav1.Object) bool {
+	return hasAnnotation(o, clusterv1.TakeOverCluster)
+}
+
 // IsPaused returns true if the Cluster is paused or the object has the `paused` annotation.
 func IsPaused(cluster *clusterv1.Cluster, o metav1.Object) bool {
 	if cluster.Spec.Paused {
