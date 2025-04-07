@@ -245,7 +245,7 @@ func (r *Reconciler) reconcileControlPlane(ctx context.Context, cluster *cluster
 		if err != nil {
 			return ctrl.Result{}, err
 		}
-		if initialized {
+		if annotations.IsTakeOverCluster(cluster.GetObjectMeta()) || initialized {
 			conditions.MarkTrue(cluster, clusterv1.ControlPlaneInitializedCondition)
 		} else {
 			conditions.MarkFalse(cluster, clusterv1.ControlPlaneInitializedCondition, clusterv1.WaitingForControlPlaneProviderInitializedReason, clusterv1.ConditionSeverityInfo, "Waiting for control plane provider to indicate the control plane has been initialized")
