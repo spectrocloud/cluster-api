@@ -146,14 +146,15 @@ func (r *Reconciler) controlPlaneStablePreflightCheck(controlPlane *unstructured
 	cpKlogRef := klog.KRef(controlPlane.GetNamespace(), controlPlane.GetName())
 
 	// Check that the control plane is not provisioning.
-	isProvisioning, err := contract.ControlPlane().IsProvisioning(controlPlane)
-	if err != nil {
-		return nil, errors.Wrapf(err, "failed to perform %q preflight check: failed to check if %s %s is provisioning", clusterv1.MachineSetPreflightCheckControlPlaneIsStable, controlPlane.GetKind(), cpKlogRef)
+	if controlPlane.GetKind() != "MicroK8sControlPlane" {
+		isProvisioning, err := contract.ControlPlane().IsProvisioning(controlPlane)
+		if err != nil {
+			return nil, errors.Wrapf(err, "failed to perform %q preflight check: failed to check if %s %s is provisioning", clusterv1.MachineSetPreflightCheckControlPlaneIsStable, controlPlane.GetKind(), cpKlogRef)
+		}
+		if isProvisioning {
+			return ptr.To(fmt.Sprintf("%s %s is provisioning (%q preflight check failed)", controlPlane.GetKind(), cpKlogRef, clusterv1.MachineSetPreflightCheckControlPlaneIsStable)), nil
+		}
 	}
-	if isProvisioning {
-		return ptr.To(fmt.Sprintf("%s %s is provisioning (%q preflight check failed)", controlPlane.GetKind(), cpKlogRef, clusterv1.MachineSetPreflightCheckControlPlaneIsStable)), nil
-	}
-
 	// Check that the control plane is not upgrading.
 	isUpgrading, err := contract.ControlPlane().IsUpgrading(controlPlane)
 	if err != nil {
