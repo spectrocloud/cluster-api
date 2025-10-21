@@ -19,10 +19,13 @@ package controllers
 import (
 	"context"
 	"fmt"
+	"os"
 	"reflect"
+	"strings"
 	"time"
 
 	"github.com/pkg/errors"
+	"gopkg.in/ini.v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -277,8 +280,9 @@ func (r *MachinePoolReconciler) reconcileInfrastructure(ctx context.Context, s *
 	}
 
 	var getNodeRefsErr error
+	var originalRegion string
 	// Get the nodeRefsMap from the cluster.
-	s.nodeRefMap, getNodeRefsErr = r.getNodeRefMap(ctx, clusterClient)
+	s.nodeRefMap, originalRegion, getNodeRefsErr = r.getNodeRefMap(ctx, r.Client, clusterClient, cluster.Namespace)
 
 	err = r.reconcileMachines(ctx, s, infraConfig)
 
@@ -295,6 +299,35 @@ func (r *MachinePoolReconciler) reconcileInfrastructure(ctx context.Context, s *
 	// Get Spec.ProviderIDList from the infrastructure provider.
 	if err := util.UnstructuredUnmarshalField(infraConfig, &providerIDList, "spec", "providerIDList"); err != nil && !errors.Is(err, util.ErrUnstructuredFieldNotFound) {
 		return ctrl.Result{}, errors.Wrapf(err, "failed to retrieve data from infrastructure provider for MachinePool %q in namespace %q", mp.Name, mp.Namespace)
+	}
+
+	// Correct AWS ProviderIDs in the list to use the original region
+	log.Info("Processing ProviderIDList", "count", len(providerIDList), "originalRegion", originalRegion)
+	if originalRegion != "" {
+		for i, providerID := range providerIDList {
+			log.Info("Processing ProviderID", "index", i, "providerID", providerID)
+			if strings.HasPrefix(providerID, "aws:///") {
+				parts := strings.Split(providerID, "/")
+				log.Info("ProviderID parts", "parts", parts, "count", len(parts))
+				if len(parts) >= 5 {
+					// Extract the zone from the original ProviderID and replace the region part
+					originalZone := parts[3] // e.g., "us-east-1a" (index 3, not 2!)
+					// Replace the region part of the zone with the correct region
+					// e.g., "us-east-1a" -> "us-isob-east-1a"
+					zoneParts := strings.Split(originalZone, "-")
+					log.Info("Zone parts", "originalZone", originalZone, "zoneParts", zoneParts, "count", len(zoneParts))
+					if len(zoneParts) >= 3 {
+						// Replace the first 3 parts (us-east-1) with the correct region (us-isob-east-1)
+						correctedZone := fmt.Sprintf("%s-%s", originalRegion, zoneParts[len(zoneParts)-1]) // e.g., "us-isob-east-1a"
+						correctedProviderID := fmt.Sprintf("aws:///%s/%s", correctedZone, parts[4])
+						if correctedProviderID != providerID {
+							log.Info("Corrected AWS ProviderID in list", "original", providerID, "corrected", correctedProviderID)
+							providerIDList[i] = correctedProviderID
+						}
+					}
+				}
+			}
+		}
 	}
 
 	// Get and set Status.Replicas from the infrastructure provider.
@@ -555,22 +588,85 @@ func (r *MachinePoolReconciler) waitForMachineCreation(ctx context.Context, mach
 	return nil
 }
 
-func (r *MachinePoolReconciler) getNodeRefMap(ctx context.Context, c client.Client) (map[string]*corev1.Node, error) {
+func (r *MachinePoolReconciler) getNodeRefMap(ctx context.Context, mgmtClient client.Client, clusterClient client.Client, clusterNamespace string) (map[string]*corev1.Node, string, error) {
 	log := ctrl.LoggerFrom(ctx)
 	nodeRefsMap := make(map[string]*corev1.Node)
 	nodeList := corev1.NodeList{}
+
+	// Look for the AWS credentials secret in the management cluster namespace (where the controller runs)
+	secret := &corev1.Secret{}
+	log.Info("Attempting to get AWS credentials secret", "namespace", clusterNamespace, "secret", "capa-manager-bootstrap-credentials")
+
+	// Also try looking in the controller's own namespace as a fallback
+	controllerNamespace := os.Getenv("POD_NAMESPACE")
+	if controllerNamespace == "" {
+		controllerNamespace = "capi-system" // default fallback
+	}
+	log.Info("Controller namespace info", "controllerNamespace", controllerNamespace, "clusterNamespace", clusterNamespace)
+	if err := mgmtClient.Get(ctx, client.ObjectKey{Namespace: clusterNamespace, Name: "capa-manager-bootstrap-credentials"}, secret); err != nil {
+		if apierrors.IsNotFound(err) {
+			log.Info("AWS credentials secret not found, proceeding without region correction", "namespace", clusterNamespace, "secret", "capa-manager-bootstrap-credentials")
+		} else {
+			log.Info("Error getting AWS credentials secret", "namespace", clusterNamespace, "secret", "capa-manager-bootstrap-credentials", "error", err)
+			return nil, "", errors.Wrapf(err, "failed to get AWS credentials secret in namespace %q", clusterNamespace)
+		}
+	} else {
+		log.Info("AWS credentials secret found successfully", "namespace", clusterNamespace, "secret", "capa-manager-bootstrap-credentials")
+	}
+
+	var originalRegion string
+	if secret.Data != nil && secret.Data["config"] != nil {
+		cfg, err := ini.Load(secret.Data["config"])
+		if err != nil {
+			log.Info("Failed to parse AWS config, proceeding without region correction", "error", err)
+		} else {
+			originalRegion = cfg.Section("default").Key("region").String()
+			log.Info("Extracted AWS region from config", "region", originalRegion)
+		}
+	}
+
 	for {
-		if err := c.List(ctx, &nodeList, client.Continue(nodeList.Continue)); err != nil {
-			return nil, err
+		if err := clusterClient.List(ctx, &nodeList, client.Continue(nodeList.Continue)); err != nil {
+			return nil, "", err
 		}
 
+		log.Info("Processing nodes", "count", len(nodeList.Items), "originalRegion", originalRegion)
 		for _, node := range nodeList.Items {
 			if node.Spec.ProviderID == "" {
 				log.V(2).Info("No ProviderID detected, skipping", "providerID", node.Spec.ProviderID)
 				continue
 			}
 
-			nodeRefsMap[node.Spec.ProviderID] = &node
+			log.Info("Processing node", "nodeName", node.Name, "providerID", node.Spec.ProviderID)
+
+			// Create a copy of the node to avoid modifying the original
+			nodeCopy := node.DeepCopy()
+			correctedProviderID := node.Spec.ProviderID
+
+			// If we have the original region and the providerID is AWS format, correct the zone
+			if originalRegion != "" && strings.HasPrefix(node.Spec.ProviderID, "aws:///") {
+				parts := strings.Split(node.Spec.ProviderID, "/")
+				log.Info("Node ProviderID parts", "parts", parts, "count", len(parts))
+				if len(parts) >= 5 {
+					// Extract the zone from the original ProviderID and replace the region part
+					originalZone := parts[3] // e.g., "us-east-1a" (index 3, not 2!)
+					// Replace the region part of the zone with the correct region
+					// e.g., "us-east-1a" -> "us-isob-east-1a"
+					zoneParts := strings.Split(originalZone, "-")
+					log.Info("Node zone parts", "originalZone", originalZone, "zoneParts", zoneParts, "count", len(zoneParts))
+					if len(zoneParts) >= 3 {
+						// Replace the first 3 parts (us-east-1) with the correct region (us-isob-east-1)
+						correctedZone := fmt.Sprintf("%s-%s", originalRegion, zoneParts[len(zoneParts)-1]) // e.g., "us-isob-east-1a"
+						correctedProviderID = fmt.Sprintf("aws:///%s/%s", correctedZone, parts[4])
+						// Update the node copy's ProviderID to match the corrected one
+						nodeCopy.Spec.ProviderID = correctedProviderID
+						log.Info("Corrected AWS ProviderID zone", "original", node.Spec.ProviderID, "corrected", correctedProviderID)
+					}
+				}
+			}
+
+			// Store the node with the corrected ProviderID as the key
+			nodeRefsMap[correctedProviderID] = nodeCopy
 		}
 
 		if nodeList.Continue == "" {
@@ -578,5 +674,5 @@ func (r *MachinePoolReconciler) getNodeRefMap(ctx context.Context, c client.Clie
 		}
 	}
 
-	return nodeRefsMap, nil
+	return nodeRefsMap, originalRegion, nil
 }

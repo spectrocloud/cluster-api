@@ -19,6 +19,7 @@ package controllers
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/pkg/errors"
@@ -94,6 +95,27 @@ func (r *MachinePoolReconciler) reconcileNodeRefs(ctx context.Context, s *scope)
 	if err != nil {
 		if err == errNoAvailableNodes {
 			log.Info("Cannot assign NodeRefs to MachinePool, no matching Nodes")
+
+			// Check if we've failed too many times and need to trigger ProviderID correction retry
+			failureCount := r.getNodeRefFailureCount(mp)
+			log.Info("NodeRef assignment failed", "failureCount", failureCount, "maxRetries", 15)
+
+			if failureCount >= 15 {
+				log.Info("Too many NodeRef assignment failures, triggering ProviderID correction retry", "failureCount", failureCount)
+				// Clear the failure count and requeue to trigger ProviderID correction logic
+				if err := r.clearNodeRefFailureCount(ctx, mp); err != nil {
+					log.Error(err, "Failed to clear NodeRef failure count")
+				}
+				return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+			} else {
+				// Increment failure count
+				if err := r.incrementNodeRefFailureCount(ctx, mp); err != nil {
+					log.Error(err, "Failed to increment NodeRef failure count")
+				} else {
+					log.Info("Incremented NodeRef failure count", "newCount", failureCount+1)
+				}
+			}
+
 			// No need to requeue here. Nodes emit an event that triggers reconciliation.
 			return ctrl.Result{}, nil
 		}
@@ -106,6 +128,13 @@ func (r *MachinePoolReconciler) reconcileNodeRefs(ctx context.Context, s *scope)
 	mp.Status.UnavailableReplicas = mp.Status.Replicas - mp.Status.AvailableReplicas
 	mp.Status.NodeRefs = nodeRefsResult.references
 
+	log.V(4).Info("Updated MachinePool status", "readyReplicas", mp.Status.ReadyReplicas, "availableReplicas", mp.Status.AvailableReplicas, "nodeRefs", len(mp.Status.NodeRefs), "mpObjectID", fmt.Sprintf("%p", mp))
+
+	// Clear failure count on successful NodeRef assignment
+	if err := r.clearNodeRefFailureCount(ctx, mp); err != nil {
+		log.Error(err, "Failed to clear NodeRef failure count on success")
+	}
+
 	log.Info("Set MachinePool's NodeRefs", "nodeRefs", mp.Status.NodeRefs)
 	r.recorder.Event(mp, corev1.EventTypeNormal, "SuccessfulSetNodeRefs", fmt.Sprintf("%+v", mp.Status.NodeRefs))
 
@@ -115,6 +144,7 @@ func (r *MachinePoolReconciler) reconcileNodeRefs(ctx context.Context, s *scope)
 		return ctrl.Result{}, err
 	}
 
+	log.V(4).Info("Final condition check", "replicas", mp.Status.Replicas, "readyReplicas", mp.Status.ReadyReplicas, "nodeRefs", len(nodeRefsResult.references), "mpObjectID", fmt.Sprintf("%p", mp))
 	if mp.Status.Replicas != mp.Status.ReadyReplicas || len(nodeRefsResult.references) != int(mp.Status.ReadyReplicas) {
 		log.Info("Not enough ready replicas or node references", "nodeRefs", len(nodeRefsResult.references), "readyReplicas", mp.Status.ReadyReplicas, "replicas", mp.Status.Replicas)
 		conditions.MarkFalse(mp, expv1.ReplicasReadyCondition, expv1.WaitingForReplicasReadyReason, clusterv1.ConditionSeverityInfo, "")
@@ -173,10 +203,24 @@ func (r *MachinePoolReconciler) getNodeReferences(ctx context.Context, providerI
 			continue
 		}
 		if node, ok := nodeRefsMap[providerID]; ok {
-			if noderefutil.IsNodeReady(node) {
+			// Debug: Log the node's ready condition
+			readyCondition := noderefutil.GetReadyCondition(&node.Status)
+			if readyCondition != nil {
+				log.Info("Node ready condition", "nodeName", node.Name, "status", readyCondition.Status, "message", readyCondition.Message)
+			} else {
+				log.Info("Node has no ready condition", "nodeName", node.Name)
+			}
+
+			// Use the node from the map (which should have the latest status from getNodeRefMap)
+			isReady := noderefutil.IsNodeReady(node)
+			log.Info("Node ready check result", "nodeName", node.Name, "isReady", isReady)
+
+			if isReady {
 				ready++
+				log.Info("Incremented ready counter", "ready", ready)
 				if noderefutil.IsNodeAvailable(node, *minReadySeconds, metav1.Now()) {
 					available++
+					log.Info("Incremented available counter", "available", available)
 				}
 			}
 			nodeRefs = append(nodeRefs, corev1.ObjectReference{
@@ -191,6 +235,8 @@ func (r *MachinePoolReconciler) getNodeReferences(ctx context.Context, providerI
 	if len(nodeRefs) == 0 && len(providerIDList) != 0 {
 		return getNodeReferencesResult{}, errNoAvailableNodes
 	}
+
+	log.Info("Final getNodeReferences result", "nodeRefs", len(nodeRefs), "ready", ready, "available", available)
 	return getNodeReferencesResult{nodeRefs, available, ready}, nil
 }
 
@@ -224,5 +270,41 @@ func (r *MachinePoolReconciler) patchNodes(ctx context.Context, c client.Client,
 			}
 		}
 	}
+	return nil
+}
+
+// getNodeRefFailureCount returns the number of consecutive NodeRef assignment failures
+func (r *MachinePoolReconciler) getNodeRefFailureCount(mp *expv1.MachinePool) int {
+	if mp.Annotations == nil {
+		return 0
+	}
+	if countStr, exists := mp.Annotations["cluster.x-k8s.io/node-ref-failure-count"]; exists {
+		if count, err := strconv.Atoi(countStr); err == nil {
+			return count
+		}
+	}
+	return 0
+}
+
+// incrementNodeRefFailureCount increments the NodeRef assignment failure count
+func (r *MachinePoolReconciler) incrementNodeRefFailureCount(ctx context.Context, mp *expv1.MachinePool) error {
+	if mp.Annotations == nil {
+		mp.Annotations = make(map[string]string)
+	}
+	currentCount := r.getNodeRefFailureCount(mp)
+	mp.Annotations["cluster.x-k8s.io/node-ref-failure-count"] = strconv.Itoa(currentCount + 1)
+	// Do not persist here; a direct Update may drop Status on the in-flight object.
+	// The outer deferred patch in the main reconcile will persist this change safely.
+	return nil
+}
+
+// clearNodeRefFailureCount clears the NodeRef assignment failure count
+func (r *MachinePoolReconciler) clearNodeRefFailureCount(ctx context.Context, mp *expv1.MachinePool) error {
+	if mp.Annotations == nil {
+		return nil
+	}
+	delete(mp.Annotations, "cluster.x-k8s.io/node-ref-failure-count")
+	// Do not persist here; a direct Update may drop Status on the in-flight object.
+	// The outer deferred patch in the main reconcile will persist this change safely.
 	return nil
 }
