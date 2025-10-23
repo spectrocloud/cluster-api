@@ -25,6 +25,9 @@ import (
 )
 
 const (
+	// TakeOverCluster is the label used to mark the nodes that run on takeover-cluster instances.
+	TakeOverCluster = "cluster.x-k8s.io/takeover-cluster"
+	
 	// ClusterNameLabel is the label set on machines linked to a cluster and
 	// external objects(bootstrap and infrastructure providers).
 	ClusterNameLabel = "cluster.x-k8s.io/cluster-name"
