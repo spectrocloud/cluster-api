@@ -65,8 +65,34 @@ func (r *MachinePoolReconciler) reconcileNodeRefs(ctx context.Context, s *scope)
 	// Check that the Machine doesn't already have a NodeRefs.
 	// Return early if there is no work to do.
 	if mp.Status.Replicas == mp.Status.ReadyReplicas && len(mp.Status.NodeRefs) == int(mp.Status.ReadyReplicas) {
-		conditions.MarkTrue(mp, expv1.ReplicasReadyCondition)
-		return ctrl.Result{}, nil
+		// Validate that the UIDs in NodeRefs are still valid
+		if s.nodeRefMap != nil {
+			// Create a name-to-node mapping for efficient lookup
+			nodeNameMap := make(map[string]*corev1.Node, len(s.nodeRefMap))
+			for _, node := range s.nodeRefMap {
+				nodeNameMap[node.Name] = node
+			}
+
+			validNodeRefs := true
+			for _, nodeRef := range mp.Status.NodeRefs {
+				foundNode, exists := nodeNameMap[nodeRef.Name]
+
+				// If node not found or UID doesn't match, mark as invalid
+				if !exists || foundNode.UID != nodeRef.UID {
+					log.V(1).Info("NodeRefs do not match current Nodes, will reassign")
+					validNodeRefs = false
+					break
+				}
+			}
+
+			if validNodeRefs {
+				conditions.MarkTrue(mp, expv1.ReplicasReadyCondition)
+				return ctrl.Result{}, nil
+			}
+		} else {
+			// If nodeRefMap is nil, we can't validate UIDs, so proceed with reconciliation
+			log.V(2).Info("NodeRefMap is nil, proceeding with reconciliation to validate NodeRefs")
+		}
 	}
 
 	// Check that the MachinePool has valid ProviderIDList.
