@@ -80,25 +80,10 @@ func (ca *clusterAccessor) createConnection(ctx context.Context) (*createConnect
 
 	// If the controller runs on the workload cluster, access the apiserver directly by using the
 	// CA and Host from the in-cluster configuration.
-	if runningOnCluster {
-		log.V(6).Info("Controller is running on the cluster, updating REST config with in-cluster config")
-
-		inClusterConfig, err := ctrl.GetConfig()
-		if err != nil {
-			return nil, errors.Wrapf(err, "error getting in-cluster REST config")
-		}
-
-		// Use CA and Host from in-cluster config.
-		restConfig.CAData = nil
-		restConfig.CAFile = inClusterConfig.CAFile
-		restConfig.Host = inClusterConfig.Host
-
-		log.V(6).Info(fmt.Sprintf("Creating HTTP client and mapper with updated REST config with host %q", restConfig.Host))
-		httpClient, mapper, restClient, err = createHTTPClientAndMapper(ctx, ca.config.HealthProbe, restConfig)
-		if err != nil {
-			return nil, errors.Wrapf(err, "error creating HTTP client and mapper (using in-cluster config)")
-		}
-	}
+	// NOTE: In-cluster optimization is DISABLED because it causes authentication issues with managed
+	// Kubernetes services (EKS, GKE, AKS) that use short-lived tokens.
+	// TODO: Re-enable with proper detection of cluster type if performance becomes critical.
+	_ = runningOnCluster // Acknowledge we detect this but don't use it
 
 	log.V(6).Info("Creating cached client and cache")
 	cachedClient, cache, err := createCachedClient(ctx, ca.config, restConfig, httpClient, mapper)
