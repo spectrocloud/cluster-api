@@ -17,12 +17,12 @@ jobs:
       release_tag: ${{ steps.release-version.outputs.release_version }}
     steps:
       - name: Checkout code 
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # tag=v4.2.2
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # tag=v6.0.2
         with:
           fetch-depth: 0
       - name: Get changed files
         id: changed-files
-        uses: tj-actions/changed-files@dcc7a0cba800f454d79fff4b993e8c3555bcc0a8 # tag=v45.0.7
+        uses: tj-actions/changed-files@875e6e5df8b8b00995fe6f0afd7ff1531ac1c47d # tag=v45.0.7
       - name: Get release version
         id: release-version
         run: |
@@ -87,14 +87,14 @@ jobs:
         env:
           RELEASE_TAG: ${{needs.push_release_tags.outputs.release_tag}}
       - name: checkout code
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # tag=v4.2.2
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # tag=v6.0.2
         with:
           fetch-depth: 0
           ref: ${{ env.RELEASE_TAG }}
       - name: Calculate go version
         run: echo "go_version=$(make go-version)" >> $GITHUB_ENV
       - name: Set up Go
-        uses: actions/setup-go@f111f3307d8850f501ac008e886eec1fd1932a34 # tag=v5.3.0
+        uses: actions/setup-go@7a3fe6cf4cb3a834922a1244abfce67bcef6a0c5 # tag=v6.2.0
         with:
           go-version: ${{ env.go_version }}
       - name: generate release artifacts
@@ -105,7 +105,7 @@ jobs:
           curl -L "https://raw.githubusercontent.com/${{ github.repository }}/main/CHANGELOG/${{ env.RELEASE_TAG }}.md" \
           -o "${{ env.RELEASE_TAG }}.md"
       - name: Release
-        uses: softprops/action-gh-release@c95fe1489396fe8a9eb87c0abf8aa5b2ef267fda # tag=v2.2.1
+        uses: softprops/action-gh-release@a06a81a03ee405af7f2048a818ed3f03bbf83c7b # tag=v2.5.0
         with:
           draft: true
           files: out/*
