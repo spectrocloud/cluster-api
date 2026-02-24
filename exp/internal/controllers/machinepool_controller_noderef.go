@@ -19,6 +19,7 @@ package controllers
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/pkg/errors"
@@ -120,6 +121,28 @@ func (r *MachinePoolReconciler) reconcileNodeRefs(ctx context.Context, s *scope)
 	if err != nil {
 		if err == errNoAvailableNodes {
 			log.Info("Cannot assign NodeRefs to MachinePool, no matching Nodes")
+
+			// In emulator environments, track consecutive failures to detect persistent
+			// ProviderID mismatches and trigger a requeue for correction.
+			if s.isEmulator {
+				failureCount := r.getNodeRefFailureCount(mp)
+				log.Info("NodeRef assignment failed (emulator)", "failureCount", failureCount, "maxRetries", 15)
+
+				if failureCount >= 15 {
+					log.Info("Too many NodeRef assignment failures, triggering ProviderID correction retry", "failureCount", failureCount)
+					if err := r.clearNodeRefFailureCount(ctx, mp); err != nil {
+						log.Error(err, "Failed to clear NodeRef failure count")
+					}
+					return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+				} else {
+					if err := r.incrementNodeRefFailureCount(ctx, mp); err != nil {
+						log.Error(err, "Failed to increment NodeRef failure count")
+					} else {
+						log.Info("Incremented NodeRef failure count", "newCount", failureCount+1)
+					}
+				}
+			}
+
 			// No need to requeue here. Nodes emit an event that triggers reconciliation.
 			return ctrl.Result{}, nil
 		}
@@ -131,6 +154,13 @@ func (r *MachinePoolReconciler) reconcileNodeRefs(ctx context.Context, s *scope)
 	mp.Status.AvailableReplicas = int32(nodeRefsResult.available)
 	mp.Status.UnavailableReplicas = mp.Status.Replicas - mp.Status.AvailableReplicas
 	mp.Status.NodeRefs = nodeRefsResult.references
+
+	// Clear failure count on successful NodeRef assignment (emulator only)
+	if s.isEmulator {
+		if err := r.clearNodeRefFailureCount(ctx, mp); err != nil {
+			log.Error(err, "Failed to clear NodeRef failure count on success")
+		}
+	}
 
 	log.Info("Set MachinePool's NodeRefs", "nodeRefs", mp.Status.NodeRefs)
 	r.recorder.Event(mp, corev1.EventTypeNormal, "SuccessfulSetNodeRefs", fmt.Sprintf("%+v", mp.Status.NodeRefs))
@@ -250,5 +280,39 @@ func (r *MachinePoolReconciler) patchNodes(ctx context.Context, c client.Client,
 			}
 		}
 	}
+	return nil
+}
+
+// getNodeRefFailureCount returns the number of consecutive NodeRef assignment failures.
+func (r *MachinePoolReconciler) getNodeRefFailureCount(mp *expv1.MachinePool) int {
+	if mp.Annotations == nil {
+		return 0
+	}
+	if countStr, exists := mp.Annotations["cluster.x-k8s.io/node-ref-failure-count"]; exists {
+		if count, err := strconv.Atoi(countStr); err == nil {
+			return count
+		}
+	}
+	return 0
+}
+
+// incrementNodeRefFailureCount increments the NodeRef assignment failure count.
+func (r *MachinePoolReconciler) incrementNodeRefFailureCount(ctx context.Context, mp *expv1.MachinePool) error {
+	if mp.Annotations == nil {
+		mp.Annotations = make(map[string]string)
+	}
+	currentCount := r.getNodeRefFailureCount(mp)
+	mp.Annotations["cluster.x-k8s.io/node-ref-failure-count"] = strconv.Itoa(currentCount + 1)
+	// Do not persist here; the outer deferred patch in the main reconcile will persist this change safely.
+	return nil
+}
+
+// clearNodeRefFailureCount clears the NodeRef assignment failure count.
+func (r *MachinePoolReconciler) clearNodeRefFailureCount(ctx context.Context, mp *expv1.MachinePool) error {
+	if mp.Annotations == nil {
+		return nil
+	}
+	delete(mp.Annotations, "cluster.x-k8s.io/node-ref-failure-count")
+	// Do not persist here; the outer deferred patch in the main reconcile will persist this change safely.
 	return nil
 }

@@ -21,6 +21,8 @@ import (
 	"fmt"
 	"maps"
 	"net/http"
+	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -80,7 +82,11 @@ func (ca *clusterAccessor) createConnection(ctx context.Context) (*createConnect
 
 	// If the controller runs on the workload cluster, access the apiserver directly by using the
 	// CA and Host from the in-cluster configuration.
-	if runningOnCluster {
+	// NOTE: In emulated secret-region environments (SEQUOIA_EMULATOR), this optimization is
+	// DISABLED because it causes authentication issues with managed Kubernetes services
+	// (EKS, GKE, AKS) that use short-lived tokens.
+	isEmulator := strings.ToLower(os.Getenv("SEQUOIA_EMULATOR")) == "true"
+	if runningOnCluster && !isEmulator {
 		log.V(6).Info("Controller is running on the cluster, updating REST config with in-cluster config")
 
 		inClusterConfig, err := ctrl.GetConfig()
@@ -98,6 +104,8 @@ func (ca *clusterAccessor) createConnection(ctx context.Context) (*createConnect
 		if err != nil {
 			return nil, errors.Wrapf(err, "error creating HTTP client and mapper (using in-cluster config)")
 		}
+	} else if runningOnCluster && isEmulator {
+		log.V(6).Info("Controller is running on the cluster but SEQUOIA_EMULATOR is set, skipping in-cluster config optimization")
 	}
 
 	log.V(6).Info("Creating cached client and cache")
