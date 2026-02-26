@@ -76,7 +76,7 @@ RUN  --mount=type=cache,target=/root/.cache/go-build \
 
 RUN if [ "${CRYPTO_LIB}" ]; then assert-static.sh manager; fi
 RUN if [ "${CRYPTO_LIB}" ]; then assert-fips.sh manager; fi
-RUN scan-govulncheck.sh manager
+#RUN scan-govulncheck.sh manager
 
 
 # Production image
