@@ -21,8 +21,6 @@ import (
 	"fmt"
 	"maps"
 	"net/http"
-	"os"
-	"strings"
 	"sync"
 	"time"
 
@@ -82,10 +80,32 @@ func (ca *clusterAccessor) createConnection(ctx context.Context) (*createConnect
 
 	// If the controller runs on the workload cluster, access the apiserver directly by using the
 	// CA and Host from the in-cluster configuration.
-	// NOTE: In emulated secret-region environments (SEQUOIA_EMULATOR), this optimization is
+	// NOTE: In emulated secret-region environments (sequoia-emulator), this optimization is
 	// DISABLED because it causes authentication issues with managed Kubernetes services
 	// (EKS, GKE, AKS) that use short-lived tokens.
-	isEmulator := strings.ToLower(os.Getenv("SEQUOIA_EMULATOR")) == "true"
+	// The emulator flag is read from the CAPA credentials secret in the cluster namespace,
+	// rather than from an environment variable, so that it is driven by the cloud account
+	// annotation propagated through hubble → ally → palette.
+	isEmulator := false
+	if mgmtConfig, mgmtErr := ctrl.GetConfig(); mgmtErr == nil {
+		mgmtClient, clientErr := client.New(mgmtConfig, client.Options{})
+		if clientErr == nil {
+			capaSecret := &corev1.Secret{}
+			if err := mgmtClient.Get(ctx, client.ObjectKey{Namespace: ca.cluster.Namespace, Name: "capa-manager-bootstrap-credentials"}, capaSecret); err != nil {
+				if !apierrors.IsNotFound(err) {
+					log.V(4).Info("Error reading CAPA credentials secret for emulator check", "namespace", ca.cluster.Namespace, "error", err)
+				}
+			} else if string(capaSecret.Data["sequoia-emulator"]) == "true" {
+				isEmulator = true
+				log.V(6).Info("Sequoia emulator detected from CAPA credentials secret, will skip in-cluster config optimization")
+			}
+		} else {
+			log.V(4).Info("Cannot create management client for emulator check", "error", clientErr)
+		}
+	} else {
+		log.V(4).Info("Cannot get in-cluster config for emulator check", "error", mgmtErr)
+	}
+
 	if runningOnCluster && !isEmulator {
 		log.V(6).Info("Controller is running on the cluster, updating REST config with in-cluster config")
 
@@ -105,7 +125,7 @@ func (ca *clusterAccessor) createConnection(ctx context.Context) (*createConnect
 			return nil, errors.Wrapf(err, "error creating HTTP client and mapper (using in-cluster config)")
 		}
 	} else if runningOnCluster && isEmulator {
-		log.V(6).Info("Controller is running on the cluster but SEQUOIA_EMULATOR is set, skipping in-cluster config optimization")
+		log.V(6).Info("Controller is running on the cluster but sequoia emulator is active, skipping in-cluster config optimization")
 	}
 
 	log.V(6).Info("Creating cached client and cache")
