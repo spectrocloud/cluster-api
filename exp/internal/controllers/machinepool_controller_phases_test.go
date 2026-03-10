@@ -2328,15 +2328,15 @@ func TestMachinePoolReconciler_getNodeRefMap(t *testing.T) {
 				recorder: record.NewFakeRecorder(32),
 			}
 			client := fake.NewClientBuilder().WithObjects(tt.nodeList...).Build()
-			result, err := r.getNodeRefMap(ctx, client)
+			result, err := r.getNodeRefMap(ctx, r.Client, client, "")
 			if tt.err == nil {
 				g.Expect(err).ToNot(HaveOccurred())
 			} else {
 				g.Expect(err).To(HaveOccurred())
 				g.Expect(err).To(Equal(tt.err), "Expected error %v, got %v", tt.err, err)
 			}
-			g.Expect(result).To(HaveLen(len(tt.expected)), "Expected NodeRef count to be %v, got %v", len(result), len(tt.expected))
-			for providerID, node := range result {
+			g.Expect(result.refs).To(HaveLen(len(tt.expected)), "Expected NodeRef count to be %v, got %v", len(result.refs), len(tt.expected))
+			for providerID, node := range result.refs {
 				g.Expect(node).ToNot(BeNil())
 				g.Expect(node.Spec).Should(Equal(tt.expected[providerID].Spec))
 				g.Expect(node.GetObjectMeta().GetName()).Should(Equal(tt.expected[providerID].GetObjectMeta().GetName()))

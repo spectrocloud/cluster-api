@@ -43,6 +43,7 @@ import (
 	capierrors "sigs.k8s.io/cluster-api/errors"
 	expv1 "sigs.k8s.io/cluster-api/exp/api/v1beta1"
 	utilexp "sigs.k8s.io/cluster-api/exp/util"
+	capautil "sigs.k8s.io/cluster-api/internal/util/capa"
 	"sigs.k8s.io/cluster-api/internal/util/ssa"
 	"sigs.k8s.io/cluster-api/util"
 	"sigs.k8s.io/cluster-api/util/annotations"
@@ -53,6 +54,14 @@ import (
 	"sigs.k8s.io/cluster-api/util/patch"
 	"sigs.k8s.io/cluster-api/util/predicates"
 )
+
+const awsProviderIDPrefix = "aws:///"
+
+type nodeRefMapResult struct {
+	refs           map[string]*corev1.Node
+	originalRegion string
+	isEmulator     bool
+}
 
 func (r *MachinePoolReconciler) reconcilePhase(mp *expv1.MachinePool) {
 	// Set the phase to "pending" if nil.
@@ -278,11 +287,11 @@ func (r *MachinePoolReconciler) reconcileInfrastructure(ctx context.Context, s *
 		return ctrl.Result{}, err
 	}
 
-	var getNodeRefsErr error
-	var originalRegion string
 	// Get the nodeRefsMap from the cluster. Pass the management client and namespace
 	// so it can read the CAPA secret for emulator-based ProviderID correction.
-	s.nodeRefMap, originalRegion, s.isEmulator, getNodeRefsErr = r.getNodeRefMap(ctx, r.Client, clusterClient, cluster.Namespace)
+	nodeRefs, getNodeRefsErr := r.getNodeRefMap(ctx, r.Client, clusterClient, cluster.Namespace)
+	s.nodeRefMap = nodeRefs.refs
+	s.isEmulator = nodeRefs.isEmulator
 
 	err = r.reconcileMachines(ctx, s, infraConfig)
 
@@ -302,23 +311,13 @@ func (r *MachinePoolReconciler) reconcileInfrastructure(ctx context.Context, s *
 	}
 
 	// Correct AWS ProviderIDs in the list to use the original region (emulator only).
-	if originalRegion != "" {
-		log.Info("Correcting ProviderIDList for emulated secret region", "count", len(providerIDList), "originalRegion", originalRegion)
+	if nodeRefs.originalRegion != "" {
+		log.Info("Correcting ProviderIDList for emulated secret region", "count", len(providerIDList), "originalRegion", nodeRefs.originalRegion)
 		for i, providerID := range providerIDList {
-			if strings.HasPrefix(providerID, "aws:///") {
-				parts := strings.Split(providerID, "/")
-				if len(parts) >= 5 {
-					originalZone := parts[3]
-					zoneParts := strings.Split(originalZone, "-")
-					if len(zoneParts) >= 3 {
-						correctedZone := fmt.Sprintf("%s-%s", originalRegion, zoneParts[len(zoneParts)-1])
-						correctedProviderID := fmt.Sprintf("aws:///%s/%s", correctedZone, parts[4])
-						if correctedProviderID != providerID {
-							log.Info("Corrected AWS ProviderID in list", "original", providerID, "corrected", correctedProviderID)
-							providerIDList[i] = correctedProviderID
-						}
-					}
-				}
+			correctedProviderID := correctAWSProviderID(providerID, nodeRefs.originalRegion)
+			if correctedProviderID != providerID {
+				log.Info("Corrected AWS ProviderID in list", "original", providerID, "corrected", correctedProviderID)
+				providerIDList[i] = correctedProviderID
 			}
 		}
 	}
@@ -581,7 +580,7 @@ func (r *MachinePoolReconciler) waitForMachineCreation(ctx context.Context, mach
 	return nil
 }
 
-func (r *MachinePoolReconciler) getNodeRefMap(ctx context.Context, mgmtClient client.Client, clusterClient client.Client, clusterNamespace string) (map[string]*corev1.Node, string, bool, error) {
+func (r *MachinePoolReconciler) getNodeRefMap(ctx context.Context, mgmtClient client.Client, clusterClient client.Client, clusterNamespace string) (nodeRefMapResult, error) {
 	log := ctrl.LoggerFrom(ctx)
 	nodeRefsMap := make(map[string]*corev1.Node)
 	nodeList := corev1.NodeList{}
@@ -592,7 +591,7 @@ func (r *MachinePoolReconciler) getNodeRefMap(ctx context.Context, mgmtClient cl
 	isEmulator := false
 
 	secret := &corev1.Secret{}
-	if err := mgmtClient.Get(ctx, client.ObjectKey{Namespace: clusterNamespace, Name: "capa-manager-bootstrap-credentials"}, secret); err != nil {
+	if err := mgmtClient.Get(ctx, client.ObjectKey{Namespace: clusterNamespace, Name: capautil.ManagerBootstrapCredentialsSecretName}, secret); err != nil {
 		if apierrors.IsNotFound(err) {
 			log.V(4).Info("CAPA credentials secret not found, proceeding without region correction", "namespace", clusterNamespace)
 		} else {
@@ -600,7 +599,7 @@ func (r *MachinePoolReconciler) getNodeRefMap(ctx context.Context, mgmtClient cl
 		}
 	} else {
 		// Check if this is an emulator environment
-		if string(secret.Data["sequoia-emulator"]) == "true" {
+		if string(secret.Data[capautil.SequoiaEmulatorKey]) == "true" {
 			isEmulator = true
 			log.Info("Sequoia emulator detected, ProviderID correction is enabled")
 		}
@@ -619,7 +618,7 @@ func (r *MachinePoolReconciler) getNodeRefMap(ctx context.Context, mgmtClient cl
 
 	for {
 		if err := clusterClient.List(ctx, &nodeList, client.Continue(nodeList.Continue)); err != nil {
-			return nil, "", false, err
+			return nodeRefMapResult{}, err
 		}
 
 		for _, node := range nodeList.Items {
@@ -632,17 +631,11 @@ func (r *MachinePoolReconciler) getNodeRefMap(ctx context.Context, mgmtClient cl
 			correctedProviderID := node.Spec.ProviderID
 
 			// Only correct ProviderIDs when running in an emulator environment with a known region.
-			if isEmulator && originalRegion != "" && strings.HasPrefix(node.Spec.ProviderID, "aws:///") {
-				parts := strings.Split(node.Spec.ProviderID, "/")
-				if len(parts) >= 5 {
-					originalZone := parts[3]
-					zoneParts := strings.Split(originalZone, "-")
-					if len(zoneParts) >= 3 {
-						correctedZone := fmt.Sprintf("%s-%s", originalRegion, zoneParts[len(zoneParts)-1])
-						correctedProviderID = fmt.Sprintf("aws:///%s/%s", correctedZone, parts[4])
-						nodeCopy.Spec.ProviderID = correctedProviderID
-						log.Info("Corrected AWS node ProviderID", "original", node.Spec.ProviderID, "corrected", correctedProviderID)
-					}
+			if isEmulator && originalRegion != "" {
+				correctedProviderID = correctAWSProviderID(node.Spec.ProviderID, originalRegion)
+				if correctedProviderID != node.Spec.ProviderID {
+					nodeCopy.Spec.ProviderID = correctedProviderID
+					log.Info("Corrected AWS node ProviderID", "original", node.Spec.ProviderID, "corrected", correctedProviderID)
 				}
 			}
 
@@ -654,5 +647,28 @@ func (r *MachinePoolReconciler) getNodeRefMap(ctx context.Context, mgmtClient cl
 		}
 	}
 
-	return nodeRefsMap, originalRegion, isEmulator, nil
+	return nodeRefMapResult{
+		refs:           nodeRefsMap,
+		originalRegion: originalRegion,
+		isEmulator:     isEmulator,
+	}, nil
+}
+
+func correctAWSProviderID(providerID, originalRegion string) string {
+	if !strings.HasPrefix(providerID, awsProviderIDPrefix) {
+		return providerID
+	}
+
+	parts := strings.Split(providerID, "/")
+	if len(parts) < 5 {
+		return providerID
+	}
+
+	zoneParts := strings.Split(parts[3], "-")
+	if len(zoneParts) < 3 {
+		return providerID
+	}
+
+	correctedZone := fmt.Sprintf("%s-%s", originalRegion, zoneParts[len(zoneParts)-1])
+	return fmt.Sprintf("%s%s/%s", awsProviderIDPrefix, correctedZone, parts[4])
 }
