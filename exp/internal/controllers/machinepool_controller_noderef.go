@@ -42,6 +42,11 @@ import (
 
 var errNoAvailableNodes = errors.New("cannot find nodes with matching ProviderIDs in ProviderIDList")
 
+const (
+	nodeRefFailureCountAnnotation = "cluster.x-k8s.io/node-ref-failure-count"
+	maxNodeRefFailureRetries      = 15
+)
+
 type getNodeReferencesResult struct {
 	references []corev1.ObjectReference
 	available  int
@@ -126,9 +131,9 @@ func (r *MachinePoolReconciler) reconcileNodeRefs(ctx context.Context, s *scope)
 			// ProviderID mismatches and trigger a requeue for correction.
 			if s.isEmulator {
 				failureCount := r.getNodeRefFailureCount(mp)
-				log.Info("NodeRef assignment failed (emulator)", "failureCount", failureCount, "maxRetries", 15)
+				log.Info("NodeRef assignment failed (emulator)", "failureCount", failureCount, "maxRetries", maxNodeRefFailureRetries)
 
-				if failureCount >= 15 {
+				if failureCount >= maxNodeRefFailureRetries {
 					log.Info("Too many NodeRef assignment failures, triggering ProviderID correction retry", "failureCount", failureCount)
 					if err := r.clearNodeRefFailureCount(ctx, mp); err != nil {
 						log.Error(err, "Failed to clear NodeRef failure count")
@@ -288,7 +293,7 @@ func (r *MachinePoolReconciler) getNodeRefFailureCount(mp *expv1.MachinePool) in
 	if mp.Annotations == nil {
 		return 0
 	}
-	if countStr, exists := mp.Annotations["cluster.x-k8s.io/node-ref-failure-count"]; exists {
+	if countStr, exists := mp.Annotations[nodeRefFailureCountAnnotation]; exists {
 		if count, err := strconv.Atoi(countStr); err == nil {
 			return count
 		}
@@ -302,7 +307,7 @@ func (r *MachinePoolReconciler) incrementNodeRefFailureCount(ctx context.Context
 		mp.Annotations = make(map[string]string)
 	}
 	currentCount := r.getNodeRefFailureCount(mp)
-	mp.Annotations["cluster.x-k8s.io/node-ref-failure-count"] = strconv.Itoa(currentCount + 1)
+	mp.Annotations[nodeRefFailureCountAnnotation] = strconv.Itoa(currentCount + 1)
 	// Do not persist here; the outer deferred patch in the main reconcile will persist this change safely.
 	return nil
 }
@@ -312,7 +317,7 @@ func (r *MachinePoolReconciler) clearNodeRefFailureCount(ctx context.Context, mp
 	if mp.Annotations == nil {
 		return nil
 	}
-	delete(mp.Annotations, "cluster.x-k8s.io/node-ref-failure-count")
+	delete(mp.Annotations, nodeRefFailureCountAnnotation)
 	// Do not persist here; the outer deferred patch in the main reconcile will persist this change safely.
 	return nil
 }

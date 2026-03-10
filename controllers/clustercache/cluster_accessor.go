@@ -43,6 +43,12 @@ type clusterAccessor struct {
 	// config is the config of the clusterAccessor.
 	config *clusterAccessorConfig
 
+	// emulatorDetectionOnce ensures we only resolve sequoia-emulator mode once.
+	emulatorDetectionOnce sync.Once
+
+	// isEmulator indicates if sequoia-emulator mode is enabled for this cluster accessor.
+	isEmulator bool
+
 	// lockedStateLock is used to synchronize access to lockedState.
 	// It should *never* be held for an extended period of time (e.g. during connection creation) to ensure
 	// regular controllers are not blocked when calling e.g. GetClient().
