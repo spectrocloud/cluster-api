@@ -102,6 +102,11 @@ type scope struct {
 	// nodeRefMapResult is a map of providerIDs to Nodes that are associated with the Cluster.
 	// It is set after reconcileInfrastructure is called.
 	nodeRefMap map[string]*corev1.Node
+
+	// isEmulator indicates if the cluster is running in a Sequoia emulator environment.
+	// When true, ProviderID correction and NodeRef retry logic are activated.
+	// It is set after reconcileInfrastructure reads the CAPA credentials secret.
+	isEmulator bool
 }
 
 func (r *MachinePoolReconciler) SetupWithManager(ctx context.Context, mgr ctrl.Manager, options controller.Options) error {
