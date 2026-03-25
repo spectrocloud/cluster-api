@@ -39,6 +39,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
 
+	capautil "sigs.k8s.io/cluster-api/internal/util/capa"
 	kcfg "sigs.k8s.io/cluster-api/util/kubeconfig"
 )
 
@@ -80,7 +81,17 @@ func (ca *clusterAccessor) createConnection(ctx context.Context) (*createConnect
 
 	// If the controller runs on the workload cluster, access the apiserver directly by using the
 	// CA and Host from the in-cluster configuration.
-	if runningOnCluster {
+	// NOTE: In emulated secret-region environments (sequoia-emulator), this optimization is
+	// DISABLED because it causes authentication issues with managed Kubernetes services
+	// (EKS, GKE, AKS) that use short-lived tokens.
+	// The emulator flag is read from the CAPA credentials secret in the cluster namespace,
+	// rather than from an environment variable, so that it is driven by the cloud account
+	// annotation propagated through hubble → ally → palette.
+	isEmulator := ca.resolveIsEmulator(ctx)
+
+	if runningOnCluster && isEmulator {
+		log.V(6).Info("Controller is running on the cluster but sequoia emulator is active, skipping in-cluster config optimization")
+	} else if runningOnCluster {
 		log.V(6).Info("Controller is running on the cluster, updating REST config with in-cluster config")
 
 		inClusterConfig, err := ctrl.GetConfig()
@@ -112,6 +123,39 @@ func (ca *clusterAccessor) createConnection(ctx context.Context) (*createConnect
 		CachedClient: cachedClient,
 		Cache:        cache,
 	}, nil
+}
+
+func (ca *clusterAccessor) resolveIsEmulator(ctx context.Context) bool {
+	log := ctrl.LoggerFrom(ctx)
+
+	ca.emulatorDetectionOnce.Do(func() {
+		mgmtConfig, mgmtErr := ctrl.GetConfig()
+		if mgmtErr != nil {
+			log.V(4).Info("Cannot get in-cluster config for emulator check", "error", mgmtErr)
+			return
+		}
+
+		mgmtClient, clientErr := client.New(mgmtConfig, client.Options{})
+		if clientErr != nil {
+			log.V(4).Info("Cannot create management client for emulator check", "error", clientErr)
+			return
+		}
+
+		capaSecret := &corev1.Secret{}
+		if err := mgmtClient.Get(ctx, client.ObjectKey{Namespace: ca.cluster.Namespace, Name: capautil.ManagerBootstrapCredentialsSecretName}, capaSecret); err != nil {
+			if !apierrors.IsNotFound(err) {
+				log.V(4).Info("Error reading CAPA credentials secret for emulator check", "namespace", ca.cluster.Namespace, "error", err)
+			}
+			return
+		}
+
+		if string(capaSecret.Data[capautil.SequoiaEmulatorKey]) == "true" {
+			ca.isEmulator = true
+			log.V(6).Info("Sequoia emulator detected from CAPA credentials secret, will skip in-cluster config optimization")
+		}
+	})
+
+	return ca.isEmulator
 }
 
 // createRESTConfig returns a REST config created based on the kubeconfig Secret.
