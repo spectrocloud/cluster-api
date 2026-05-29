@@ -25,7 +25,7 @@ SHELL:=/usr/bin/env bash
 #
 GO_VERSION ?= 1.25.11
 GO_DIRECTIVE_VERSION ?= 1.25.0
-GO_CONTAINER_IMAGE ?= us-docker.pkg.dev/palette-images/build-base-images/golang:${GO_VERSION}-alpine
+GO_CONTAINER_IMAGE ?= us-central1-docker.pkg.dev/palette-images-dev/hardened-images/builder/golang:${GO_VERSION}-alpine
 
 # Ensure correct toolchain is used
 GOTOOLCHAIN = go$(GO_VERSION)
