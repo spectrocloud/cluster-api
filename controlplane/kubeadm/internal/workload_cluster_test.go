@@ -1271,6 +1271,10 @@ func TestUpdateFeatureGatesInKubeadmConfigMap(t *testing.T) {
 				FeatureGates: nil,
 			},
 			wantClusterConfiguration: &bootstrapv1.ClusterConfiguration{
+				TypeMeta: metav1.TypeMeta{
+					APIVersion: "kubeadm.k8s.io/v1beta4",
+					Kind:       "ClusterConfiguration",
+				},
 				FeatureGates: nil,
 			},
 		},
