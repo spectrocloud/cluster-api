@@ -74,6 +74,11 @@ func (r *KubeadmControlPlaneReconciler) upgradeControlPlane(
 		return ctrl.Result{}, errors.Wrap(err, "failed to set cluster-admin ClusterRoleBinding for kubeadm")
 	}
 
+	// Creates ClusterRoleBinding and ClusterRoles introduced by new versions of kubeadm.
+	if err := workloadCluster.EnsureKubeadmPermissions(ctx, parsedVersion); err != nil {
+		return ctrl.Result{}, errors.Wrap(err, "failed to update control plane: failed to set cluster-admin ClusterRoleBinding for kubeadm")
+	}
+
 	kubeadmCMMutators := make([]func(*bootstrapv1.ClusterConfiguration), 0)
 	kubeadmCMMutators = append(kubeadmCMMutators, workloadCluster.UpdateKubernetesVersionInKubeadmConfigMap(parsedVersion))
 
