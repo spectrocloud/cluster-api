@@ -1,0 +1,3 @@
+# fork-local ENVIRONMENTAL failure patterns (grep -E), beyond the built-ins.
+# TestOverrides: clusterctl xdg config-dir resolution differs on dev macs — upstream test, passes on Linux CI. Re-check on jumphost.
+--- FAIL: TestOverrides
