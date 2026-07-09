@@ -1,3 +1,4 @@
+# ── INPUT (Gate-1, you edit) — SHAs to SKIP / drop. One SHA per line; '#' = comment. See ../README.md ──
 # explicit SKIP SHAs (one per line; # = comment)
 # reviewer-applied (capi-plan-reviewer, v1.9.4->v1.13.3): each verified present-or-newer in target v1.13.3.
 

@@ -1,3 +1,4 @@
+# ── INPUT (Gate-1, you edit) — SHAs to force-pick as PICK-RESOLVE (3-way-merged at execute). One per line; '#' = comment. See ../README.md ──
 # force-PICK SHAs (one per line; # = comment) — SPECTRO fork behavior that MUST carry forward.
 # engine 3-way-merges these at execute (capi-conflict-resolver). reviewer-applied (capi-plan-reviewer, v1.9.4->v1.13.3).
 

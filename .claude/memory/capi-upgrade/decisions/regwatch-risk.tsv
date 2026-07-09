@@ -1,3 +1,4 @@
+# ── INPUT (Gate-1, you edit) — Regression-Watch risk: <sha> <L|M|H> [note]. unset=REVIEW (blocks execute); High=sign-off. '#' = comment. See ../README.md ──
 # Regression-Watch durable risk ledger — <sha> <L|M|H>  (reviewer-applied, capi-plan-reviewer v1.9.4->v1.13.3)
 # H blocks auto-progression → explicit human sign-off required at Gate 1.
 # --- test/CI, low risk ---
