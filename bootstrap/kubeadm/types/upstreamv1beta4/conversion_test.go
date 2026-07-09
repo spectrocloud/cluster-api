@@ -19,16 +19,26 @@ limitations under the License.
 package upstreamv1beta4
 
 import (
+	"reflect"
 	"testing"
+	"time"
 
-	fuzz "github.com/google/gofuzz"
 	. "github.com/onsi/gomega"
 	"k8s.io/apimachinery/pkg/api/apitesting/fuzzer"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	runtimeserializer "k8s.io/apimachinery/pkg/runtime/serializer"
+	"k8s.io/utils/ptr"
+	"sigs.k8s.io/randfill"
 
-	bootstrapv1 "sigs.k8s.io/cluster-api/bootstrap/kubeadm/api/v1beta1"
-	utilconversion "sigs.k8s.io/cluster-api/util/conversion"
+	bootstrapv1 "sigs.k8s.io/cluster-api/api/bootstrap/kubeadm/v1beta2"
+	"sigs.k8s.io/cluster-api/bootstrap/kubeadm/types/upstreamhub"
+	conversionutil "sigs.k8s.io/cluster-api/util/conversion"
+)
+
+const (
+	fakeID     = "abcdef"
+	fakeSecret = "abcdef0123456789"
 )
 
 // Test is disabled when the race detector is enabled (via "//go:build !race" above) because otherwise the fuzz tests would just time out.
@@ -36,28 +46,27 @@ import (
 func TestFuzzyConversion(t *testing.T) {
 	g := NewWithT(t)
 	scheme := runtime.NewScheme()
-	g.Expect(AddToScheme(scheme)).To(Succeed())
 	g.Expect(bootstrapv1.AddToScheme(scheme)).To(Succeed())
 
-	t.Run("for ClusterConfiguration", utilconversion.FuzzTestFunc(utilconversion.FuzzTestFuncInput{
+	t.Run("for ClusterConfiguration", conversionutil.FuzzTestFunc(conversionutil.FuzzTestFuncInput{
 		Scheme: scheme,
-		Hub:    &bootstrapv1.ClusterConfiguration{},
+		Hub:    &upstreamhub.ClusterConfiguration{},
 		Spoke:  &ClusterConfiguration{},
 		// NOTE: Kubeadm types does not have ObjectMeta, so we are required to skip data annotation cleanup in the spoke-hub-spoke round trip test.
 		SkipSpokeAnnotationCleanup: true,
 		FuzzerFuncs:                []fuzzer.FuzzerFuncs{fuzzFuncs},
 	}))
-	t.Run("for InitConfiguration", utilconversion.FuzzTestFunc(utilconversion.FuzzTestFuncInput{
+	t.Run("for InitConfiguration", conversionutil.FuzzTestFunc(conversionutil.FuzzTestFuncInput{
 		Scheme: scheme,
-		Hub:    &bootstrapv1.InitConfiguration{},
+		Hub:    &upstreamhub.InitConfiguration{},
 		Spoke:  &InitConfiguration{},
 		// NOTE: Kubeadm types does not have ObjectMeta, so we are required to skip data annotation cleanup in the spoke-hub-spoke round trip test.
 		SkipSpokeAnnotationCleanup: true,
-		FuzzerFuncs:                []fuzzer.FuzzerFuncs{fuzzFuncs},
+		FuzzerFuncs:                []fuzzer.FuzzerFuncs{fuzzFuncs, initConfigurationFuzzFuncs},
 	}))
-	t.Run("for JoinConfiguration", utilconversion.FuzzTestFunc(utilconversion.FuzzTestFuncInput{
+	t.Run("for JoinConfiguration", conversionutil.FuzzTestFunc(conversionutil.FuzzTestFuncInput{
 		Scheme: scheme,
-		Hub:    &bootstrapv1.JoinConfiguration{},
+		Hub:    &upstreamhub.JoinConfiguration{},
 		Spoke:  &JoinConfiguration{},
 		// NOTE: Kubeadm types does not have ObjectMeta, so we are required to skip data annotation cleanup in the spoke-hub-spoke round trip test.
 		SkipSpokeAnnotationCleanup: true,
@@ -67,13 +76,25 @@ func TestFuzzyConversion(t *testing.T) {
 
 func fuzzFuncs(_ runtimeserializer.CodecFactory) []interface{} {
 	return []interface{}{
-		clusterConfigurationFuzzer,
-		dnsFuzzer,
-		initConfigurationFuzzer,
-		joinConfigurationFuzzer,
-		joinControlPlaneFuzzer,
-		bootstrapv1APIServerFuzzer,
-		bootstrapv1JoinConfigurationFuzzer,
+		spokeClusterConfigurationFuzzer,
+		spokeDNSFuzzer,
+		spokeInitConfigurationFuzzer,
+		spokeJoinConfigurationFuzzer,
+		spokeJoinControlPlaneFuzzer,
+		spokeTimeoutsFuzzer,
+		hubClusterConfigurationFuzzer,
+		hubInitConfigurationFuzzer,
+		hubJoinConfigurationFuzzer,
+		hubHostPathMountFuzzer,
+		hubBootstrapTokenDiscoveryFuzzer,
+		hubNodeRegistrationOptionsFuzzer,
+	}
+}
+
+func initConfigurationFuzzFuncs(_ runtimeserializer.CodecFactory) []interface{} {
+	return []interface{}{
+		spokeBootstrapToken,
+		spokeBootstrapTokenString,
 	}
 }
 
@@ -81,33 +102,58 @@ func fuzzFuncs(_ runtimeserializer.CodecFactory) []interface{} {
 // NOTES:
 // - When fields do not exist in cabpk v1beta1 types, pinning them to avoid kubeadm v1beta4 --> cabpk v1beta1 --> kubeadm v1beta4 round trip errors.
 
-func clusterConfigurationFuzzer(obj *ClusterConfiguration, c fuzz.Continue) {
-	c.FuzzNoCustom(obj)
+func spokeClusterConfigurationFuzzer(obj *ClusterConfiguration, c randfill.Continue) {
+	c.FillNoCustom(obj)
 
 	obj.Proxy = Proxy{}
-	obj.EncryptionAlgorithm = ""
-	obj.CACertificateValidityPeriod = nil
-	obj.CertificateValidityPeriod = nil
+	obj.CertificateValidityPeriod = ptr.To[metav1.Duration](metav1.Duration{Duration: time.Duration(c.Int31n(3*365)+1) * time.Hour * 24})
+	obj.CACertificateValidityPeriod = ptr.To[metav1.Duration](metav1.Duration{Duration: time.Duration(c.Int31n(100*365)+1) * time.Hour * 24})
+
+	// Drop the following fields as they have been removed in v1beta2, so we don't have to preserve them.
+	obj.Networking.ServiceSubnet = ""
+	obj.Networking.PodSubnet = ""
+	obj.Networking.DNSDomain = ""
+	obj.KubernetesVersion = ""
+	obj.ClusterName = ""
+
+	if obj.Etcd.Local != nil && reflect.DeepEqual(obj.Etcd.Local, &LocalEtcd{}) {
+		obj.Etcd.Local = nil
+	}
+	if obj.Etcd.External != nil && reflect.DeepEqual(obj.Etcd.External, &ExternalEtcd{}) {
+		obj.Etcd.External = nil
+	}
 }
 
-func dnsFuzzer(obj *DNS, c fuzz.Continue) {
-	c.FuzzNoCustom(obj)
+func spokeDNSFuzzer(obj *DNS, c randfill.Continue) {
+	c.FillNoCustom(obj)
 
 	obj.Disabled = false
 }
 
-func initConfigurationFuzzer(obj *InitConfiguration, c fuzz.Continue) {
-	c.FuzzNoCustom(obj)
+func spokeInitConfigurationFuzzer(obj *InitConfiguration, c randfill.Continue) {
+	c.FillNoCustom(obj)
 
 	obj.DryRun = false
 	obj.CertificateKey = ""
 	obj.Timeouts = nil
+
+	if obj.Patches != nil && reflect.DeepEqual(obj.Patches, &Patches{}) {
+		obj.Patches = nil
+	}
 }
 
-func joinConfigurationFuzzer(obj *JoinConfiguration, c fuzz.Continue) {
-	c.FuzzNoCustom(obj)
+func spokeJoinConfigurationFuzzer(obj *JoinConfiguration, c randfill.Continue) {
+	c.FillNoCustom(obj)
 
 	obj.DryRun = false
+
+	if obj.Patches != nil && reflect.DeepEqual(obj.Patches, &Patches{}) {
+		obj.Patches = nil
+	}
+
+	if obj.Discovery.File != nil && reflect.DeepEqual(obj.Discovery.File, &FileDiscovery{}) {
+		obj.Discovery.File = nil
+	}
 
 	// If timeouts have been set, unset unsupported timeouts (only TLSBootstrap is supported - corresponds to JoinConfiguration.Discovery.Timeout in cabpk v1beta1 API
 	if obj.Timeouts == nil {
@@ -123,26 +169,140 @@ func joinConfigurationFuzzer(obj *JoinConfiguration, c fuzz.Continue) {
 	obj.Timeouts = supportedTimeouts
 }
 
-func joinControlPlaneFuzzer(obj *JoinControlPlane, c fuzz.Continue) {
-	c.FuzzNoCustom(obj)
+func spokeJoinControlPlaneFuzzer(obj *JoinControlPlane, c randfill.Continue) {
+	c.FillNoCustom(obj)
 
 	obj.CertificateKey = ""
 }
 
-// Custom fuzzers for CABPK v1beta1 types.
-// NOTES:
-// - When fields do not exist in kubeadm v1beta4 types, pinning them to avoid cabpk v1beta1 --> kubeadm v1beta4 --> cabpk v1beta1 round trip errors.
+func spokeTimeoutsFuzzer(obj *Timeouts, c randfill.Continue) {
+	c.FillNoCustom(obj)
 
-func bootstrapv1APIServerFuzzer(obj *bootstrapv1.APIServer, c fuzz.Continue) {
-	c.FuzzNoCustom(obj)
-
-	obj.TimeoutForControlPlane = nil
+	if c.Bool() {
+		obj.ControlPlaneComponentHealthCheck = ptr.To[metav1.Duration](metav1.Duration{Duration: time.Duration(c.Int31()) * time.Second})
+		obj.KubeletHealthCheck = ptr.To[metav1.Duration](metav1.Duration{Duration: time.Duration(c.Int31()) * time.Second})
+		obj.KubernetesAPICall = ptr.To[metav1.Duration](metav1.Duration{Duration: time.Duration(c.Int31()) * time.Second})
+		obj.EtcdAPICall = ptr.To[metav1.Duration](metav1.Duration{Duration: time.Duration(c.Int31()) * time.Second})
+		obj.TLSBootstrap = ptr.To[metav1.Duration](metav1.Duration{Duration: time.Duration(c.Int31()) * time.Second})
+		obj.Discovery = ptr.To[metav1.Duration](metav1.Duration{Duration: time.Duration(c.Int31()) * time.Second})
+	} else {
+		obj.ControlPlaneComponentHealthCheck = nil
+		obj.KubeletHealthCheck = nil
+		obj.KubernetesAPICall = nil
+		obj.EtcdAPICall = nil
+		obj.TLSBootstrap = nil
+		obj.Discovery = nil
+	}
+	obj.UpgradeManifests = nil
 }
 
-func bootstrapv1JoinConfigurationFuzzer(obj *bootstrapv1.JoinConfiguration, c fuzz.Continue) {
-	c.FuzzNoCustom(obj)
+func spokeBootstrapToken(in *BootstrapToken, c randfill.Continue) {
+	c.FillNoCustom(in)
 
-	if obj.Discovery.File != nil {
-		obj.Discovery.File.KubeConfig = nil
+	if in.TTL != nil {
+		in.TTL = ptr.To[metav1.Duration](metav1.Duration{Duration: time.Duration(c.Int31()) * time.Second})
+	}
+	if reflect.DeepEqual(in.Expires, &metav1.Time{}) {
+		in.Expires = nil
+	}
+}
+
+func spokeBootstrapTokenString(in *BootstrapTokenString, _ randfill.Continue) {
+	in.ID = fakeID
+	in.Secret = fakeSecret
+}
+
+func hubClusterConfigurationFuzzer(in *bootstrapv1.ClusterConfiguration, c randfill.Continue) {
+	c.FillNoCustom(in)
+
+	if in != nil {
+		in.CertificateValidityPeriodDays = c.Int31n(3*365 + 1)
+		in.CACertificateValidityPeriodDays = c.Int31n(100*365 + 1)
+
+		if in.APIServer.ExtraEnvs != nil && *in.APIServer.ExtraEnvs == nil {
+			in.APIServer.ExtraEnvs = nil
+		}
+		if in.ControllerManager.ExtraEnvs != nil && *in.ControllerManager.ExtraEnvs == nil {
+			in.ControllerManager.ExtraEnvs = nil
+		}
+		if in.Scheduler.ExtraEnvs != nil && *in.Scheduler.ExtraEnvs == nil {
+			in.Scheduler.ExtraEnvs = nil
+		}
+		if in.Etcd.Local.ExtraEnvs != nil && *in.Etcd.Local.ExtraEnvs == nil {
+			in.Etcd.Local.ExtraEnvs = nil
+		}
+
+		for i, arg := range in.APIServer.ExtraArgs {
+			if arg.Value == nil {
+				arg.Value = ptr.To("")
+			}
+			in.APIServer.ExtraArgs[i] = arg
+		}
+		for i, arg := range in.ControllerManager.ExtraArgs {
+			if arg.Value == nil {
+				arg.Value = ptr.To("")
+			}
+			in.ControllerManager.ExtraArgs[i] = arg
+		}
+		for i, arg := range in.Scheduler.ExtraArgs {
+			if arg.Value == nil {
+				arg.Value = ptr.To("")
+			}
+			in.Scheduler.ExtraArgs[i] = arg
+		}
+		for i, arg := range in.Etcd.Local.ExtraArgs {
+			if arg.Value == nil {
+				arg.Value = ptr.To("")
+			}
+			in.Etcd.Local.ExtraArgs[i] = arg
+		}
+	}
+}
+
+func hubInitConfigurationFuzzer(obj *bootstrapv1.InitConfiguration, c randfill.Continue) {
+	c.FillNoCustom(obj)
+
+	for i, arg := range obj.NodeRegistration.KubeletExtraArgs {
+		if arg.Value == nil {
+			arg.Value = ptr.To("")
+		}
+		obj.NodeRegistration.KubeletExtraArgs[i] = arg
+	}
+}
+
+func hubJoinConfigurationFuzzer(obj *bootstrapv1.JoinConfiguration, c randfill.Continue) {
+	c.FillNoCustom(obj)
+
+	obj.Discovery.File.KubeConfig = bootstrapv1.FileDiscoveryKubeConfig{}
+
+	for i, arg := range obj.NodeRegistration.KubeletExtraArgs {
+		if arg.Value == nil {
+			arg.Value = ptr.To("")
+		}
+		obj.NodeRegistration.KubeletExtraArgs[i] = arg
+	}
+}
+
+func hubHostPathMountFuzzer(obj *bootstrapv1.HostPathMount, c randfill.Continue) {
+	c.FillNoCustom(obj)
+
+	if obj.ReadOnly == nil {
+		obj.ReadOnly = ptr.To(false)
+	}
+}
+
+func hubBootstrapTokenDiscoveryFuzzer(obj *bootstrapv1.BootstrapTokenDiscovery, c randfill.Continue) {
+	c.FillNoCustom(obj)
+
+	if obj.UnsafeSkipCAVerification == nil {
+		obj.UnsafeSkipCAVerification = ptr.To(false)
+	}
+}
+
+func hubNodeRegistrationOptionsFuzzer(obj *bootstrapv1.NodeRegistrationOptions, c randfill.Continue) {
+	c.FillNoCustom(obj)
+
+	if obj.Taints != nil && *obj.Taints == nil {
+		obj.Taints = nil
 	}
 }

@@ -34,8 +34,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
-	runtimecatalog "sigs.k8s.io/cluster-api/exp/runtime/catalog"
-	runtimehooksv1 "sigs.k8s.io/cluster-api/exp/runtime/hooks/api/v1alpha1"
+	runtimecatalog "sigs.k8s.io/cluster-api/api/runtime/catalog"
+	runtimehooksv1 "sigs.k8s.io/cluster-api/api/runtime/hooks/v1alpha1"
 )
 
 // DefaultPort is the default port that the webhook server serves.
@@ -80,6 +80,10 @@ type Options struct {
 	// Note: This option is only used when TLSOpts does not set GetCertificate.
 	KeyName string
 
+	// ClientCAName is the CA certificate name which server used to verify remote(client)'s certificate.
+	// Defaults to "", which means server does not verify client's certificate.
+	ClientCAName string
+
 	// TLSOpts is used to allow configuring the TLS config used for the server.
 	// This also allows providing a certificate via GetCertificate.
 	TLSOpts []func(*tls.Config)
@@ -105,13 +109,14 @@ func New(options Options) (*Server, error) {
 
 	webhookServer := webhook.NewServer(
 		webhook.Options{
-			Port:       options.Port,
-			Host:       options.Host,
-			CertDir:    options.CertDir,
-			CertName:   options.CertName,
-			KeyName:    options.KeyName,
-			TLSOpts:    options.TLSOpts,
-			WebhookMux: http.NewServeMux(),
+			Port:         options.Port,
+			Host:         options.Host,
+			ClientCAName: options.ClientCAName,
+			CertDir:      options.CertDir,
+			CertName:     options.CertName,
+			KeyName:      options.KeyName,
+			TLSOpts:      options.TLSOpts,
+			WebhookMux:   http.NewServeMux(),
 		},
 	)
 
@@ -210,10 +215,10 @@ func (s *Server) validateHandler(handler ExtensionHandler) error {
 	handlerResponseType := handlerFuncType.In(2)
 
 	// Validate handler request and response are pointers.
-	if handlerRequestType.Kind() != reflect.Ptr {
+	if handlerRequestType.Kind() != reflect.Pointer {
 		return errors.Errorf("HandlerFunc request type must be a pointer")
 	}
-	if handlerResponseType.Kind() != reflect.Ptr {
+	if handlerResponseType.Kind() != reflect.Pointer {
 		return errors.Errorf("HandlerFunc response type must be a pointer")
 	}
 
@@ -250,7 +255,7 @@ func (s *Server) Start(ctx context.Context) error {
 		handler := h
 
 		wrappedHandler := s.wrapHandler(handler)
-		s.Server.Register(handlerPath, http.HandlerFunc(wrappedHandler))
+		s.Register(handlerPath, http.HandlerFunc(wrappedHandler))
 	}
 
 	return s.Server.Start(ctx)
@@ -258,7 +263,7 @@ func (s *Server) Start(ctx context.Context) error {
 
 // discoveryHandler generates a discovery handler based on a list of handlers.
 func discoveryHandler(handlers map[string]ExtensionHandler) func(context.Context, *runtimehooksv1.DiscoveryRequest, *runtimehooksv1.DiscoveryResponse) {
-	cachedHandlers := []runtimehooksv1.ExtensionHandler{}
+	cachedHandlers := make([]runtimehooksv1.ExtensionHandler, 0, len(handlers))
 	for _, handler := range handlers {
 		cachedHandlers = append(cachedHandlers, runtimehooksv1.ExtensionHandler{
 			Name: handler.Name,

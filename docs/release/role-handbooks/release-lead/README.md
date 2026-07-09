@@ -68,33 +68,43 @@ If necessary, the release lead can adjust the release team during the cycle to h
 The goal of this issue is to bump the versions on the main branch so that the upcoming release version
 is used for e.g. local development and e2e tests. We also modify tests so that they are testing the previous release.
 
-This comes down to changing occurrences of the old version to the new version, e.g. `v1.5` to `v1.6`:
+Here's an example of how to do this for the `v1.11` release cycle. That means `v1.10` just released and we are preparing for `v1.11`.
 
 1. Setup E2E tests for the new release:
    1. Goal is that we have clusterctl upgrade tests for all relevant upgrade cases
        1. Modify the test specs in `test/e2e/clusterctl_upgrade_test.go`. Please note the comments above each test case (look for `This test should be changed during "prepare main branch"`)
           Please note that both `InitWithKubernetesVersion` and `WorkloadKubernetesVersion` should be the highest management cluster version supported by the respective Cluster API version.
-       2. Please ping maintainers after these changes are made for a first round of feedback before continuing with the steps below.
+            1. Be careful here. For example, let's say you're updating the `v1.9` test in `test/e2e/clusterctl_upgrade_test.go`. You want to set WorkloadKubernetesVersion to be the latest
+            version of kubernetes that `v1.9` supports, which would be `1.32`. You can't just use the very latest version of k8s `1.32.X` that exists, because the e2e tests use the
+            version of kind inside the `release-1.9` branch. So you have to use the latest version of k8s `1.32` that is in the `release-1.9` branch's `test/infrastructure/kind/mapper.go`
+            file. Which would be `1.32.0` as of this writing.
+            2. You may even have to delay using the latest version of k8s for the version of CAPI that just released until kind is updated with an image of that new version.
+            So for `v1.10`, which supports k8s `v1.33`, we had to use `1.32.2` at first, as that was the latest version of `1.32` that was in the `release-1.10` branch's
+            `test/infrastructure/kind/mapper.go` file. We usually add a comment in the test case to remind us to update `release-1.10`'s kind and use `1.33.X` later.
+       2. :warning: Please ping maintainers after these changes are made for a first round of feedback before continuing with the steps below.
    2. Update providers in `docker.yaml`:
-       1. Add a new `v1.6` entry.
+       1. Add a new `v1.10` entry.
        2. Remove providers that are not used anymore in clusterctl upgrade tests.
-       3. Change `v1.5.99` to `v1.6.99`.
+       3. Change `v1.10.99` to `v1.11.99`.
    3. Adjust `metadata.yaml`'s:
-      1. Create a new `v1.6` `metadata.yaml` (`test/e2e/data/shared/v1.6/metadata.yaml`) by copying
-   `test/e2e/data/shared/main/metadata.yaml`
-      2. Add the new release to the main `metadata.yaml` (`test/e2e/data/shared/main/metadata.yaml`).
-      3. Add the new release to the root level `metadata.yaml`
-      4. Remove old `metadata.yaml`'s that are not used anymore in clusterctl upgrade tests.
+      1. Create a new `v1.10` `metadata.yaml` (`test/e2e/data/shared/v1.10/metadata.yaml`) by copying the `test/e2e/data/shared/main` folder and renaming it to `v1.10`.
+      2. Add the new release, `v1.11`, to the main `metadata.yaml` (`test/e2e/data/shared/main/metadata.yaml`).
+      3. Add the new release, `v1.11`, to the root level `metadata.yaml`.
+      4. Remove old `metadata.yaml`'s that are not used anymore in clusterctl upgrade tests, the `test/e2e/data/shared/v1.7` folder in this example.
    4. Adjust cluster templates in `test/e2e/data/infrastructure-docker`:
-      1. Create a new `v1.6` folder. It should be created based on the `main` folder and only contain the templates we use in the clusterctl upgrade tests (as of today `cluster-template` and `cluster-template-topology`).
-      2. Remove old folders that are not used anymore in clusterctl upgrade tests.
-   5. Add a new Makefile target (e.g. `generate-e2e-templates-v1.6`) and potentially remove the Makefile target of versions that are not used anymore (if something was removed in 4.2)
-2. Update `create-local-repository.py` and `tools/internal/tilt-prepare/main.go`: `v1.5.99` => `v1.6.99`.
+      1. Create a new `v1.10` folder. It should be created based on the `main` folder and only contain the templates we use in the clusterctl upgrade tests (as of today `cluster-template` and `cluster-template-topology`).
+      2. Remove old folders that are not used anymore in clusterctl upgrade tests, `test/e2e/data/infrastructure-docker/v1.7` in this example.
+   5. Add a new Makefile target
+         1. Create the new target, `generate-e2e-templates-v1.10` in this example.
+         1. Add the new target `v1.10` to `generate-e2e-templates`.
+         1. Potentially remove the Makefile target of versions that are not used anymore (if something was removed in 4.2)
+            1. In this example we removed `generate-e2e-templates-v1.7` and removed `v1.7` from `generate-e2e-templates`.
+2. Update `create-local-repository.py` and `tools/internal/tilt-prepare/main.go`: `v1.10.99` => `v1.11.99`.
 3. Make sure all tests are green (also run `pull-cluster-api-e2e-full-main` and `pull-cluster-api-e2e-workload-upgrade-1-27-latest-main`).
 
 Prior art:
 
-* 1.10 - https://github.com/kubernetes-sigs/cluster-api/pull/11647
+* 1.11 - <https://github.com/kubernetes-sigs/cluster-api/pull/12000>
 
 ### Create a new GitHub milestone for the next release
 
@@ -164,18 +174,27 @@ The goal of this task is to ensure we are always using the latest Go version for
 
 1. Keep track of new Go versions
 2. Bump the Go version in supported branches if necessary
-   <br>Prior art: [Bump to Go 1.19.5](https://github.com/kubernetes-sigs/cluster-api/pull/7981)
+   <br>Prior art: [Bump go to v1.23.7](https://github.com/kubernetes-sigs/cluster-api/pull/11981)
 
-Note: If the Go minor version of one of our supported branches goes out of supported, we should consider bumping
+Note: If the Go minor version of one of our supported branches goes out of support, we should consider bumping
 to a newer Go minor version according to our [backport policy](./../../../../CONTRIBUTING.md#backporting-a-patch).
+Usually this is done after k/k bumps the Go version in their release branches.
+
+The right Go minor version for a Cluster API branch can be looked up as follows (based on an example):
+* Cluster API v1.10 has Kubernetes v1.32 as a dependency: https://github.com/kubernetes-sigs/cluster-api/blob/v1.10.0/go.mod
+* Kubernetes v1.32 uses Go 1.23.8 (can be seen by checking the corresponding kubekins image in https://github.com/kubernetes/test-infra/blob/1a5662a/images/kubekins-e2e-v2/variants.yaml#L19)
+* => Cluster API v1.10 can be bumped to Go 1.23
+
 
 ### [Repeatedly] Cut a release
 
 1. Ensure CI is stable before cutting the release (e.g. by checking with the CI manager)
-   Note: special attention should be given to image scan results, so we can avoid cutting a release with CVE or document known CVEs in release notes.
+   * Ensure there are no [open PRs or issues that are blocking the release](https://github.com/kubernetes-sigs/cluster-api/issues?q=label%3Akind%2Frelease-blocking%20state%3Aopen).
+   * Ensure that the release branch is stable and all tests are passing on [testgrid](https://testgrid.k8s.io/sig-cluster-lifecycle-cluster-api).
+   * Verify the [Weekly security scan](https://github.com/kubernetes-sigs/cluster-api/actions/workflows/weekly-security-scan.yaml) results are clean.
 2. Ask the [Communications/Docs/Release Notes Manager](../communications/README.md) to [create a PR with the release notes](../communications/README.md#create-pr-for-release-notes) for the new desired tag and review the PR. Once the PR merges, it will trigger a [GitHub Action](https://github.com/kubernetes-sigs/cluster-api/actions/workflows/release.yaml) to create a release branch, push release tags, and create a draft release. This will also trigger a [ProwJob](https://prow.k8s.io/?repo=kubernetes-sigs%2Fcluster-api&job=post-cluster-api-push-images) to publish images to the staging repository.
 3. Promote images from the staging repository to the production registry (`registry.k8s.io/cluster-api`):
-    1. Wait until images for the tag have been built and pushed to the [staging repository](https://console.cloud.google.com/gcr/images/k8s-staging-cluster-api) by the [post push images job](https://prow.k8s.io/?repo=kubernetes-sigs%2Fcluster-api&job=post-cluster-api-push-images).
+    1. Wait until images for the tag have been built and pushed to the [staging repository](https://console.cloud.google.com/artifacts/docker/k8s-staging-cluster-api/us/gcr.io) by the [post push images job](https://prow.k8s.io/?repo=kubernetes-sigs%2Fcluster-api&job=post-cluster-api-push-images).
     2. If you don't have a GitHub token, create one by going to your GitHub settings, in [Personal access tokens](https://github.com/settings/tokens). Make sure you give the token the `repo` scope.
     3. Create a PR to promote the images to the production registry:
 

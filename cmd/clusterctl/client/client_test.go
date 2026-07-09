@@ -23,6 +23,8 @@ import (
 	"time"
 
 	"github.com/pkg/errors"
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/serializer"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -143,12 +145,8 @@ func (f fakeClient) RolloutResume(ctx context.Context, options RolloutResumeOpti
 	return f.internalClient.RolloutResume(ctx, options)
 }
 
-func (f fakeClient) RolloutUndo(ctx context.Context, options RolloutUndoOptions) error {
-	return f.internalClient.RolloutUndo(ctx, options)
-}
-
-func (f fakeClient) TopologyPlan(ctx context.Context, options TopologyPlanOptions) (*cluster.TopologyPlanOutput, error) {
-	return f.internalClient.TopologyPlan(ctx, options)
+func (f fakeClient) Convert(ctx context.Context, options ConvertOptions) (ConvertResult, error) {
+	return f.internalClient.Convert(ctx, options)
 }
 
 // newFakeClient returns a clusterctl client that allows to execute tests on a set of fake config, fake repositories and fake clusters.
@@ -182,6 +180,7 @@ func newFakeClient(ctx context.Context, configClient config.Client) *fakeClient 
 			}
 			return fake.repositories[input.Provider.ManifestLabel()], nil
 		}),
+		InjectCurrentContractVersion(currentContractVersion),
 	)
 
 	return fake
@@ -225,6 +224,8 @@ func newFakeCluster(kubeconfig cluster.Kubeconfig, configClient config.Client) *
 			}
 			return fake.repositories[provider.Name()], nil
 		}),
+		cluster.InjectCurrentContractVersion(currentContractVersion),
+		cluster.InjectGetCompatibleContractVersionsFunc(getCompatibleContractVersions),
 	)
 	return fake
 }
@@ -319,10 +320,6 @@ func (f *fakeClusterClient) Template() cluster.TemplateClient {
 
 func (f *fakeClusterClient) WorkloadCluster() cluster.WorkloadCluster {
 	return f.internalclient.WorkloadCluster()
-}
-
-func (f *fakeClusterClient) Topology() cluster.TopologyClient {
-	return f.internalclient.Topology()
 }
 
 func (f *fakeClusterClient) WithObjs(objs ...client.Object) *fakeClusterClient {
@@ -603,4 +600,20 @@ func (f *fakeComponentClient) getRawBytes(ctx context.Context, options *reposito
 	path := f.fakeRepository.ComponentsPath()
 
 	return f.fakeRepository.GetFile(ctx, options.Version, path)
+}
+
+func fakeCAPISetupObjects() []client.Object {
+	return []client.Object{
+		&apiextensionsv1.CustomResourceDefinition{
+			ObjectMeta: metav1.ObjectMeta{Name: "clusters.cluster.x-k8s.io"},
+			Spec: apiextensionsv1.CustomResourceDefinitionSpec{
+				Versions: []apiextensionsv1.CustomResourceDefinitionVersion{
+					{
+						Name:    currentContractVersion,
+						Storage: true,
+					},
+				},
+			},
+		},
+	}
 }

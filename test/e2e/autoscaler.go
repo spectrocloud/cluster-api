@@ -28,7 +28,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/utils/ptr"
 
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
+	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/cluster-api/test/framework"
 	"sigs.k8s.io/cluster-api/test/framework/clusterctl"
 	"sigs.k8s.io/cluster-api/util"
@@ -58,7 +58,7 @@ type AutoscalerSpecInput struct {
 	InfrastructureProvider *string
 	// InfrastructureMachineTemplateKind should be the plural form of the InfraMachineTemplate kind.
 	// It should be specified in lower case.
-	// Example: dockermachinetemplates.
+	// Example: devmachinetemplates.
 	InfrastructureMachineTemplateKind     string
 	InfrastructureMachinePoolTemplateKind string
 	InfrastructureMachinePoolKind         string
@@ -203,7 +203,7 @@ func AutoscalerSpec(ctx context.Context, inputGetter func() AutoscalerSpecInput)
 		By("Checking the MachineDeployment is scaled up")
 		mdScaledUpReplicas := mdOriginalReplicas + 1
 		framework.AssertMachineDeploymentReplicas(ctx, framework.AssertMachineDeploymentReplicasInput{
-			Getter:                   input.BootstrapClusterProxy.GetClient(),
+			GetLister:                input.BootstrapClusterProxy.GetClient(),
 			MachineDeployment:        clusterResources.MachineDeployments[0],
 			Replicas:                 mdScaledUpReplicas,
 			WaitForMachineDeployment: input.E2EConfig.GetIntervals(specName, "wait-autoscaler"),
@@ -240,7 +240,7 @@ func AutoscalerSpec(ctx context.Context, inputGetter func() AutoscalerSpecInput)
 		// Since we scaled up the MachineDeployment manually and the workload has not changed auto scaler
 		// should detect that there are unneeded nodes and scale down the MachineDeployment.
 		framework.AssertMachineDeploymentReplicas(ctx, framework.AssertMachineDeploymentReplicasInput{
-			Getter:                   input.BootstrapClusterProxy.GetClient(),
+			GetLister:                input.BootstrapClusterProxy.GetClient(),
 			MachineDeployment:        clusterResources.MachineDeployments[0],
 			Replicas:                 mdScaledUpReplicas,
 			WaitForMachineDeployment: input.E2EConfig.GetIntervals(specName, "wait-controllers"),
@@ -257,23 +257,21 @@ func AutoscalerSpec(ctx context.Context, inputGetter func() AutoscalerSpecInput)
 				WaitForAnnotationsToBeAdded: input.E2EConfig.GetIntervals(specName, "wait-autoscaler"),
 			})
 
-			By("Scaling the MachineDeployment scale up deployment to zero")
+			By("Scaling the MachineDeployment scale up deployment to 0")
 			framework.ScaleScaleUpDeploymentAndWait(ctx, framework.ScaleScaleUpDeploymentAndWaitInput{
 				ClusterProxy: workloadClusterProxy,
-				// We need to sum up the expected number of MachineDeployment replicas and the current
-				// number of MachinePool replicas because otherwise the pods get scheduled on the MachinePool nodes.
-				Replicas: mpOriginalReplicas + 0,
+				Replicas:     0,
 			}, input.E2EConfig.GetIntervals(specName, "wait-autoscaler")...)
 
 			By("Checking the MachineDeployment finished scaling down to zero")
 			framework.AssertMachineDeploymentReplicas(ctx, framework.AssertMachineDeploymentReplicasInput{
-				Getter:                   input.BootstrapClusterProxy.GetClient(),
+				GetLister:                input.BootstrapClusterProxy.GetClient(),
 				MachineDeployment:        clusterResources.MachineDeployments[0],
 				Replicas:                 0,
 				WaitForMachineDeployment: input.E2EConfig.GetIntervals(specName, "wait-controllers"),
 			})
 
-			By("Scaling the MachineDeployment scale up deployment to 1")
+			Byf("Scaling the MachineDeployment scale up deployment to %d", mpOriginalReplicas+1)
 			framework.ScaleScaleUpDeploymentAndWait(ctx, framework.ScaleScaleUpDeploymentAndWaitInput{
 				ClusterProxy: workloadClusterProxy,
 				// We need to sum up the expected number of MachineDeployment replicas and the current
@@ -283,7 +281,7 @@ func AutoscalerSpec(ctx context.Context, inputGetter func() AutoscalerSpecInput)
 
 			By("Checking the MachineDeployment finished scaling up")
 			framework.AssertMachineDeploymentReplicas(ctx, framework.AssertMachineDeploymentReplicasInput{
-				Getter:                   input.BootstrapClusterProxy.GetClient(),
+				GetLister:                input.BootstrapClusterProxy.GetClient(),
 				MachineDeployment:        clusterResources.MachineDeployments[0],
 				Replicas:                 1,
 				WaitForMachineDeployment: input.E2EConfig.GetIntervals(specName, "wait-controllers"),
@@ -367,11 +365,25 @@ func AutoscalerSpec(ctx context.Context, inputGetter func() AutoscalerSpecInput)
 			})
 		}
 
+		Byf("Verify Cluster Available condition is true")
+		framework.VerifyClusterAvailable(ctx, framework.VerifyClusterAvailableInput{
+			Getter:    input.BootstrapClusterProxy.GetClient(),
+			Name:      clusterResources.Cluster.Name,
+			Namespace: clusterResources.Cluster.Namespace,
+		})
+
+		Byf("Verify Machines Ready condition is true")
+		framework.VerifyMachinesReady(ctx, framework.VerifyMachinesReadyInput{
+			Lister:    input.BootstrapClusterProxy.GetClient(),
+			Name:      clusterResources.Cluster.Name,
+			Namespace: clusterResources.Cluster.Namespace,
+		})
+
 		By("PASSED!")
 	})
 
 	AfterEach(func() {
 		// Dumps all the resources in the spec namespace, then cleanups the cluster object and the spec namespace itself.
-		framework.DumpSpecResourcesAndCleanup(ctx, specName, input.BootstrapClusterProxy, input.ArtifactFolder, namespace, cancelWatches, clusterResources.Cluster, input.E2EConfig.GetIntervals, input.SkipCleanup)
+		framework.DumpSpecResourcesAndCleanup(ctx, specName, input.BootstrapClusterProxy, input.ClusterctlConfigPath, input.ArtifactFolder, namespace, cancelWatches, clusterResources.Cluster, input.E2EConfig.GetIntervals, input.SkipCleanup)
 	})
 }

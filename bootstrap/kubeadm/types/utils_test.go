@@ -14,20 +14,20 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package utils
+package types
 
 import (
+	"fmt"
 	"testing"
-	"time"
 
 	"github.com/blang/semver/v4"
 	"github.com/google/go-cmp/cmp"
 	. "github.com/onsi/gomega"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/utils/ptr"
 
-	bootstrapv1 "sigs.k8s.io/cluster-api/bootstrap/kubeadm/api/v1beta1"
-	"sigs.k8s.io/cluster-api/bootstrap/kubeadm/types/upstreamv1beta2"
+	bootstrapv1 "sigs.k8s.io/cluster-api/api/bootstrap/kubeadm/v1beta2"
+	"sigs.k8s.io/cluster-api/bootstrap/kubeadm/types/upstream"
 	"sigs.k8s.io/cluster-api/bootstrap/kubeadm/types/upstreamv1beta3"
 	"sigs.k8s.io/cluster-api/bootstrap/kubeadm/types/upstreamv1beta4"
 )
@@ -56,30 +56,6 @@ func TestKubeVersionToKubeadmAPIGroupVersion(t *testing.T) {
 				version: semver.MustParse("1.14.99"),
 			},
 			wantErr: true,
-		},
-		{
-			name: "pass with minimum kubernetes alpha version for kubeadm API v1beta2",
-			args: args{
-				version: semver.MustParse("1.15.0-alpha.0.734+ba502ee555924a"),
-			},
-			want:    upstreamv1beta2.GroupVersion,
-			wantErr: false,
-		},
-		{
-			name: "pass with minimum kubernetes version for kubeadm API v1beta2",
-			args: args{
-				version: semver.MustParse("1.15.0"),
-			},
-			want:    upstreamv1beta2.GroupVersion,
-			wantErr: false,
-		},
-		{
-			name: "pass with kubernetes version for kubeadm API v1beta2",
-			args: args{
-				version: semver.MustParse("1.20.99"),
-			},
-			want:    upstreamv1beta2.GroupVersion,
-			wantErr: false,
 		},
 		{
 			name: "pass with minimum kubernetes alpha version for kubeadm API v1beta3",
@@ -146,6 +122,15 @@ func TestKubeVersionToKubeadmAPIGroupVersion(t *testing.T) {
 }
 
 func TestMarshalClusterConfigurationForVersion(t *testing.T) {
+	data := &upstream.AdditionalData{
+		// KubernetesVersion is going to be set on a test bases.
+		ClusterName:                             ptr.To("mycluster"),
+		DNSDomain:                               ptr.To("myDNSDomain"),
+		ServiceSubnet:                           ptr.To("myServiceSubnet"),
+		PodSubnet:                               ptr.To("myPodSubnet"),
+		ControlPlaneComponentHealthCheckSeconds: ptr.To[int32](30),
+	}
+
 	type args struct {
 		capiObj *bootstrapv1.ClusterConfiguration
 		version semver.Version
@@ -157,50 +142,51 @@ func TestMarshalClusterConfigurationForVersion(t *testing.T) {
 		wantErr bool
 	}{
 		{
-			name: "Generates a v1beta2 kubeadm configuration",
-			args: args{
-				capiObj: &bootstrapv1.ClusterConfiguration{},
-				version: semver.MustParse("1.15.0"),
-			},
-			want: "apiServer: {}\n" +
-				"apiVersion: kubeadm.k8s.io/v1beta2\n" +
-				"controllerManager: {}\n" +
-				"dns: {}\n" +
-				"etcd: {}\n" +
-				"kind: ClusterConfiguration\n" +
-				"networking: {}\n" +
-				"scheduler: {}\n",
-			wantErr: false,
-		},
-		{
 			name: "Generates a v1beta3 kubeadm configuration",
 			args: args{
-				capiObj: &bootstrapv1.ClusterConfiguration{},
+				capiObj: &bootstrapv1.ClusterConfiguration{
+					ControlPlaneEndpoint: "myControlPlaneEndpoint:6443",
+				},
 				version: semver.MustParse("1.22.0"),
 			},
-			want: "apiServer: {}\n" +
+			want: "apiServer:\n" +
+				"  timeoutForControlPlane: 30s\n" +
 				"apiVersion: kubeadm.k8s.io/v1beta3\n" +
+				"clusterName: mycluster\n" +
+				"controlPlaneEndpoint: myControlPlaneEndpoint:6443\n" +
 				"controllerManager: {}\n" +
 				"dns: {}\n" +
 				"etcd: {}\n" +
 				"kind: ClusterConfiguration\n" +
-				"networking: {}\n" +
+				"kubernetesVersion: v1.22.0\n" +
+				"networking:\n" +
+				"  dnsDomain: myDNSDomain\n" +
+				"  podSubnet: myPodSubnet\n" +
+				"  serviceSubnet: myServiceSubnet\n" +
 				"scheduler: {}\n",
 			wantErr: false,
 		},
 		{
 			name: "Generates a v1beta4 kubeadm configuration",
 			args: args{
-				capiObj: &bootstrapv1.ClusterConfiguration{},
+				capiObj: &bootstrapv1.ClusterConfiguration{
+					ControlPlaneEndpoint: "myControlPlaneEndpoint:6443",
+				},
 				version: semver.MustParse("1.31.0"),
 			},
 			want: "apiServer: {}\n" +
 				"apiVersion: kubeadm.k8s.io/v1beta4\n" +
+				"clusterName: mycluster\n" +
+				"controlPlaneEndpoint: myControlPlaneEndpoint:6443\n" +
 				"controllerManager: {}\n" +
 				"dns: {}\n" +
 				"etcd: {}\n" +
 				"kind: ClusterConfiguration\n" +
-				"networking: {}\n" +
+				"kubernetesVersion: v1.31.0\n" +
+				"networking:\n" +
+				"  dnsDomain: myDNSDomain\n" +
+				"  podSubnet: myPodSubnet\n" +
+				"  serviceSubnet: myServiceSubnet\n" +
 				"proxy: {}\n" +
 				"scheduler: {}\n",
 			wantErr: false,
@@ -210,53 +196,8 @@ func TestMarshalClusterConfigurationForVersion(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			g := NewWithT(t)
 
-			got, err := MarshalClusterConfigurationForVersion(tt.args.capiObj, tt.args.version)
-			if tt.wantErr {
-				g.Expect(err).To(HaveOccurred())
-				return
-			}
-			g.Expect(err).ToNot(HaveOccurred())
-			g.Expect(got).To(Equal(tt.want), cmp.Diff(tt.want, got))
-		})
-	}
-}
-
-func TestMarshalClusterStatusForVersion(t *testing.T) {
-	type args struct {
-		capiObj *bootstrapv1.ClusterStatus
-		version semver.Version
-	}
-	tests := []struct {
-		name    string
-		args    args
-		want    string
-		wantErr bool
-	}{
-		{
-			name: "Generates a v1beta2 kubeadm status",
-			args: args{
-				capiObj: &bootstrapv1.ClusterStatus{},
-				version: semver.MustParse("1.15.0"),
-			},
-			want: "apiEndpoints: null\n" +
-				"apiVersion: kubeadm.k8s.io/v1beta2\n" + "" +
-				"kind: ClusterStatus\n",
-			wantErr: false,
-		},
-		{
-			name: "Fails generating a v1beta3 kubeadm status",
-			args: args{
-				capiObj: &bootstrapv1.ClusterStatus{},
-				version: semver.MustParse("1.22.0"),
-			},
-			wantErr: true,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			g := NewWithT(t)
-
-			got, err := MarshalClusterStatusForVersion(tt.args.capiObj, tt.args.version)
+			data.KubernetesVersion = ptr.To(fmt.Sprintf("v%s", tt.args.version.String()))
+			got, err := MarshalClusterConfigurationForVersion(tt.args.capiObj, tt.args.version, data)
 			if tt.wantErr {
 				g.Expect(err).To(HaveOccurred())
 				return
@@ -268,11 +209,9 @@ func TestMarshalClusterStatusForVersion(t *testing.T) {
 }
 
 func TestMarshalInitConfigurationForVersion(t *testing.T) {
-	timeout := metav1.Duration{Duration: 10 * time.Second}
 	type args struct {
-		clusterConfiguration *bootstrapv1.ClusterConfiguration
-		initConfiguration    *bootstrapv1.InitConfiguration
-		version              semver.Version
+		initConfiguration *bootstrapv1.InitConfiguration
+		version           semver.Version
 	}
 	tests := []struct {
 		name    string
@@ -280,24 +219,6 @@ func TestMarshalInitConfigurationForVersion(t *testing.T) {
 		want    string
 		wantErr bool
 	}{
-		{
-			name: "Generates a v1beta2 kubeadm init configuration",
-			args: args{
-				initConfiguration: &bootstrapv1.InitConfiguration{
-					NodeRegistration: bootstrapv1.NodeRegistrationOptions{
-						IgnorePreflightErrors: []string{"some-preflight-check"},
-					},
-				},
-				version: semver.MustParse("1.15.0"),
-			},
-			want: "apiVersion: kubeadm.k8s.io/v1beta2\n" +
-				"kind: InitConfiguration\n" +
-				"localAPIEndpoint: {}\n" +
-				"nodeRegistration:\n" +
-				"  ignorePreflightErrors:\n" +
-				"  - some-preflight-check\n",
-			wantErr: false,
-		},
 		{
 			name: "Generates a v1beta3 kubeadm init configuration",
 			args: args{
@@ -324,27 +245,8 @@ func TestMarshalInitConfigurationForVersion(t *testing.T) {
 					NodeRegistration: bootstrapv1.NodeRegistrationOptions{
 						IgnorePreflightErrors: []string{"some-preflight-check"},
 					},
-				},
-				version: semver.MustParse("1.31.0"),
-			},
-			want: "apiVersion: kubeadm.k8s.io/v1beta4\n" +
-				"kind: InitConfiguration\n" +
-				"localAPIEndpoint: {}\n" +
-				"nodeRegistration:\n" +
-				"  ignorePreflightErrors:\n" +
-				"  - some-preflight-check\n" +
-				"  taints: null\n",
-			wantErr: false,
-		},
-		{
-			name: "Generates a v1beta4 kubeadm init configuration with data from cluster configuration",
-			args: args{
-				clusterConfiguration: &bootstrapv1.ClusterConfiguration{
-					APIServer: bootstrapv1.APIServer{TimeoutForControlPlane: &timeout},
-				},
-				initConfiguration: &bootstrapv1.InitConfiguration{
-					NodeRegistration: bootstrapv1.NodeRegistrationOptions{
-						IgnorePreflightErrors: []string{"some-preflight-check"},
+					Timeouts: bootstrapv1.Timeouts{
+						ControlPlaneComponentHealthCheckSeconds: ptr.To[int32](50),
 					},
 				},
 				version: semver.MustParse("1.31.0"),
@@ -357,7 +259,7 @@ func TestMarshalInitConfigurationForVersion(t *testing.T) {
 				"  - some-preflight-check\n" +
 				"  taints: null\n" +
 				"timeouts:\n" +
-				"  controlPlaneComponentHealthCheck: 10s\n",
+				"  controlPlaneComponentHealthCheck: 50s\n",
 			wantErr: false,
 		},
 	}
@@ -365,7 +267,7 @@ func TestMarshalInitConfigurationForVersion(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			g := NewWithT(t)
 
-			got, err := MarshalInitConfigurationForVersion(tt.args.clusterConfiguration, tt.args.initConfiguration, tt.args.version)
+			got, err := MarshalInitConfigurationForVersion(tt.args.initConfiguration, tt.args.version)
 			if tt.wantErr {
 				g.Expect(err).To(HaveOccurred())
 				return
@@ -377,11 +279,9 @@ func TestMarshalInitConfigurationForVersion(t *testing.T) {
 }
 
 func TestMarshalJoinConfigurationForVersion(t *testing.T) {
-	timeout := metav1.Duration{Duration: 10 * time.Second}
 	type args struct {
-		clusterConfiguration *bootstrapv1.ClusterConfiguration
-		joinConfiguration    *bootstrapv1.JoinConfiguration
-		version              semver.Version
+		joinConfiguration *bootstrapv1.JoinConfiguration
+		version           semver.Version
 	}
 	tests := []struct {
 		name    string
@@ -389,24 +289,6 @@ func TestMarshalJoinConfigurationForVersion(t *testing.T) {
 		want    string
 		wantErr bool
 	}{
-		{
-			name: "Generates a v1beta2 kubeadm join configuration",
-			args: args{
-				joinConfiguration: &bootstrapv1.JoinConfiguration{
-					NodeRegistration: bootstrapv1.NodeRegistrationOptions{
-						IgnorePreflightErrors: []string{"some-preflight-check"},
-					},
-				},
-				version: semver.MustParse("1.15.0"),
-			},
-			want: "apiVersion: kubeadm.k8s.io/v1beta2\n" + "" +
-				"discovery: {}\n" +
-				"kind: JoinConfiguration\n" +
-				"nodeRegistration:\n" +
-				"  ignorePreflightErrors:\n" +
-				"  - some-preflight-check\n",
-			wantErr: false,
-		},
 		{
 			name: "Generates a v1beta3 kubeadm join configuration",
 			args: args{
@@ -433,27 +315,8 @@ func TestMarshalJoinConfigurationForVersion(t *testing.T) {
 					NodeRegistration: bootstrapv1.NodeRegistrationOptions{
 						IgnorePreflightErrors: []string{"some-preflight-check"},
 					},
-				},
-				version: semver.MustParse("1.31.0"),
-			},
-			want: "apiVersion: kubeadm.k8s.io/v1beta4\n" + "" +
-				"discovery: {}\n" +
-				"kind: JoinConfiguration\n" +
-				"nodeRegistration:\n" +
-				"  ignorePreflightErrors:\n" +
-				"  - some-preflight-check\n" +
-				"  taints: null\n",
-			wantErr: false,
-		},
-		{
-			name: "Generates a v1beta4 kubeadm join configuration with data from cluster configuration",
-			args: args{
-				clusterConfiguration: &bootstrapv1.ClusterConfiguration{
-					APIServer: bootstrapv1.APIServer{TimeoutForControlPlane: &timeout},
-				},
-				joinConfiguration: &bootstrapv1.JoinConfiguration{
-					NodeRegistration: bootstrapv1.NodeRegistrationOptions{
-						IgnorePreflightErrors: []string{"some-preflight-check"},
+					Timeouts: bootstrapv1.Timeouts{
+						ControlPlaneComponentHealthCheckSeconds: ptr.To[int32](50),
 					},
 				},
 				version: semver.MustParse("1.31.0"),
@@ -466,7 +329,7 @@ func TestMarshalJoinConfigurationForVersion(t *testing.T) {
 				"  - some-preflight-check\n" +
 				"  taints: null\n" +
 				"timeouts:\n" +
-				"  controlPlaneComponentHealthCheck: 10s\n",
+				"  controlPlaneComponentHealthCheck: 50s\n",
 			wantErr: false,
 		},
 	}
@@ -474,7 +337,7 @@ func TestMarshalJoinConfigurationForVersion(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			g := NewWithT(t)
 
-			got, err := MarshalJoinConfigurationForVersion(tt.args.clusterConfiguration, tt.args.joinConfiguration, tt.args.version)
+			got, err := MarshalJoinConfigurationForVersion(tt.args.joinConfiguration, tt.args.version)
 			if tt.wantErr {
 				g.Expect(err).To(HaveOccurred())
 				return
@@ -490,39 +353,73 @@ func TestUnmarshalClusterConfiguration(t *testing.T) {
 		yaml string
 	}
 	tests := []struct {
-		name    string
-		args    args
-		want    *bootstrapv1.ClusterConfiguration
-		wantErr bool
+		name             string
+		args             args
+		want             *bootstrapv1.ClusterConfiguration
+		wantUpstreamData *upstream.AdditionalData
+		wantErr          bool
 	}{
-		{
-			name: "Parses a v1beta2 kubeadm configuration",
-			args: args{
-				yaml: "apiServer: {}\n" +
-					"apiVersion: kubeadm.k8s.io/v1beta2\n" + "" +
-					"controllerManager: {}\n" +
-					"dns: {}\n" +
-					"etcd: {}\n" +
-					"kind: ClusterConfiguration\n" +
-					"networking: {}\n" +
-					"scheduler: {}\n",
-			},
-			want:    &bootstrapv1.ClusterConfiguration{},
-			wantErr: false,
-		},
 		{
 			name: "Parses a v1beta3 kubeadm configuration",
 			args: args{
 				yaml: "apiServer: {}\n" +
-					"apiVersion: kubeadm.k8s.io/v1beta3\n" + "" +
+					"apiVersion: kubeadm.k8s.io/v1beta3\n" +
+					"clusterName: mycluster\n" +
+					"controlPlaneEndpoint: myControlPlaneEndpoint:6443\n" +
 					"controllerManager: {}\n" +
 					"dns: {}\n" +
 					"etcd: {}\n" +
 					"kind: ClusterConfiguration\n" +
-					"networking: {}\n" +
+					"kubernetesVersion: v1.23.1\n" +
+					"networking:\n" +
+					"  dnsDomain: myDNSDomain\n" +
+					"  podSubnet: myPodSubnet\n" +
+					"  serviceSubnet: myServiceSubnet\n" +
 					"scheduler: {}\n",
 			},
-			want:    &bootstrapv1.ClusterConfiguration{},
+			want: &bootstrapv1.ClusterConfiguration{
+				ControlPlaneEndpoint: "myControlPlaneEndpoint:6443",
+			},
+			wantUpstreamData: &upstream.AdditionalData{
+				KubernetesVersion: ptr.To("v1.23.1"),
+				ClusterName:       ptr.To("mycluster"),
+				DNSDomain:         ptr.To("myDNSDomain"),
+				ServiceSubnet:     ptr.To("myServiceSubnet"),
+				PodSubnet:         ptr.To("myPodSubnet"),
+			},
+			wantErr: false,
+		},
+		{
+			name: "Parses a v1beta3 kubeadm configuration with data to init configuration",
+			args: args{
+				yaml: "apiServer: {\n" +
+					"  timeoutForControlPlane: 50s\n" +
+					"}\n" +
+					"apiVersion: kubeadm.k8s.io/v1beta3\n" + "" +
+					"clusterName: mycluster\n" +
+					"controlPlaneEndpoint: myControlPlaneEndpoint:6443\n" +
+					"controllerManager: {}\n" +
+					"dns: {}\n" +
+					"etcd: {}\n" +
+					"kind: ClusterConfiguration\n" +
+					"kubernetesVersion: v1.23.1\n" +
+					"networking:\n" +
+					"  dnsDomain: myDNSDomain\n" +
+					"  podSubnet: myPodSubnet\n" +
+					"  serviceSubnet: myServiceSubnet\n" +
+					"scheduler: {}\n",
+			},
+			want: &bootstrapv1.ClusterConfiguration{
+				ControlPlaneEndpoint: "myControlPlaneEndpoint:6443",
+			},
+			wantUpstreamData: &upstream.AdditionalData{
+				KubernetesVersion:                       ptr.To("v1.23.1"),
+				ClusterName:                             ptr.To("mycluster"),
+				DNSDomain:                               ptr.To("myDNSDomain"),
+				ServiceSubnet:                           ptr.To("myServiceSubnet"),
+				PodSubnet:                               ptr.To("myPodSubnet"),
+				ControlPlaneComponentHealthCheckSeconds: ptr.To(int32(50)),
+			},
 			wantErr: false,
 		},
 		{
@@ -530,15 +427,30 @@ func TestUnmarshalClusterConfiguration(t *testing.T) {
 			args: args{
 				yaml: "apiServer: {}\n" +
 					"apiVersion: kubeadm.k8s.io/v1beta4\n" + "" +
+					"clusterName: mycluster\n" +
+					"controlPlaneEndpoint: myControlPlaneEndpoint:6443\n" +
 					"controllerManager: {}\n" +
 					"dns: {}\n" +
 					"etcd: {}\n" +
 					"kind: ClusterConfiguration\n" +
-					"networking: {}\n" +
+					"kubernetesVersion: v1.31.1\n" +
+					"networking:\n" +
+					"  dnsDomain: myDNSDomain\n" +
+					"  podSubnet: myPodSubnet\n" +
+					"  serviceSubnet: myServiceSubnet\n" +
 					"proxy: {}\n" +
 					"scheduler: {}\n",
 			},
-			want:    &bootstrapv1.ClusterConfiguration{},
+			want: &bootstrapv1.ClusterConfiguration{
+				ControlPlaneEndpoint: "myControlPlaneEndpoint:6443",
+			},
+			wantUpstreamData: &upstream.AdditionalData{
+				KubernetesVersion: ptr.To("v1.31.1"),
+				ClusterName:       ptr.To("mycluster"),
+				DNSDomain:         ptr.To("myDNSDomain"),
+				ServiceSubnet:     ptr.To("myServiceSubnet"),
+				PodSubnet:         ptr.To("myPodSubnet"),
+			},
 			wantErr: false,
 		},
 	}
@@ -546,95 +458,28 @@ func TestUnmarshalClusterConfiguration(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			g := NewWithT(t)
 
-			got, err := UnmarshalClusterConfiguration(tt.args.yaml)
+			got, upstreamData, err := UnmarshalClusterConfiguration(tt.args.yaml)
 			if tt.wantErr {
 				g.Expect(err).To(HaveOccurred())
 				return
 			}
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(got).To(BeComparableTo(tt.want), cmp.Diff(tt.want, got))
-		})
-	}
-}
-
-func TestUnmarshalClusterStatus(t *testing.T) {
-	type args struct {
-		yaml string
-	}
-	tests := []struct {
-		name    string
-		args    args
-		want    *bootstrapv1.ClusterStatus
-		wantErr bool
-	}{
-		{
-			name: "Parses a v1beta2 kubeadm configuration",
-			args: args{
-				yaml: "apiEndpoints: null\n" +
-					"apiVersion: kubeadm.k8s.io/v1beta2\n" + "" +
-					"kind: ClusterStatus\n",
-			},
-			want:    &bootstrapv1.ClusterStatus{},
-			wantErr: false,
-		},
-		{
-			name: "Fails parsing a v1beta3 kubeadm configuration",
-			args: args{
-				yaml: "apiEndpoints: null\n" +
-					"apiVersion: kubeadm.k8s.io/v1beta3\n" + "" +
-					"kind: ClusterStatus\n",
-			},
-			wantErr: true,
-		},
-		{
-			name: "Fails parsing a v1beta4 kubeadm configuration",
-			args: args{
-				yaml: "apiEndpoints: null\n" +
-					"apiVersion: kubeadm.k8s.io/v1beta4\n" + "" +
-					"kind: ClusterStatus\n",
-			},
-			wantErr: true,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			g := NewWithT(t)
-
-			got, err := UnmarshalClusterStatus(tt.args.yaml)
-			if tt.wantErr {
-				g.Expect(err).To(HaveOccurred())
-				return
-			}
-			g.Expect(err).ToNot(HaveOccurred())
-			g.Expect(got).To(BeComparableTo(tt.want), cmp.Diff(tt.want, got))
+			g.Expect(upstreamData).To(Equal(tt.wantUpstreamData))
 		})
 	}
 }
 
 func TestUnmarshalInitConfiguration(t *testing.T) {
-	timeout := metav1.Duration{Duration: 10 * time.Second}
 	type args struct {
 		yaml string
 	}
 	tests := []struct {
-		name                     string
-		args                     args
-		want                     *bootstrapv1.InitConfiguration
-		wantClusterConfiguration *bootstrapv1.ClusterConfiguration
-		wantErr                  bool
+		name    string
+		args    args
+		want    *bootstrapv1.InitConfiguration
+		wantErr bool
 	}{
-		{
-			name: "Parses a v1beta2 kubeadm configuration",
-			args: args{
-				yaml: "apiVersion: kubeadm.k8s.io/v1beta2\n" + "" +
-					"kind: InitConfiguration\n" +
-					"localAPIEndpoint: {}\n" +
-					"nodeRegistration: {}\n",
-			},
-			want:                     &bootstrapv1.InitConfiguration{},
-			wantClusterConfiguration: &bootstrapv1.ClusterConfiguration{},
-			wantErr:                  false,
-		},
 		{
 			name: "Parses a v1beta3 kubeadm configuration",
 			args: args{
@@ -643,35 +488,24 @@ func TestUnmarshalInitConfiguration(t *testing.T) {
 					"localAPIEndpoint: {}\n" +
 					"nodeRegistration: {}\n",
 			},
-			want:                     &bootstrapv1.InitConfiguration{},
-			wantClusterConfiguration: &bootstrapv1.ClusterConfiguration{},
-			wantErr:                  false,
+			want:    &bootstrapv1.InitConfiguration{},
+			wantErr: false,
 		},
 		{
 			name: "Parses a v1beta4 kubeadm configuration",
-			args: args{
-				yaml: "apiVersion: kubeadm.k8s.io/v1beta4\n" + "" +
-					"kind: InitConfiguration\n" +
-					"localAPIEndpoint: {}\n" +
-					"nodeRegistration: {}\n",
-			},
-			want:                     &bootstrapv1.InitConfiguration{},
-			wantClusterConfiguration: &bootstrapv1.ClusterConfiguration{},
-			wantErr:                  false,
-		},
-		{
-			name: "Parses a v1beta4 kubeadm configuration with data to cluster configuration",
 			args: args{
 				yaml: "apiVersion: kubeadm.k8s.io/v1beta4\n" + "" +
 					"kind: InitConfiguration\n" +
 					"localAPIEndpoint: {}\n" +
 					"nodeRegistration: {}\n" +
-					"timeouts:\n" +
-					"  controlPlaneComponentHealthCheck: 10s\n",
+					"timeouts: {\n" +
+					"  controlPlaneComponentHealthCheck: 50s\n" +
+					"}\n",
 			},
-			want: &bootstrapv1.InitConfiguration{},
-			wantClusterConfiguration: &bootstrapv1.ClusterConfiguration{
-				APIServer: bootstrapv1.APIServer{TimeoutForControlPlane: &timeout},
+			want: &bootstrapv1.InitConfiguration{
+				Timeouts: bootstrapv1.Timeouts{
+					ControlPlaneComponentHealthCheckSeconds: ptr.To[int32](50),
+				},
 			},
 			wantErr: false,
 		},
@@ -680,43 +514,27 @@ func TestUnmarshalInitConfiguration(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			g := NewWithT(t)
 
-			gotClusterConfiguration := &bootstrapv1.ClusterConfiguration{}
-			got, err := UnmarshalInitConfiguration(tt.args.yaml, gotClusterConfiguration)
+			got, err := UnmarshalInitConfiguration(tt.args.yaml)
 			if tt.wantErr {
 				g.Expect(err).To(HaveOccurred())
 				return
 			}
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(got).To(BeComparableTo(tt.want), cmp.Diff(tt.want, got))
-			g.Expect(gotClusterConfiguration).To(BeComparableTo(tt.wantClusterConfiguration), cmp.Diff(tt.wantClusterConfiguration, gotClusterConfiguration))
 		})
 	}
 }
 
 func TestUnmarshalJoinConfiguration(t *testing.T) {
-	timeout := metav1.Duration{Duration: 10 * time.Second}
 	type args struct {
 		yaml string
 	}
 	tests := []struct {
-		name                     string
-		args                     args
-		want                     *bootstrapv1.JoinConfiguration
-		wantClusterConfiguration *bootstrapv1.ClusterConfiguration
-		wantErr                  bool
+		name    string
+		args    args
+		want    *bootstrapv1.JoinConfiguration
+		wantErr bool
 	}{
-		{
-			name: "Parses a v1beta2 kubeadm configuration",
-			args: args{
-				yaml: "apiVersion: kubeadm.k8s.io/v1beta2\n" + "" +
-					"caCertPath: \"\"\n" +
-					"discovery: {}\n" +
-					"kind: JoinConfiguration\n",
-			},
-			want:                     &bootstrapv1.JoinConfiguration{},
-			wantClusterConfiguration: &bootstrapv1.ClusterConfiguration{},
-			wantErr:                  false,
-		},
 		{
 			name: "Parses a v1beta3 kubeadm configuration",
 			args: args{
@@ -725,9 +543,8 @@ func TestUnmarshalJoinConfiguration(t *testing.T) {
 					"discovery: {}\n" +
 					"kind: JoinConfiguration\n",
 			},
-			want:                     &bootstrapv1.JoinConfiguration{},
-			wantClusterConfiguration: &bootstrapv1.ClusterConfiguration{},
-			wantErr:                  false,
+			want:    &bootstrapv1.JoinConfiguration{},
+			wantErr: false,
 		},
 		{
 			name: "Parses a v1beta4 kubeadm configuration",
@@ -735,25 +552,15 @@ func TestUnmarshalJoinConfiguration(t *testing.T) {
 				yaml: "apiVersion: kubeadm.k8s.io/v1beta4\n" + "" +
 					"caCertPath: \"\"\n" +
 					"discovery: {}\n" +
-					"kind: JoinConfiguration\n",
-			},
-			want:                     &bootstrapv1.JoinConfiguration{},
-			wantClusterConfiguration: &bootstrapv1.ClusterConfiguration{},
-			wantErr:                  false,
-		},
-		{
-			name: "Parses a v1beta4 kubeadm configuration with data to cluster configuration",
-			args: args{
-				yaml: "apiVersion: kubeadm.k8s.io/v1beta4\n" + "" +
-					"caCertPath: \"\"\n" +
-					"discovery: {}\n" +
 					"kind: JoinConfiguration\n" +
-					"timeouts:\n" +
-					"  controlPlaneComponentHealthCheck: 10s\n",
+					"timeouts: {\n" +
+					"  controlPlaneComponentHealthCheck: 50s\n" +
+					"}\n",
 			},
-			want: &bootstrapv1.JoinConfiguration{},
-			wantClusterConfiguration: &bootstrapv1.ClusterConfiguration{
-				APIServer: bootstrapv1.APIServer{TimeoutForControlPlane: &timeout},
+			want: &bootstrapv1.JoinConfiguration{
+				Timeouts: bootstrapv1.Timeouts{
+					ControlPlaneComponentHealthCheckSeconds: ptr.To[int32](50),
+				},
 			},
 			wantErr: false,
 		},
@@ -762,15 +569,13 @@ func TestUnmarshalJoinConfiguration(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			g := NewWithT(t)
 
-			gotClusterConfiguration := &bootstrapv1.ClusterConfiguration{}
-			got, err := UnmarshalJoinConfiguration(tt.args.yaml, gotClusterConfiguration)
+			got, err := UnmarshalJoinConfiguration(tt.args.yaml)
 			if tt.wantErr {
 				g.Expect(err).To(HaveOccurred())
 				return
 			}
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(got).To(BeComparableTo(tt.want), cmp.Diff(tt.want, got))
-			g.Expect(gotClusterConfiguration).To(BeComparableTo(tt.wantClusterConfiguration), cmp.Diff(tt.wantClusterConfiguration, gotClusterConfiguration))
 		})
 	}
 }

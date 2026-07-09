@@ -33,7 +33,8 @@ import (
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
+	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
+	conversionutil "sigs.k8s.io/cluster-api/util/conversion"
 )
 
 var (
@@ -89,7 +90,9 @@ func generateDeployment(image string) clusterv1.MachineDeployment {
 					Labels: machineLabels,
 				},
 				Spec: clusterv1.MachineSpec{
-					NodeDrainTimeout: &metav1.Duration{Duration: 10 * time.Second},
+					Deletion: clusterv1.MachineDeletionSpec{
+						NodeDrainTimeoutSeconds: ptr.To(int32(10)),
+					},
 				},
 			},
 		},
@@ -178,25 +181,29 @@ func TestMachineTemplateUpToDate(t *testing.T) {
 			Annotations: map[string]string{"a1": "v1"},
 		},
 		Spec: clusterv1.MachineSpec{
-			NodeDrainTimeout:        &metav1.Duration{Duration: 10 * time.Second},
-			NodeDeletionTimeout:     &metav1.Duration{Duration: 10 * time.Second},
-			NodeVolumeDetachTimeout: &metav1.Duration{Duration: 10 * time.Second},
-			ClusterName:             "cluster1",
-			Version:                 ptr.To("v1.25.0"),
-			FailureDomain:           ptr.To("failure-domain1"),
-			InfrastructureRef: corev1.ObjectReference{
-				Name:       "infra1",
-				Namespace:  "default",
-				Kind:       "InfrastructureMachineTemplate",
-				APIVersion: "infrastructure.cluster.x-k8s.io/v1beta1",
+			Deletion: clusterv1.MachineDeletionSpec{
+				NodeDrainTimeoutSeconds:        ptr.To(int32(10)),
+				NodeDeletionTimeoutSeconds:     ptr.To(int32(10)),
+				NodeVolumeDetachTimeoutSeconds: ptr.To(int32(10)),
+			},
+			ClusterName:     "cluster1",
+			Version:         "v1.25.0",
+			FailureDomain:   "failure-domain1",
+			MinReadySeconds: ptr.To[int32](10),
+			InfrastructureRef: clusterv1.ContractVersionedObjectReference{
+				Name:     "infra1",
+				Kind:     "InfrastructureMachineTemplate",
+				APIGroup: clusterv1.GroupVersionInfrastructure.Group,
 			},
 			Bootstrap: clusterv1.Bootstrap{
-				ConfigRef: &corev1.ObjectReference{
-					Name:       "bootstrap1",
-					Namespace:  "default",
-					Kind:       "BootstrapConfigTemplate",
-					APIVersion: "bootstrap.cluster.x-k8s.io/v1beta1",
+				ConfigRef: clusterv1.ContractVersionedObjectReference{
+					Name:     "bootstrap1",
+					Kind:     "BootstrapConfigTemplate",
+					APIGroup: clusterv1.GroupVersionBootstrap.Group,
 				},
+			},
+			Taints: []clusterv1.MachineTaint{
+				{Key: "taint-key", Value: "taint-value", Effect: corev1.TaintEffectNoSchedule, Propagation: clusterv1.MachineTaintPropagationAlways},
 			},
 		},
 	}
@@ -217,27 +224,29 @@ func TestMachineTemplateUpToDate(t *testing.T) {
 
 	machineTemplateWithDifferentInPlaceMutableSpecFields := machineTemplate.DeepCopy()
 	machineTemplateWithDifferentInPlaceMutableSpecFields.Spec.ReadinessGates = []clusterv1.MachineReadinessGate{{ConditionType: "foo"}}
-	machineTemplateWithDifferentInPlaceMutableSpecFields.Spec.NodeDrainTimeout = &metav1.Duration{Duration: 20 * time.Second}
-	machineTemplateWithDifferentInPlaceMutableSpecFields.Spec.NodeDeletionTimeout = &metav1.Duration{Duration: 20 * time.Second}
-	machineTemplateWithDifferentInPlaceMutableSpecFields.Spec.NodeVolumeDetachTimeout = &metav1.Duration{Duration: 20 * time.Second}
+	machineTemplateWithDifferentInPlaceMutableSpecFields.Spec.Deletion.NodeDrainTimeoutSeconds = ptr.To(int32(20))
+	machineTemplateWithDifferentInPlaceMutableSpecFields.Spec.Deletion.NodeDeletionTimeoutSeconds = ptr.To(int32(20))
+	machineTemplateWithDifferentInPlaceMutableSpecFields.Spec.Deletion.NodeVolumeDetachTimeoutSeconds = ptr.To(int32(20))
+	machineTemplateWithDifferentInPlaceMutableSpecFields.Spec.MinReadySeconds = ptr.To[int32](20)
+	machineTemplateWithDifferentInPlaceMutableSpecFields.Spec.Taints = []clusterv1.MachineTaint{
+		{Key: "taint-key", Value: "taint-value", Effect: corev1.TaintEffectNoSchedule, Propagation: clusterv1.MachineTaintPropagationAlways},
+		{Key: "other-key", Value: "other-value", Effect: corev1.TaintEffectNoExecute, Propagation: clusterv1.MachineTaintPropagationAlways},
+	}
 
 	machineTemplateWithDifferentClusterName := machineTemplate.DeepCopy()
 	machineTemplateWithDifferentClusterName.Spec.ClusterName = "cluster2"
 
 	machineTemplateWithDifferentVersion := machineTemplate.DeepCopy()
-	machineTemplateWithDifferentVersion.Spec.Version = ptr.To("v1.26.0")
+	machineTemplateWithDifferentVersion.Spec.Version = "v1.26.0"
 
 	machineTemplateWithDifferentFailureDomain := machineTemplate.DeepCopy()
-	machineTemplateWithDifferentFailureDomain.Spec.FailureDomain = ptr.To("failure-domain2")
+	machineTemplateWithDifferentFailureDomain.Spec.FailureDomain = "failure-domain2"
 
 	machineTemplateWithDifferentInfraRef := machineTemplate.DeepCopy()
 	machineTemplateWithDifferentInfraRef.Spec.InfrastructureRef.Name = "infra2"
 
-	machineTemplateWithDifferentInfraRefAPIVersion := machineTemplate.DeepCopy()
-	machineTemplateWithDifferentInfraRefAPIVersion.Spec.InfrastructureRef.APIVersion = "infrastructure.cluster.x-k8s.io/v1beta2"
-
 	machineTemplateWithBootstrapDataSecret := machineTemplate.DeepCopy()
-	machineTemplateWithBootstrapDataSecret.Spec.Bootstrap.ConfigRef = nil
+	machineTemplateWithBootstrapDataSecret.Spec.Bootstrap.ConfigRef = clusterv1.ContractVersionedObjectReference{} // Overwriting ConfigRef to empty.
 	machineTemplateWithBootstrapDataSecret.Spec.Bootstrap.DataSecretName = ptr.To("data-secret1")
 
 	machineTemplateWithDifferentBootstrapDataSecret := machineTemplateWithBootstrapDataSecret.DeepCopy()
@@ -245,9 +254,6 @@ func TestMachineTemplateUpToDate(t *testing.T) {
 
 	machineTemplateWithDifferentBootstrapConfigRef := machineTemplate.DeepCopy()
 	machineTemplateWithDifferentBootstrapConfigRef.Spec.Bootstrap.ConfigRef.Name = "bootstrap2"
-
-	machineTemplateWithDifferentBootstrapConfigRefAPIVersion := machineTemplate.DeepCopy()
-	machineTemplateWithDifferentBootstrapConfigRefAPIVersion.Spec.Bootstrap.ConfigRef.APIVersion = "bootstrap.cluster.x-k8s.io/v1beta2"
 
 	tests := []struct {
 		Name                       string
@@ -355,18 +361,6 @@ func TestMachineTemplateUpToDate(t *testing.T) {
 			expectedConditionMessages1: []string{"BootstrapConfig is not up-to-date"},
 			expectedConditionMessages2: []string{"spec.bootstrap.dataSecretName data-secret1, nil required"},
 		},
-		{
-			Name:             "Same spec, except desired has different InfrastructureRef APIVersion",
-			current:          machineTemplate,
-			desired:          machineTemplateWithDifferentInfraRefAPIVersion,
-			expectedUpToDate: true,
-		},
-		{
-			Name:             "Same spec, except desired has different Bootstrap.ConfigRef APIVersion",
-			current:          machineTemplate,
-			desired:          machineTemplateWithDifferentBootstrapConfigRefAPIVersion,
-			expectedUpToDate: true,
-		},
 	}
 
 	for _, test := range tests {
@@ -375,10 +369,19 @@ func TestMachineTemplateUpToDate(t *testing.T) {
 
 			runTest := func(t1, t2 *clusterv1.MachineTemplateSpec, expectedLogMessages, expectedConditionMessages []string) {
 				// Run
-				upToDate, logMessages, conditionMessages := MachineTemplateUpToDate(t1, t2)
+				upToDate, upToDateResult := MachineTemplateUpToDate(t1, t2)
 				g.Expect(upToDate).To(Equal(test.expectedUpToDate))
-				g.Expect(logMessages).To(Equal(expectedLogMessages))
-				g.Expect(conditionMessages).To(Equal(expectedConditionMessages))
+				if upToDate {
+					g.Expect(upToDateResult).ToNot(BeNil())
+					g.Expect(upToDateResult.EligibleForInPlaceUpdate).To(BeFalse())
+					g.Expect(upToDateResult.LogMessages).To(BeEmpty())
+					g.Expect(upToDateResult.ConditionMessages).To(BeEmpty())
+				} else {
+					g.Expect(upToDateResult).ToNot(BeNil())
+					g.Expect(upToDateResult.EligibleForInPlaceUpdate).To(BeTrue())
+					g.Expect(upToDateResult.LogMessages).To(Equal(expectedLogMessages))
+					g.Expect(upToDateResult.ConditionMessages).To(Equal(expectedConditionMessages))
+				}
 				g.Expect(t1.Labels).NotTo(BeNil())
 				g.Expect(t2.Labels).NotTo(BeNil())
 			}
@@ -390,8 +393,9 @@ func TestMachineTemplateUpToDate(t *testing.T) {
 	}
 }
 
-func TestFindNewMachineSet(t *testing.T) {
-	twoBeforeRolloutAfter := metav1.Now()
+func TestFindNewAndOldMachineSets(t *testing.T) {
+	threeBeforeRolloutAfter := metav1.Now()
+	twoBeforeRolloutAfter := metav1.NewTime(threeBeforeRolloutAfter.Add(time.Minute))
 	oneBeforeRolloutAfter := metav1.NewTime(twoBeforeRolloutAfter.Add(time.Minute))
 	rolloutAfter := metav1.NewTime(oneBeforeRolloutAfter.Add(time.Minute))
 	oneAfterRolloutAfter := metav1.NewTime(rolloutAfter.Add(time.Minute))
@@ -402,7 +406,7 @@ func TestFindNewMachineSet(t *testing.T) {
 	deployment.Spec.Template.Spec.InfrastructureRef.Name = "new-infra-ref"
 
 	deploymentWithRolloutAfter := deployment.DeepCopy()
-	deploymentWithRolloutAfter.Spec.RolloutAfter = &rolloutAfter
+	deploymentWithRolloutAfter.Spec.Rollout.After = rolloutAfter
 
 	matchingMS := generateMS(deployment)
 
@@ -410,201 +414,310 @@ func TestFindNewMachineSet(t *testing.T) {
 	matchingMSHigherReplicas.Spec.Replicas = ptr.To[int32](2)
 
 	matchingMSDiffersInPlaceMutableFields := generateMS(deployment)
-	matchingMSDiffersInPlaceMutableFields.Spec.Template.Spec.NodeDrainTimeout = &metav1.Duration{Duration: 20 * time.Second}
+	matchingMSDiffersInPlaceMutableFields.Spec.Template.Spec.Deletion.NodeDrainTimeoutSeconds = ptr.To(int32(20))
+	matchingMSDiffersInPlaceMutableFields.Spec.Template.Spec.Taints = []clusterv1.MachineTaint{
+		{Key: "taint-key", Value: "taint-value", Effect: corev1.TaintEffectNoSchedule, Propagation: clusterv1.MachineTaintPropagationAlways},
+	}
 
 	oldMS := generateMS(deployment)
 	oldMS.Spec.Template.Spec.InfrastructureRef.Name = "old-infra-ref"
 
+	oldMSCreatedThreeBeforeRolloutAfter := *oldMS.DeepCopy()
+	oldMSCreatedThreeBeforeRolloutAfter.CreationTimestamp = threeBeforeRolloutAfter
+
+	oldMSCreatedAtRolloutAfter := *oldMS.DeepCopy()
+	oldMSCreatedAtRolloutAfter.CreationTimestamp = rolloutAfter
+
+	msCreatedThreeBeforeRolloutAfter := generateMS(deployment)
+	msCreatedThreeBeforeRolloutAfter.CreationTimestamp = threeBeforeRolloutAfter
+
 	msCreatedTwoBeforeRolloutAfter := generateMS(deployment)
 	msCreatedTwoBeforeRolloutAfter.CreationTimestamp = twoBeforeRolloutAfter
+
+	msCreatedAtRolloutAfter := generateMS(deployment)
+	msCreatedAtRolloutAfter.CreationTimestamp = rolloutAfter
 
 	msCreatedAfterRolloutAfter := generateMS(deployment)
 	msCreatedAfterRolloutAfter.CreationTimestamp = oneAfterRolloutAfter
 
+	msCreatedExactlyInRolloutAfter := generateMS(deployment)
+	msCreatedExactlyInRolloutAfter.CreationTimestamp = rolloutAfter
+
 	tests := []struct {
-		Name               string
-		deployment         clusterv1.MachineDeployment
-		msList             []*clusterv1.MachineSet
-		reconciliationTime *metav1.Time
-		expected           *clusterv1.MachineSet
-		createReason       string
+		Name                    string
+		deployment              clusterv1.MachineDeployment
+		msList                  []*clusterv1.MachineSet
+		reconciliationTime      metav1.Time
+		expectedNewMS           *clusterv1.MachineSet
+		expectedOldMSs          []*clusterv1.MachineSet
+		expectedUpToDateResults map[string]UpToDateResult
+		expectedCreateReason    string
 	}{
 		{
-			Name:         "Get nil if no MachineSets exist",
-			deployment:   deployment,
-			msList:       []*clusterv1.MachineSet{},
-			expected:     nil,
-			createReason: "no MachineSets exist for the MachineDeployment",
+			Name:                    "Get nil if no MachineSets exist",
+			deployment:              deployment,
+			msList:                  []*clusterv1.MachineSet{},
+			expectedNewMS:           nil,
+			expectedOldMSs:          nil,
+			expectedUpToDateResults: nil,
+			expectedCreateReason:    "no MachineSets exist for the MachineDeployment",
 		},
 		{
-			Name:       "Get the MachineSet with the MachineTemplate that matches the intent of the MachineDeployment",
-			deployment: deployment,
-			msList:     []*clusterv1.MachineSet{&oldMS, &matchingMS},
-			expected:   &matchingMS,
+			Name:           "Get nil if there are no MachineTemplate that matches the intent of the MachineDeployment",
+			deployment:     deployment,
+			msList:         []*clusterv1.MachineSet{&oldMS},
+			expectedNewMS:  nil,
+			expectedOldMSs: []*clusterv1.MachineSet{&oldMS},
+			expectedUpToDateResults: map[string]UpToDateResult{
+				oldMS.Name: {
+					LogMessages:              []string{"spec.infrastructureRef InfrastructureMachineTemplate old-infra-ref, InfrastructureMachineTemplate new-infra-ref required"},
+					ConditionMessages:        []string{"InfrastructureMachine is not up-to-date"},
+					EligibleForInPlaceUpdate: true,
+				},
+			},
+			expectedCreateReason: fmt.Sprintf(`couldn't find MachineSet matching MachineDeployment spec template: MachineSet %s needs rollout: spec.infrastructureRef InfrastructureMachineTemplate old-infra-ref, InfrastructureMachineTemplate new-infra-ref required`, oldMS.Name),
 		},
 		{
-			Name:       "Get the MachineSet with the higher replicas if multiple MachineSets match the desired intent on the MachineDeployment",
-			deployment: deployment,
-			msList:     []*clusterv1.MachineSet{&oldMS, &matchingMS, &matchingMSHigherReplicas},
-			expected:   &matchingMSHigherReplicas,
+			Name:           "Get the MachineSet with the MachineTemplate that matches the intent of the MachineDeployment",
+			deployment:     deployment,
+			msList:         []*clusterv1.MachineSet{&oldMS, &matchingMS},
+			expectedNewMS:  &matchingMS,
+			expectedOldMSs: []*clusterv1.MachineSet{&oldMS},
+			expectedUpToDateResults: map[string]UpToDateResult{
+				oldMS.Name: {
+					LogMessages:              []string{"spec.infrastructureRef InfrastructureMachineTemplate old-infra-ref, InfrastructureMachineTemplate new-infra-ref required"},
+					ConditionMessages:        []string{"InfrastructureMachine is not up-to-date"},
+					EligibleForInPlaceUpdate: true,
+				},
+				matchingMS.Name: {
+					EligibleForInPlaceUpdate: false,
+				},
+			},
 		},
 		{
-			Name:       "Get the MachineSet with the MachineTemplate that matches the desired intent on the MachineDeployment, except differs in in-place mutable fields",
-			deployment: deployment,
-			msList:     []*clusterv1.MachineSet{&oldMS, &matchingMSDiffersInPlaceMutableFields},
-			expected:   &matchingMSDiffersInPlaceMutableFields,
+			Name:           "Get empty old MachineSets",
+			deployment:     deployment,
+			msList:         []*clusterv1.MachineSet{&matchingMS},
+			expectedNewMS:  &matchingMS,
+			expectedOldMSs: []*clusterv1.MachineSet{},
+			expectedUpToDateResults: map[string]UpToDateResult{
+				matchingMS.Name: {
+					EligibleForInPlaceUpdate: false,
+				},
+			},
 		},
 		{
-			Name:         "Get nil if no MachineSet matches the desired intent of the MachineDeployment",
-			deployment:   deployment,
-			msList:       []*clusterv1.MachineSet{&oldMS},
-			expected:     nil,
-			createReason: fmt.Sprintf(`couldn't find MachineSet matching MachineDeployment spec template: MachineSet %s: diff: spec.infrastructureRef InfrastructureMachineTemplate old-infra-ref, InfrastructureMachineTemplate new-infra-ref required`, oldMS.Name),
+			Name:           "Get the MachineSet with the higher replicas if multiple MachineSets match the desired intent on the MachineDeployment",
+			deployment:     deployment,
+			msList:         []*clusterv1.MachineSet{&oldMS, &matchingMS, &matchingMSHigherReplicas},
+			expectedNewMS:  &matchingMSHigherReplicas,
+			expectedOldMSs: []*clusterv1.MachineSet{&oldMS, &matchingMS},
+			expectedUpToDateResults: map[string]UpToDateResult{
+				oldMS.Name: {
+					LogMessages:              []string{"spec.infrastructureRef InfrastructureMachineTemplate old-infra-ref, InfrastructureMachineTemplate new-infra-ref required"},
+					ConditionMessages:        []string{"InfrastructureMachine is not up-to-date"},
+					EligibleForInPlaceUpdate: true,
+				},
+				matchingMS.Name: {
+					EligibleForInPlaceUpdate: false,
+				},
+				matchingMSHigherReplicas.Name: {
+					EligibleForInPlaceUpdate: false,
+				},
+			},
+		},
+		{
+			Name:           "Get the MachineSet with the MachineTemplate that matches the desired intent on the MachineDeployment, except differs in in-place mutable fields",
+			deployment:     deployment,
+			msList:         []*clusterv1.MachineSet{&oldMS, &matchingMSDiffersInPlaceMutableFields},
+			expectedNewMS:  &matchingMSDiffersInPlaceMutableFields,
+			expectedOldMSs: []*clusterv1.MachineSet{&oldMS},
+			expectedUpToDateResults: map[string]UpToDateResult{
+				oldMS.Name: {
+					LogMessages:              []string{"spec.infrastructureRef InfrastructureMachineTemplate old-infra-ref, InfrastructureMachineTemplate new-infra-ref required"},
+					ConditionMessages:        []string{"InfrastructureMachine is not up-to-date"},
+					EligibleForInPlaceUpdate: true,
+				},
+				matchingMSDiffersInPlaceMutableFields.Name: {
+					EligibleForInPlaceUpdate: false,
+				},
+			},
+		},
+		{
+			Name:           "Get nil if no MachineSet matches the desired intent of the MachineDeployment",
+			deployment:     deployment,
+			msList:         []*clusterv1.MachineSet{&oldMS},
+			expectedNewMS:  nil,
+			expectedOldMSs: []*clusterv1.MachineSet{&oldMS},
+			expectedUpToDateResults: map[string]UpToDateResult{
+				oldMS.Name: {
+					LogMessages:              []string{"spec.infrastructureRef InfrastructureMachineTemplate old-infra-ref, InfrastructureMachineTemplate new-infra-ref required"},
+					ConditionMessages:        []string{"InfrastructureMachine is not up-to-date"},
+					EligibleForInPlaceUpdate: true,
+				},
+			},
+			expectedCreateReason: fmt.Sprintf(`couldn't find MachineSet matching MachineDeployment spec template: MachineSet %s needs rollout: spec.infrastructureRef InfrastructureMachineTemplate old-infra-ref, InfrastructureMachineTemplate new-infra-ref required`, oldMS.Name),
+		},
+		{
+			Name:               "Get nil if no MachineSet matches the desired intent of the MachineDeployment, reconciliationTime is > rolloutAfter",
+			deployment:         *deploymentWithRolloutAfter,
+			msList:             []*clusterv1.MachineSet{&oldMSCreatedThreeBeforeRolloutAfter},
+			reconciliationTime: oneAfterRolloutAfter,
+			expectedNewMS:      nil,
+			expectedOldMSs:     []*clusterv1.MachineSet{&oldMSCreatedThreeBeforeRolloutAfter},
+			expectedUpToDateResults: map[string]UpToDateResult{
+				oldMS.Name: {
+					ConditionMessages: []string{"InfrastructureMachine is not up-to-date"},
+					LogMessages: []string{
+						// An additional message must be added to old machine sets when reconciliationTime is > rolloutAfter.
+						"spec.infrastructureRef InfrastructureMachineTemplate old-infra-ref, InfrastructureMachineTemplate new-infra-ref required",
+						"MachineDeployment spec.rolloutAfter expired",
+					},
+					// EligibleForInPlaceUpdate decision should change for oldMS when reconciliationTime is > rolloutAfter.
+					EligibleForInPlaceUpdate: false,
+				},
+			},
+			expectedCreateReason: fmt.Sprintf(`couldn't find MachineSet matching MachineDeployment spec template: MachineSet %s needs rollout: spec.infrastructureRef InfrastructureMachineTemplate old-infra-ref, InfrastructureMachineTemplate new-infra-ref required, MachineDeployment spec.rolloutAfter expired`, oldMS.Name),
+		},
+		{
+			Name:               "Get nil if no MachineSet matches the desired intent of the MachineDeployment, reconciliationTime is > rolloutAfter, MachineSet created at rolloutAfter",
+			deployment:         *deploymentWithRolloutAfter,
+			msList:             []*clusterv1.MachineSet{&oldMSCreatedAtRolloutAfter},
+			reconciliationTime: oneAfterRolloutAfter,
+			expectedNewMS:      nil,
+			expectedOldMSs:     []*clusterv1.MachineSet{&oldMSCreatedAtRolloutAfter},
+			expectedUpToDateResults: map[string]UpToDateResult{
+				oldMS.Name: {
+					ConditionMessages: []string{"InfrastructureMachine is not up-to-date"},
+					LogMessages: []string{
+						// No additional message must be added to old machine sets when reconciliationTime is > rolloutAfter but MachineSet is created at rolloutAfter.
+						"spec.infrastructureRef InfrastructureMachineTemplate old-infra-ref, InfrastructureMachineTemplate new-infra-ref required",
+					},
+					// EligibleForInPlaceUpdate decision should not change for oldMS when reconciliationTime is > rolloutAfter but MachineSet is created at rolloutAfter.
+					EligibleForInPlaceUpdate: true,
+				},
+			},
+			expectedCreateReason: fmt.Sprintf(`couldn't find MachineSet matching MachineDeployment spec template: MachineSet %s needs rollout: spec.infrastructureRef InfrastructureMachineTemplate old-infra-ref, InfrastructureMachineTemplate new-infra-ref required`, oldMS.Name),
 		},
 		{
 			Name:               "Get the MachineSet if reconciliationTime < rolloutAfter",
 			deployment:         *deploymentWithRolloutAfter,
-			msList:             []*clusterv1.MachineSet{&msCreatedTwoBeforeRolloutAfter},
-			reconciliationTime: &oneBeforeRolloutAfter,
-			expected:           &msCreatedTwoBeforeRolloutAfter,
+			msList:             []*clusterv1.MachineSet{&msCreatedTwoBeforeRolloutAfter, &msCreatedThreeBeforeRolloutAfter},
+			reconciliationTime: oneBeforeRolloutAfter,
+			expectedNewMS:      &msCreatedThreeBeforeRolloutAfter,
+			expectedOldMSs:     []*clusterv1.MachineSet{&msCreatedTwoBeforeRolloutAfter},
+			expectedUpToDateResults: map[string]UpToDateResult{
+				msCreatedTwoBeforeRolloutAfter.Name: {
+					EligibleForInPlaceUpdate: false,
+				},
+				msCreatedThreeBeforeRolloutAfter.Name: {
+					EligibleForInPlaceUpdate: false,
+				},
+			},
 		},
 		{
 			Name:               "Get nil if reconciliationTime is > rolloutAfter and no MachineSet is created after rolloutAfter",
 			deployment:         *deploymentWithRolloutAfter,
-			msList:             []*clusterv1.MachineSet{&msCreatedTwoBeforeRolloutAfter},
-			reconciliationTime: &oneAfterRolloutAfter,
-			expected:           nil,
-			createReason:       fmt.Sprintf("RolloutAfter on MachineDeployment set to %s, no MachineSet has been created afterwards", rolloutAfter.Format(time.RFC3339)),
+			msList:             []*clusterv1.MachineSet{&msCreatedTwoBeforeRolloutAfter, &msCreatedThreeBeforeRolloutAfter, &oldMSCreatedThreeBeforeRolloutAfter},
+			reconciliationTime: oneAfterRolloutAfter,
+			expectedNewMS:      nil,
+			expectedOldMSs:     []*clusterv1.MachineSet{&oldMSCreatedThreeBeforeRolloutAfter, &msCreatedThreeBeforeRolloutAfter, &msCreatedTwoBeforeRolloutAfter},
+			expectedUpToDateResults: map[string]UpToDateResult{
+				msCreatedTwoBeforeRolloutAfter.Name: {
+					EligibleForInPlaceUpdate: false,
+				},
+				msCreatedThreeBeforeRolloutAfter.Name: {
+					EligibleForInPlaceUpdate: false,
+				},
+				oldMS.Name: {
+					ConditionMessages: []string{"InfrastructureMachine is not up-to-date"},
+					LogMessages: []string{
+						"spec.infrastructureRef InfrastructureMachineTemplate old-infra-ref, InfrastructureMachineTemplate new-infra-ref required",
+						// An additional message must be added to old machine sets when reconciliationTime is > rolloutAfter.
+						"MachineDeployment spec.rolloutAfter expired",
+					},
+					// EligibleForInPlaceUpdate decision should change for oldMS when reconciliationTime is > rolloutAfter.
+					EligibleForInPlaceUpdate: false,
+				},
+			},
+			expectedCreateReason: fmt.Sprintf("spec.rollout.after on MachineDeployment set to %s, no MachineSet has been created afterwards", rolloutAfter.Format(time.RFC3339)),
 		},
 		{
 			Name:               "Get MachineSet created after RolloutAfter if reconciliationTime is > rolloutAfter",
 			deployment:         *deploymentWithRolloutAfter,
 			msList:             []*clusterv1.MachineSet{&msCreatedAfterRolloutAfter, &msCreatedTwoBeforeRolloutAfter},
-			reconciliationTime: &twoAfterRolloutAfter,
-			expected:           &msCreatedAfterRolloutAfter,
+			reconciliationTime: twoAfterRolloutAfter,
+			expectedNewMS:      &msCreatedAfterRolloutAfter,
+			expectedOldMSs:     []*clusterv1.MachineSet{&msCreatedTwoBeforeRolloutAfter},
+			expectedUpToDateResults: map[string]UpToDateResult{
+				msCreatedTwoBeforeRolloutAfter.Name: {
+					EligibleForInPlaceUpdate: false,
+				},
+				msCreatedAfterRolloutAfter.Name: {
+					EligibleForInPlaceUpdate: false,
+				},
+			},
+		},
+		{
+			Name:               "Get MachineSet created at RolloutAfter if reconciliationTime is > rolloutAfter",
+			deployment:         *deploymentWithRolloutAfter,
+			msList:             []*clusterv1.MachineSet{&msCreatedAtRolloutAfter, &msCreatedTwoBeforeRolloutAfter},
+			reconciliationTime: twoAfterRolloutAfter,
+			expectedNewMS:      &msCreatedAtRolloutAfter,
+			expectedOldMSs:     []*clusterv1.MachineSet{&msCreatedTwoBeforeRolloutAfter},
+			expectedUpToDateResults: map[string]UpToDateResult{
+				msCreatedTwoBeforeRolloutAfter.Name: {
+					EligibleForInPlaceUpdate: false,
+				},
+				msCreatedAtRolloutAfter.Name: {
+					EligibleForInPlaceUpdate: false,
+				},
+			},
+		},
+		{
+			// https://github.com/kubernetes-sigs/cluster-api/issues/12260
+			Name:               "Get MachineSet created exactly in RolloutAfter if reconciliationTime > rolloutAfter",
+			deployment:         *deploymentWithRolloutAfter,
+			msList:             []*clusterv1.MachineSet{&msCreatedExactlyInRolloutAfter, &msCreatedTwoBeforeRolloutAfter},
+			reconciliationTime: oneAfterRolloutAfter,
+			expectedNewMS:      &msCreatedExactlyInRolloutAfter,
+			expectedOldMSs:     []*clusterv1.MachineSet{&msCreatedTwoBeforeRolloutAfter},
+			expectedUpToDateResults: map[string]UpToDateResult{
+				msCreatedTwoBeforeRolloutAfter.Name: {
+					EligibleForInPlaceUpdate: false,
+				},
+				msCreatedExactlyInRolloutAfter.Name: {
+					EligibleForInPlaceUpdate: false,
+				},
+			},
 		},
 		{
 			Name:               "Get MachineSet created after RolloutAfter if reconciliationTime is > rolloutAfter (inverse order in ms list)",
 			deployment:         *deploymentWithRolloutAfter,
 			msList:             []*clusterv1.MachineSet{&msCreatedTwoBeforeRolloutAfter, &msCreatedAfterRolloutAfter},
-			reconciliationTime: &twoAfterRolloutAfter,
-			expected:           &msCreatedAfterRolloutAfter,
+			reconciliationTime: twoAfterRolloutAfter,
+			expectedNewMS:      &msCreatedAfterRolloutAfter,
+			expectedOldMSs:     []*clusterv1.MachineSet{&msCreatedTwoBeforeRolloutAfter},
+			expectedUpToDateResults: map[string]UpToDateResult{
+				msCreatedTwoBeforeRolloutAfter.Name: {
+					EligibleForInPlaceUpdate: false,
+				},
+				msCreatedAfterRolloutAfter.Name: {
+					EligibleForInPlaceUpdate: false,
+				},
+			},
 		},
 	}
 
-	for i := range tests {
-		test := tests[i]
+	for _, test := range tests {
 		t.Run(test.Name, func(t *testing.T) {
 			g := NewWithT(t)
 
-			ms, createReason, err := FindNewMachineSet(&test.deployment, test.msList, test.reconciliationTime)
-			g.Expect(err).To(Not(HaveOccurred()))
-			g.Expect(ms).To(BeComparableTo(test.expected))
-			g.Expect(createReason).To(BeComparableTo(test.createReason))
-		})
-	}
-}
-
-func TestFindOldMachineSets(t *testing.T) {
-	twoBeforeRolloutAfter := metav1.Now()
-	oneBeforeRolloutAfter := metav1.NewTime(twoBeforeRolloutAfter.Add(time.Minute))
-	rolloutAfter := metav1.NewTime(oneBeforeRolloutAfter.Add(time.Minute))
-	oneAfterRolloutAfter := metav1.NewTime(rolloutAfter.Add(time.Minute))
-	twoAfterRolloutAfter := metav1.NewTime(oneAfterRolloutAfter.Add(time.Minute))
-
-	deployment := generateDeployment("nginx")
-
-	deploymentWithRolloutAfter := deployment.DeepCopy()
-	deploymentWithRolloutAfter.Spec.RolloutAfter = &rolloutAfter
-
-	newMS := generateMS(deployment)
-	newMS.Name = "aa"
-	newMS.Spec.Replicas = ptr.To[int32](1)
-
-	newMSHigherReplicas := generateMS(deployment)
-	newMSHigherReplicas.Spec.Replicas = ptr.To[int32](2)
-
-	newMSHigherName := generateMS(deployment)
-	newMSHigherName.Spec.Replicas = ptr.To[int32](1)
-	newMSHigherName.Name = "ab"
-
-	oldDeployment := generateDeployment("nginx")
-	oldDeployment.Spec.Template.Spec.InfrastructureRef.Name = "changed-infra-ref"
-	oldMS := generateMS(oldDeployment)
-
-	msCreatedTwoBeforeRolloutAfter := generateMS(deployment)
-	msCreatedTwoBeforeRolloutAfter.CreationTimestamp = twoBeforeRolloutAfter
-
-	msCreatedAfterRolloutAfter := generateMS(deployment)
-	msCreatedAfterRolloutAfter.CreationTimestamp = oneAfterRolloutAfter
-
-	tests := []struct {
-		Name               string
-		deployment         clusterv1.MachineDeployment
-		msList             []*clusterv1.MachineSet
-		reconciliationTime *metav1.Time
-		expected           []*clusterv1.MachineSet
-	}{
-		{
-			Name:       "Get old MachineSets",
-			deployment: deployment,
-			msList:     []*clusterv1.MachineSet{&newMS, &oldMS},
-			expected:   []*clusterv1.MachineSet{&oldMS},
-		},
-		{
-			Name:       "Get old MachineSets with no new MachineSet",
-			deployment: deployment,
-			msList:     []*clusterv1.MachineSet{&oldMS},
-			expected:   []*clusterv1.MachineSet{&oldMS},
-		},
-		{
-			Name:       "Get old MachineSets with two new MachineSets, only the MachineSet with higher replicas is seen as new MachineSet",
-			deployment: deployment,
-			msList:     []*clusterv1.MachineSet{&oldMS, &newMS, &newMSHigherReplicas},
-			expected:   []*clusterv1.MachineSet{&oldMS, &newMS},
-		},
-		{
-			Name:       "Get old MachineSets with two new MachineSets, when replicas are matching only the MachineSet with lower name is seen as new MachineSet",
-			deployment: deployment,
-			msList:     []*clusterv1.MachineSet{&oldMS, &newMS, &newMSHigherName},
-			expected:   []*clusterv1.MachineSet{&oldMS, &newMSHigherName},
-		},
-		{
-			Name:       "Get empty old MachineSets",
-			deployment: deployment,
-			msList:     []*clusterv1.MachineSet{&newMS},
-			expected:   []*clusterv1.MachineSet{},
-		},
-		{
-			Name:       "Get empty old MachineSets if no MachineSets exist",
-			deployment: deployment,
-			msList:     []*clusterv1.MachineSet{},
-			expected:   []*clusterv1.MachineSet{},
-		},
-		{
-			Name:               "Get old MachineSets with new MachineSets, MachineSets created before rolloutAfter are considered new when reconciliationTime < rolloutAfter",
-			deployment:         *deploymentWithRolloutAfter,
-			msList:             []*clusterv1.MachineSet{&msCreatedTwoBeforeRolloutAfter},
-			reconciliationTime: &oneBeforeRolloutAfter,
-			expected:           nil,
-		},
-		{
-			Name:               "Get old MachineSets with new MachineSets, MachineSets created after rolloutAfter are considered new when reconciliationTime > rolloutAfter",
-			deployment:         *deploymentWithRolloutAfter,
-			msList:             []*clusterv1.MachineSet{&msCreatedTwoBeforeRolloutAfter, &msCreatedAfterRolloutAfter},
-			reconciliationTime: &twoAfterRolloutAfter,
-			expected:           []*clusterv1.MachineSet{&msCreatedTwoBeforeRolloutAfter},
-		},
-	}
-
-	for i := range tests {
-		test := tests[i]
-		t.Run(test.Name, func(t *testing.T) {
-			g := NewWithT(t)
-
-			allMS, err := FindOldMachineSets(&test.deployment, test.msList, test.reconciliationTime)
-			g.Expect(err).ToNot(HaveOccurred())
-			g.Expect(allMS).To(ConsistOf(test.expected))
+			newMS, oldMSs, upToDateResults, createReason := FindNewAndOldMachineSets(&test.deployment, test.msList, test.reconciliationTime)
+			g.Expect(newMS).To(BeComparableTo(test.expectedNewMS))
+			g.Expect(oldMSs).To(BeComparableTo(test.expectedOldMSs))
+			g.Expect(upToDateResults).To(BeComparableTo(test.expectedUpToDateResults))
+			g.Expect(createReason).To(BeComparableTo(test.expectedCreateReason))
 		})
 	}
 }
@@ -612,10 +725,10 @@ func TestFindOldMachineSets(t *testing.T) {
 func TestGetReplicaCountForMachineSets(t *testing.T) {
 	ms1 := generateMS(generateDeployment("foo"))
 	*(ms1.Spec.Replicas) = 1
-	ms1.Status.Replicas = 2
+	ms1.Status.Replicas = ptr.To[int32](2)
 	ms2 := generateMS(generateDeployment("bar"))
 	*(ms2.Spec.Replicas) = 5
-	ms2.Status.Replicas = 3
+	ms2.Status.Replicas = ptr.To[int32](3)
 
 	tests := []struct {
 		Name           string
@@ -645,7 +758,7 @@ func TestGetReplicaCountForMachineSets(t *testing.T) {
 			g := NewWithT(t)
 
 			g.Expect(GetReplicaCountForMachineSets(test.Sets)).To(Equal(test.ExpectedCount))
-			g.Expect(GetActualReplicaCountForMachineSets(test.Sets)).To(Equal(test.ExpectedActual))
+			g.Expect(ptr.Deref(GetActualReplicaCountForMachineSets(test.Sets), 0)).To(Equal(test.ExpectedActual))
 			g.Expect(TotalMachineSetsReplicaSum(test.Sets)).To(Equal(test.ExpectedTotal))
 		})
 	}
@@ -722,70 +835,99 @@ func TestResolveFenceposts(t *testing.T) {
 
 func TestNewMSNewReplicas(t *testing.T) {
 	tests := []struct {
-		Name          string
-		strategyType  clusterv1.MachineDeploymentStrategyType
-		depReplicas   int32
-		newMSReplicas int32
-		maxSurge      int
-		expected      int32
+		Name               string
+		strategyType       clusterv1.MachineDeploymentRolloutStrategyType
+		deploymentReplicas int32
+		maxSurge           int32
+		oldMSReplicas      int32
+		newMSReplicas      int32
+		expected           int32
+		expectedNote       string
 	}{
 		{
-			"can not scale up - to newMSReplicas",
-			clusterv1.RollingUpdateMachineDeploymentStrategyType,
-			1, 5, 1, 5,
+			Name:               "RollingUpdate strategy can not scale up",
+			strategyType:       clusterv1.RollingUpdateMachineDeploymentStrategyType,
+			deploymentReplicas: 1,
+			maxSurge:           2,
+			oldMSReplicas:      5,
+			newMSReplicas:      4,
+			expected:           4,
+			expectedNote:       "9 current Machines >= 1 MachineDeployment spec.replicas + 2 maxSurge",
 		},
 		{
-			"scale up - to depReplicas",
-			clusterv1.RollingUpdateMachineDeploymentStrategyType,
-			6, 2, 10, 6,
+			Name:               "RollingUpdate strategy scale up to deploymentReplicas",
+			strategyType:       clusterv1.RollingUpdateMachineDeploymentStrategyType,
+			deploymentReplicas: 6,
+			maxSurge:           3,
+			oldMSReplicas:      5,
+			newMSReplicas:      2,
+			expected:           4, // +2 (6 MachineDeployment spec.replicas + 3 maxSurge - 7 current Machines)
+			expectedNote:       "7 current Machines < 6 MachineDeployment spec.replicas + 3 maxSurge",
+		},
+		{
+			Name:               "OnDeleteMachine strategy can not scale up",
+			strategyType:       clusterv1.OnDeleteMachineDeploymentStrategyType,
+			deploymentReplicas: 1,
+			maxSurge:           2,
+			oldMSReplicas:      3,
+			newMSReplicas:      5,
+			expected:           5,
+			expectedNote:       "8 current Machines >= 1 MachineDeployment spec.replicas",
+		},
+		{
+			Name:               "OnDeleteMachine strategy scale up to deploymentReplicas",
+			strategyType:       clusterv1.OnDeleteMachineDeploymentStrategyType,
+			deploymentReplicas: 6,
+			maxSurge:           10,
+			oldMSReplicas:      1,
+			newMSReplicas:      2,
+			expected:           5, // +3 (6 MachineDeployment spec.replicas - 3 current Machines)
+			expectedNote:       "3 current Machines < 6 MachineDeployment spec.replicas",
 		},
 	}
 	newDeployment := generateDeployment("nginx")
-	newRC := generateMS(newDeployment)
-	rs5 := generateMS(newDeployment)
-	*(rs5.Spec.Replicas) = 5
+	newMS := generateMS(newDeployment)
+	oldMS := generateMS(newDeployment)
 
 	for _, test := range tests {
 		t.Run(test.Name, func(t *testing.T) {
 			g := NewWithT(t)
 
-			*(newDeployment.Spec.Replicas) = test.depReplicas
-			newDeployment.Spec.Strategy = &clusterv1.MachineDeploymentStrategy{Type: test.strategyType}
-			newDeployment.Spec.Strategy.RollingUpdate = &clusterv1.MachineRollingUpdateDeployment{
-				MaxUnavailable: func(i int) *intstr.IntOrString {
-					x := intstr.FromInt(i)
-					return &x
-				}(1),
-				MaxSurge: func(i int) *intstr.IntOrString {
-					x := intstr.FromInt(i)
-					return &x
-				}(test.maxSurge),
+			*(newDeployment.Spec.Replicas) = test.deploymentReplicas
+			newDeployment.Spec.Rollout.Strategy.Type = test.strategyType
+			newDeployment.Spec.Rollout.Strategy.RollingUpdate = clusterv1.MachineDeploymentRolloutStrategyRollingUpdate{
+				MaxUnavailable: ptr.To(intstr.FromInt32(1)),
+				MaxSurge:       ptr.To(intstr.FromInt32(test.maxSurge)),
 			}
-			*(newRC.Spec.Replicas) = test.newMSReplicas
-			ms, err := NewMSNewReplicas(&newDeployment, []*clusterv1.MachineSet{&rs5}, *newRC.Spec.Replicas)
+			*(newMS.Spec.Replicas) = test.newMSReplicas
+			*(oldMS.Spec.Replicas) = test.oldMSReplicas
+			ms, note, err := NewMSNewReplicas(&newDeployment, []*clusterv1.MachineSet{&oldMS, &newMS}, *newMS.Spec.Replicas)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(ms).To(Equal(test.expected))
+			g.Expect(note).To(Equal(test.expectedNote))
 		})
 	}
 }
 
 func TestDeploymentComplete(t *testing.T) {
-	deployment := func(desired, current, updated, available, maxUnavailable, maxSurge int32) *clusterv1.MachineDeployment {
+	deployment := func(desired, current, upToDate, available, maxUnavailable, maxSurge int32) *clusterv1.MachineDeployment {
 		return &clusterv1.MachineDeployment{
 			Spec: clusterv1.MachineDeploymentSpec{
 				Replicas: &desired,
-				Strategy: &clusterv1.MachineDeploymentStrategy{
-					RollingUpdate: &clusterv1.MachineRollingUpdateDeployment{
-						MaxUnavailable: func(i int) *intstr.IntOrString { x := intstr.FromInt(i); return &x }(int(maxUnavailable)),
-						MaxSurge:       func(i int) *intstr.IntOrString { x := intstr.FromInt(i); return &x }(int(maxSurge)),
+				Rollout: clusterv1.MachineDeploymentRolloutSpec{
+					Strategy: clusterv1.MachineDeploymentRolloutStrategy{
+						RollingUpdate: clusterv1.MachineDeploymentRolloutStrategyRollingUpdate{
+							MaxUnavailable: ptr.To(intstr.FromInt32(maxUnavailable)),
+							MaxSurge:       ptr.To(intstr.FromInt32(maxSurge)),
+						},
+						Type: clusterv1.RollingUpdateMachineDeploymentStrategyType,
 					},
-					Type: clusterv1.RollingUpdateMachineDeploymentStrategyType,
 				},
 			},
 			Status: clusterv1.MachineDeploymentStatus{
-				Replicas:          current,
-				UpdatedReplicas:   updated,
-				AvailableReplicas: available,
+				Replicas:          ptr.To[int32](current),
+				UpToDateReplicas:  ptr.To[int32](upToDate),
+				AvailableReplicas: ptr.To[int32](available),
 			},
 		}
 	}
@@ -852,12 +994,14 @@ func TestMaxUnavailable(t *testing.T) {
 		return clusterv1.MachineDeployment{
 			Spec: clusterv1.MachineDeploymentSpec{
 				Replicas: func(i int32) *int32 { return &i }(replicas),
-				Strategy: &clusterv1.MachineDeploymentStrategy{
-					RollingUpdate: &clusterv1.MachineRollingUpdateDeployment{
-						MaxSurge:       func(i int) *intstr.IntOrString { x := intstr.FromInt(i); return &x }(int(1)),
-						MaxUnavailable: &maxUnavailable,
+				Rollout: clusterv1.MachineDeploymentRolloutSpec{
+					Strategy: clusterv1.MachineDeploymentRolloutStrategy{
+						RollingUpdate: clusterv1.MachineDeploymentRolloutStrategyRollingUpdate{
+							MaxSurge:       ptr.To(intstr.FromInt32(1)),
+							MaxUnavailable: &maxUnavailable,
+						},
+						Type: clusterv1.RollingUpdateMachineDeploymentStrategyType,
 					},
-					Type: clusterv1.RollingUpdateMachineDeploymentStrategyType,
 				},
 			},
 		}
@@ -869,22 +1013,22 @@ func TestMaxUnavailable(t *testing.T) {
 	}{
 		{
 			name:       "maxUnavailable less than replicas",
-			deployment: deployment(10, intstr.FromInt(5)),
+			deployment: deployment(10, intstr.FromInt32(5)),
 			expected:   int32(5),
 		},
 		{
 			name:       "maxUnavailable equal replicas",
-			deployment: deployment(10, intstr.FromInt(10)),
+			deployment: deployment(10, intstr.FromInt32(10)),
 			expected:   int32(10),
 		},
 		{
 			name:       "maxUnavailable greater than replicas",
-			deployment: deployment(5, intstr.FromInt(10)),
+			deployment: deployment(5, intstr.FromInt32(10)),
 			expected:   int32(5),
 		},
 		{
 			name:       "maxUnavailable with replicas is 0",
-			deployment: deployment(0, intstr.FromInt(10)),
+			deployment: deployment(0, intstr.FromInt32(10)),
 			expected:   int32(0),
 		},
 		{
@@ -913,163 +1057,189 @@ func TestMaxUnavailable(t *testing.T) {
 	}
 }
 
-// TestAnnotationUtils is a set of simple tests for annotation related util functions.
-func TestAnnotationUtils(t *testing.T) {
-	// Setup
+func TestMachineSetAnnotationsFromMachineDeployment(t *testing.T) {
 	tDeployment := generateDeployment("nginx")
-	tDeployment.Spec.Replicas = ptr.To[int32](1)
-	tMS := generateMS(tDeployment)
+	tDeployment.Annotations = map[string]string{
+		// annotations to skip
+		corev1.LastAppliedConfigAnnotation:  "foo",
+		clusterv1.RevisionAnnotation:        "foo",
+		revisionHistoryAnnotation:           "foo",
+		clusterv1.DesiredReplicasAnnotation: "foo",
+		clusterv1.MaxReplicasAnnotation:     "foo",
+		conversionutil.DataAnnotation:       "foo",
 
-	// Test Case 1:  Check if annotations are set properly
-	t.Run("SetReplicasAnnotations", func(t *testing.T) {
+		// annotations to preserve
+		"bar": "bar",
+	}
+	tDeployment.Spec.Replicas = ptr.To[int32](3)
+	tDeployment.Spec.Rollout.Strategy = clusterv1.MachineDeploymentRolloutStrategy{
+		Type: clusterv1.RollingUpdateMachineDeploymentStrategyType,
+		RollingUpdate: clusterv1.MachineDeploymentRolloutStrategyRollingUpdate{
+			MaxSurge:       ptr.To(intstr.FromInt32(1)),
+			MaxUnavailable: ptr.To(intstr.FromInt32(0)),
+		},
+	}
+
+	t.Run("Drops well-known annotations, keeps other, adds replica annotations", func(t *testing.T) {
 		g := NewWithT(t)
 
-		g.Expect(SetReplicasAnnotations(&tMS, 10, 11)).To(BeTrue())
-		g.Expect(tMS.Annotations).To(HaveKeyWithValue(clusterv1.DesiredReplicasAnnotation, "10"))
-		g.Expect(tMS.Annotations).To(HaveKeyWithValue(clusterv1.MaxReplicasAnnotation, "11"))
-	})
+		annotations := MachineSetAnnotationsFromMachineDeployment(ctx, &tDeployment)
 
-	// Test Case 2:  Check if annotations reflect deployments state
-	tMS.Annotations[clusterv1.DesiredReplicasAnnotation] = "1"
-	tMS.Status.AvailableReplicas = 1
-	tMS.Spec.Replicas = new(int32)
-	*tMS.Spec.Replicas = 1
+		g.Expect(annotations).To(Equal(map[string]string{
+			// Drops well-known annotations
 
-	t.Run("IsSaturated", func(t *testing.T) {
-		g := NewWithT(t)
+			// Keeps other
+			"bar": "bar",
 
-		g.Expect(IsSaturated(&tDeployment, &tMS)).To(BeTrue())
+			// Adds replica annotations
+			clusterv1.DesiredReplicasAnnotation: "3",
+			clusterv1.MaxReplicasAnnotation:     "4",
+		}))
 	})
 }
 
-func TestComputeMachineSetAnnotations(t *testing.T) {
-	deployment := generateDeployment("nginx")
-	deployment.Spec.Replicas = ptr.To[int32](3)
-	maxSurge := intstr.FromInt(1)
-	maxUnavailable := intstr.FromInt(0)
-	deployment.Spec.Strategy = &clusterv1.MachineDeploymentStrategy{
-		Type: clusterv1.RollingUpdateMachineDeploymentStrategyType,
-		RollingUpdate: &clusterv1.MachineRollingUpdateDeployment{
-			MaxSurge:       &maxSurge,
-			MaxUnavailable: &maxUnavailable,
+func TestIsSaturated(t *testing.T) {
+	tDeployment := generateDeployment("nginx")
+	tDeployment.Spec.Replicas = ptr.To[int32](3)
+
+	tMS := &clusterv1.MachineSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Annotations: map[string]string{
+				clusterv1.DesiredReplicasAnnotation: "3",
+			},
 		},
-	}
-	deployment.Annotations = map[string]string{
-		corev1.LastAppliedConfigAnnotation: "last-applied-configuration",
-		"key1":                             "value1",
 	}
 
+	t.Run("deployment not yet saturated, ms doesn't have all the desired replicas", func(t *testing.T) {
+		g := NewWithT(t)
+		tMS := tMS.DeepCopy()
+		tMS.Spec.Replicas = ptr.To[int32](1)
+		g.Expect(IsSaturated(&tDeployment, tMS)).To(BeFalse())
+	})
+	t.Run("deployment not yet saturated, ms has all replicas but some are not available yet", func(t *testing.T) {
+		g := NewWithT(t)
+		tMS := tMS.DeepCopy()
+		tMS.Spec.Replicas = ptr.To[int32](3)
+		tMS.Status.AvailableReplicas = ptr.To[int32](1)
+		g.Expect(IsSaturated(&tDeployment, tMS)).To(BeFalse())
+	})
+	t.Run("deployment saturated, ms has all replicas and all are available", func(t *testing.T) {
+		g := NewWithT(t)
+		tMS := tMS.DeepCopy()
+		tMS.Spec.Replicas = ptr.To[int32](3)
+		tMS.Status.AvailableReplicas = ptr.To[int32](3)
+		g.Expect(IsSaturated(&tDeployment, tMS)).To(BeTrue())
+	})
+}
+
+func TestComputeRevisionAnnotations(t *testing.T) {
 	tests := []struct {
-		name       string
-		deployment *clusterv1.MachineDeployment
-		oldMSs     []*clusterv1.MachineSet
-		ms         *clusterv1.MachineSet
-		want       map[string]string
-		wantErr    bool
+		name         string
+		oldMSs       []*clusterv1.MachineSet
+		ms           *clusterv1.MachineSet
+		want         map[string]string
+		wantRevision string
+		wantErr      bool
 	}{
 		{
-			name:       "Calculating annotations for a new MachineSet",
-			deployment: &deployment,
-			oldMSs:     nil,
-			ms:         nil,
+			name:   "Calculating annotations for a new newMS - oldMSs do not exist",
+			oldMSs: nil,
+			ms:     nil,
 			want: map[string]string{
-				"key1":                              "value1",
-				clusterv1.RevisionAnnotation:        "1",
-				clusterv1.DesiredReplicasAnnotation: "3",
-				clusterv1.MaxReplicasAnnotation:     "4",
+				clusterv1.RevisionAnnotation: "1",
 			},
-			wantErr: false,
+			wantRevision: "1",
+			wantErr:      false,
 		},
 		{
-			name:       "Calculating annotations for a new MachineSet - old MSs exist",
-			deployment: &deployment,
-			oldMSs:     []*clusterv1.MachineSet{machineSetWithRevisionAndHistory("1", "")},
-			ms:         nil,
+			name:   "Calculating annotations for a new newMS - old MSs exist",
+			oldMSs: []*clusterv1.MachineSet{machineSetWithRevisionAndHistory("1", "")},
+			ms:     nil,
 			want: map[string]string{
-				"key1":                              "value1",
-				clusterv1.RevisionAnnotation:        "2",
-				clusterv1.DesiredReplicasAnnotation: "3",
-				clusterv1.MaxReplicasAnnotation:     "4",
+				clusterv1.RevisionAnnotation: "2",
 			},
-			wantErr: false,
+			wantRevision: "2",
+			wantErr:      false,
 		},
 		{
-			name:       "Calculating annotations for a existing MachineSet",
-			deployment: &deployment,
-			oldMSs:     nil,
-			ms:         machineSetWithRevisionAndHistory("1", ""),
+			name:   "Calculating annotations for a existing newMS - oldMSs do not exist",
+			oldMSs: nil,
+			ms:     machineSetWithRevisionAndHistory("1", ""),
 			want: map[string]string{
-				"key1":                              "value1",
-				clusterv1.RevisionAnnotation:        "1",
-				clusterv1.DesiredReplicasAnnotation: "3",
-				clusterv1.MaxReplicasAnnotation:     "4",
+				clusterv1.RevisionAnnotation: "1",
 			},
-			wantErr: false,
+			wantRevision: "1",
+			wantErr:      false,
 		},
 		{
-			name:       "Calculating annotations for a existing MachineSet - old MSs exist",
-			deployment: &deployment,
+			name: "Calculating annotations for a existing newMS - old MSs exist - update required",
 			oldMSs: []*clusterv1.MachineSet{
 				machineSetWithRevisionAndHistory("1", ""),
 				machineSetWithRevisionAndHistory("2", ""),
 			},
 			ms: machineSetWithRevisionAndHistory("1", ""),
 			want: map[string]string{
-				"key1":                              "value1",
-				clusterv1.RevisionAnnotation:        "3",
-				clusterv1.RevisionHistoryAnnotation: "1",
-				clusterv1.DesiredReplicasAnnotation: "3",
-				clusterv1.MaxReplicasAnnotation:     "4",
+				clusterv1.RevisionAnnotation: "3",
+				revisionHistoryAnnotation:    "1",
 			},
-			wantErr: false,
+			wantRevision: "3",
+			wantErr:      false,
 		},
 		{
-			name:       "Calculating annotations for a existing MachineSet - old MSs exist - existing revision is greater",
-			deployment: &deployment,
+			name: "Calculating annotations for a existing newMS - old MSs exist - no update required",
 			oldMSs: []*clusterv1.MachineSet{
 				machineSetWithRevisionAndHistory("1", ""),
 				machineSetWithRevisionAndHistory("2", ""),
 			},
 			ms: machineSetWithRevisionAndHistory("4", ""),
 			want: map[string]string{
-				"key1":                              "value1",
-				clusterv1.RevisionAnnotation:        "4",
-				clusterv1.DesiredReplicasAnnotation: "3",
-				clusterv1.MaxReplicasAnnotation:     "4",
+				clusterv1.RevisionAnnotation: "4",
 			},
-			wantErr: false,
+			wantRevision: "4",
+			wantErr:      false,
 		},
 		{
-			name:       "Calculating annotations for a existing MachineSet - old MSs exist - ms already has revision history",
-			deployment: &deployment,
+			name: "Calculating annotations for a existing newMS with revision history - old MSs exist - update required",
 			oldMSs: []*clusterv1.MachineSet{
 				machineSetWithRevisionAndHistory("3", ""),
 				machineSetWithRevisionAndHistory("4", ""),
 			},
 			ms: machineSetWithRevisionAndHistory("2", "1"),
 			want: map[string]string{
-				"key1":                              "value1",
-				clusterv1.RevisionAnnotation:        "5",
-				clusterv1.RevisionHistoryAnnotation: "1,2",
-				clusterv1.DesiredReplicasAnnotation: "3",
-				clusterv1.MaxReplicasAnnotation:     "4",
+				clusterv1.RevisionAnnotation: "5",
+				revisionHistoryAnnotation:    "1,2",
 			},
-			wantErr: false,
+			wantRevision: "5",
+			wantErr:      false,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			g := NewWithT(t)
-			got, err := ComputeMachineSetAnnotations(ctx, tt.deployment, tt.oldMSs, tt.ms)
+			got, gotRevision, err := ComputeRevisionAnnotations(ctx, tt.ms, tt.oldMSs)
 			if tt.wantErr {
 				g.Expect(err).ShouldNot(HaveOccurred())
 			} else {
 				g.Expect(err).ToNot(HaveOccurred())
 				g.Expect(got).Should(Equal(tt.want))
+				g.Expect(gotRevision).Should(Equal(tt.wantRevision))
 			}
 		})
 	}
+}
+
+func TestGetRevisionAnnotations(t *testing.T) {
+	t.Run("gets revision annotations", func(t *testing.T) {
+		g := NewWithT(t)
+		ms := machineSetWithRevisionAndHistory("2", "1")
+
+		annotations := GetRevisionAnnotations(ctx, ms)
+
+		g.Expect(annotations).To(HaveLen(2))
+		g.Expect(annotations).To(HaveKeyWithValue(clusterv1.RevisionAnnotation, "2"))
+		g.Expect(annotations).To(HaveKeyWithValue(revisionHistoryAnnotation, "1"))
+	})
 }
 
 func machineSetWithRevisionAndHistory(revision string, revisionHistory string) *clusterv1.MachineSet {
@@ -1081,79 +1251,7 @@ func machineSetWithRevisionAndHistory(revision string, revisionHistory string) *
 		},
 	}
 	if revisionHistory != "" {
-		ms.Annotations[clusterv1.RevisionHistoryAnnotation] = revisionHistory
+		ms.Annotations[revisionHistoryAnnotation] = revisionHistory
 	}
 	return ms
-}
-
-func TestReplicasAnnotationsNeedUpdate(t *testing.T) {
-	desiredReplicas := fmt.Sprintf("%d", int32(10))
-	maxReplicas := fmt.Sprintf("%d", int32(20))
-
-	tests := []struct {
-		name       string
-		machineSet *clusterv1.MachineSet
-		expected   bool
-	}{
-		{
-			name: "test Annotations nil",
-			machineSet: &clusterv1.MachineSet{
-				ObjectMeta: metav1.ObjectMeta{Name: "hello", Namespace: metav1.NamespaceDefault},
-				Spec: clusterv1.MachineSetSpec{
-					Selector: metav1.LabelSelector{MatchLabels: map[string]string{"foo": "bar"}},
-				},
-			},
-			expected: true,
-		},
-		{
-			name: "test desiredReplicas update",
-			machineSet: &clusterv1.MachineSet{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:        "hello",
-					Namespace:   metav1.NamespaceDefault,
-					Annotations: map[string]string{clusterv1.DesiredReplicasAnnotation: "8", clusterv1.MaxReplicasAnnotation: maxReplicas},
-				},
-				Spec: clusterv1.MachineSetSpec{
-					Selector: metav1.LabelSelector{MatchLabels: map[string]string{"foo": "bar"}},
-				},
-			},
-			expected: true,
-		},
-		{
-			name: "test maxReplicas update",
-			machineSet: &clusterv1.MachineSet{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:        "hello",
-					Namespace:   metav1.NamespaceDefault,
-					Annotations: map[string]string{clusterv1.DesiredReplicasAnnotation: desiredReplicas, clusterv1.MaxReplicasAnnotation: "16"},
-				},
-				Spec: clusterv1.MachineSetSpec{
-					Selector: metav1.LabelSelector{MatchLabels: map[string]string{"foo": "bar"}},
-				},
-			},
-			expected: true,
-		},
-		{
-			name: "test needn't update",
-			machineSet: &clusterv1.MachineSet{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:        "hello",
-					Namespace:   metav1.NamespaceDefault,
-					Annotations: map[string]string{clusterv1.DesiredReplicasAnnotation: desiredReplicas, clusterv1.MaxReplicasAnnotation: maxReplicas},
-				},
-				Spec: clusterv1.MachineSetSpec{
-					Selector: metav1.LabelSelector{MatchLabels: map[string]string{"foo": "bar"}},
-				},
-			},
-			expected: false,
-		},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			g := NewWithT(t)
-
-			g.Expect(ReplicasAnnotationsNeedUpdate(test.machineSet, 10, 20)).To(Equal(test.expected))
-		})
-	}
 }

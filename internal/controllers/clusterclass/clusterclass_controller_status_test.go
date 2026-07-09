@@ -24,8 +24,8 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
-	v1beta2conditions "sigs.k8s.io/cluster-api/util/conditions/v1beta2"
+	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
+	"sigs.k8s.io/cluster-api/util/conditions"
 )
 
 func TestSetRefVersionsUpToDateCondition(t *testing.T) {
@@ -39,9 +39,9 @@ func TestSetRefVersionsUpToDateCondition(t *testing.T) {
 			name:                             "error occurred",
 			reconcileExternalReferencesError: errors.New("failed to set ClusterClass owner reference for KubeadmControlPlaneTemplate test-kcp"),
 			expectCondition: metav1.Condition{
-				Type:    clusterv1.ClusterClassRefVersionsUpToDateV1Beta2Condition,
+				Type:    clusterv1.ClusterClassRefVersionsUpToDateCondition,
 				Status:  metav1.ConditionUnknown,
-				Reason:  clusterv1.ClusterClassRefVersionsUpToDateInternalErrorV1Beta2Reason,
+				Reason:  clusterv1.ClusterClassRefVersionsUpToDateInternalErrorReason,
 				Message: "Please check controller logs for errors",
 			},
 		},
@@ -50,13 +50,13 @@ func TestSetRefVersionsUpToDateCondition(t *testing.T) {
 			outdatedExternalReferences: []outdatedRef{
 				{
 					Outdated: &corev1.ObjectReference{
-						APIVersion: "controlplane.cluster.x-k8s.io/v1beta1",
+						APIVersion: clusterv1.GroupVersionControlPlane.String(),
 						Kind:       "KubeadmControlPlaneTemplate",
 						Name:       "test-kcp",
 						Namespace:  metav1.NamespaceDefault,
 					},
 					UpToDate: &corev1.ObjectReference{
-						APIVersion: "controlplane.cluster.x-k8s.io/v1beta2",
+						APIVersion: "controlplane.cluster.x-k8s.io/v99",
 						Kind:       "KubeadmControlPlaneTemplate",
 						Name:       "test-kcp",
 						Namespace:  metav1.NamespaceDefault,
@@ -64,13 +64,13 @@ func TestSetRefVersionsUpToDateCondition(t *testing.T) {
 				},
 				{
 					Outdated: &corev1.ObjectReference{
-						APIVersion: "infrastructure.cluster.x-k8s.io/v1beta1",
+						APIVersion: clusterv1.GroupVersionInfrastructure.String(),
 						Kind:       "DockerMachineTemplate",
 						Name:       "test-dmt",
 						Namespace:  metav1.NamespaceDefault,
 					},
 					UpToDate: &corev1.ObjectReference{
-						APIVersion: "infrastructure.cluster.x-k8s.io/v1beta2",
+						APIVersion: "infrastructure.cluster.x-k8s.io/v99",
 						Kind:       "DockerMachineTemplate",
 						Name:       "test-dmt",
 						Namespace:  metav1.NamespaceDefault,
@@ -78,22 +78,21 @@ func TestSetRefVersionsUpToDateCondition(t *testing.T) {
 				},
 			},
 			expectCondition: metav1.Condition{
-				Type:   clusterv1.ClusterClassRefVersionsUpToDateV1Beta2Condition,
+				Type:   clusterv1.ClusterClassRefVersionsUpToDateCondition,
 				Status: metav1.ConditionFalse,
-				Reason: clusterv1.ClusterClassRefVersionsNotUpToDateV1Beta2Reason,
-				Message: "* Ref \"controlplane.cluster.x-k8s.io/v1beta1, Kind=KubeadmControlPlaneTemplate default/test-kcp\" should be " +
-					"\"controlplane.cluster.x-k8s.io/v1beta2, Kind=KubeadmControlPlaneTemplate default/test-kcp\"\n" +
-					"* Ref \"infrastructure.cluster.x-k8s.io/v1beta1, Kind=DockerMachineTemplate default/test-dmt\" should be " +
-					"\"infrastructure.cluster.x-k8s.io/v1beta2, Kind=DockerMachineTemplate default/test-dmt\"",
+				Reason: clusterv1.ClusterClassRefVersionsNotUpToDateReason,
+				Message: "The following templateRefs are not using the latest apiVersion:\n" +
+					"* KubeadmControlPlaneTemplate test-kcp: current: v1beta2, latest: v99\n" +
+					"* DockerMachineTemplate test-dmt: current: v1beta2, latest: v99",
 			},
 		},
 		{
 			name:                       "all refs are up-to-date",
 			outdatedExternalReferences: []outdatedRef{},
 			expectCondition: metav1.Condition{
-				Type:   clusterv1.ClusterClassRefVersionsUpToDateV1Beta2Condition,
+				Type:   clusterv1.ClusterClassRefVersionsUpToDateCondition,
 				Status: metav1.ConditionTrue,
-				Reason: clusterv1.ClusterClassRefVersionsUpToDateV1Beta2Reason,
+				Reason: clusterv1.ClusterClassRefVersionsUpToDateReason,
 			},
 		},
 	}
@@ -106,9 +105,9 @@ func TestSetRefVersionsUpToDateCondition(t *testing.T) {
 
 			setRefVersionsUpToDateCondition(ctx, cc, tc.outdatedExternalReferences, tc.reconcileExternalReferencesError)
 
-			condition := v1beta2conditions.Get(cc, clusterv1.ClusterClassRefVersionsUpToDateV1Beta2Condition)
+			condition := conditions.Get(cc, clusterv1.ClusterClassRefVersionsUpToDateCondition)
 			g.Expect(condition).ToNot(BeNil())
-			g.Expect(*condition).To(v1beta2conditions.MatchCondition(tc.expectCondition, v1beta2conditions.IgnoreLastTransitionTime(true)))
+			g.Expect(*condition).To(conditions.MatchCondition(tc.expectCondition, conditions.IgnoreLastTransitionTime(true)))
 		})
 	}
 }
@@ -124,9 +123,9 @@ func TestSetVariablesReconciledCondition(t *testing.T) {
 			variableDiscoveryError: errors.New("VariableDiscovery failed: patch1.variables[httpProxy].schema.openAPIV3Schema.properties[noProxy].type: Unsupported value: \"invalidType\": " +
 				"supported values: \"array\", \"boolean\", \"integer\", \"number\", \"object\", \"string\""),
 			expectCondition: metav1.Condition{
-				Type:   clusterv1.ClusterClassVariablesReadyV1Beta2Condition,
+				Type:   clusterv1.ClusterClassVariablesReadyCondition,
 				Status: metav1.ConditionFalse,
-				Reason: clusterv1.ClusterClassVariablesReadyVariableDiscoveryFailedV1Beta2Reason,
+				Reason: clusterv1.ClusterClassVariablesReadyVariableDiscoveryFailedReason,
 				Message: "VariableDiscovery failed: patch1.variables[httpProxy].schema.openAPIV3Schema.properties[noProxy].type: Unsupported value: \"invalidType\": " +
 					"supported values: \"array\", \"boolean\", \"integer\", \"number\", \"object\", \"string\"",
 			},
@@ -134,9 +133,9 @@ func TestSetVariablesReconciledCondition(t *testing.T) {
 		{
 			name: "variable reconcile succeeded",
 			expectCondition: metav1.Condition{
-				Type:   clusterv1.ClusterClassVariablesReadyV1Beta2Condition,
+				Type:   clusterv1.ClusterClassVariablesReadyCondition,
 				Status: metav1.ConditionTrue,
-				Reason: clusterv1.ClusterClassVariablesReadyV1Beta2Reason,
+				Reason: clusterv1.ClusterClassVariablesReadyReason,
 			},
 		},
 	}
@@ -149,9 +148,9 @@ func TestSetVariablesReconciledCondition(t *testing.T) {
 
 			setVariablesReconciledCondition(ctx, cc, tc.variableDiscoveryError)
 
-			condition := v1beta2conditions.Get(cc, clusterv1.ClusterClassVariablesReadyV1Beta2Condition)
+			condition := conditions.Get(cc, clusterv1.ClusterClassVariablesReadyCondition)
 			g.Expect(condition).ToNot(BeNil())
-			g.Expect(*condition).To(v1beta2conditions.MatchCondition(tc.expectCondition, v1beta2conditions.IgnoreLastTransitionTime(true)))
+			g.Expect(*condition).To(conditions.MatchCondition(tc.expectCondition, conditions.IgnoreLastTransitionTime(true)))
 		})
 	}
 }

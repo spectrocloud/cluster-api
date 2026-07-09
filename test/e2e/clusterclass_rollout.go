@@ -22,7 +22,6 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -30,23 +29,23 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/klog/v2"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
+	controlplanev1 "sigs.k8s.io/cluster-api/api/controlplane/kubeadm/v1beta2"
+	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/cluster-api/controllers/external"
-	controlplanev1 "sigs.k8s.io/cluster-api/controlplane/kubeadm/api/v1beta1"
-	expv1 "sigs.k8s.io/cluster-api/exp/api/v1beta1"
 	"sigs.k8s.io/cluster-api/internal/contract"
 	"sigs.k8s.io/cluster-api/internal/controllers/topology/machineset"
 	"sigs.k8s.io/cluster-api/test/e2e/internal/log"
 	"sigs.k8s.io/cluster-api/test/framework"
 	"sigs.k8s.io/cluster-api/test/framework/clusterctl"
 	"sigs.k8s.io/cluster-api/util"
+	"sigs.k8s.io/cluster-api/util/annotations"
+	conversionutil "sigs.k8s.io/cluster-api/util/conversion"
 	"sigs.k8s.io/cluster-api/util/labels"
 	"sigs.k8s.io/cluster-api/util/patch"
 )
@@ -63,7 +62,7 @@ type ClusterClassRolloutSpecInput struct {
 	// InfrastructureProviders specifies the infrastructure to use for clusterctl
 	// operations (Example: get cluster templates).
 	// Note: In most cases this need not be specified. It only needs to be specified when
-	// multiple infrastructure providers (ex: CAPD + in-memory) are installed on the cluster as clusterctl will not be
+	// multiple infrastructure providers are installed on the cluster as clusterctl will not be
 	// able to identify the default.
 	InfrastructureProvider *string
 
@@ -81,6 +80,18 @@ type ClusterClassRolloutSpecInput struct {
 	// This can be e.g. used to filter out additional infrastructure provider specific labels that would
 	// otherwise lead to a failed test.
 	FilterMetadataBeforeValidation func(object client.Object) clusterv1.ObjectMeta
+
+	// ExtensionConfigName is the name of the ExtensionConfig. Defaults to "clusterclass-rollout".
+	// This value is provided to clusterctl as "EXTENSION_CONFIG_NAME" variable and can be used to template the
+	// name of the ExtensionConfig into the ClusterClass.
+	ExtensionConfigName string
+
+	// ExtensionServiceNamespace is the namespace where the service for the Runtime SDK is located
+	// and is used to configure in the test-namespace scoped ExtensionConfig.
+	ExtensionServiceNamespace string
+
+	// ExtensionServiceName is the name of the service to configure in the test-namespace scoped ExtensionConfig.
+	ExtensionServiceName string
 }
 
 // ClusterClassRolloutSpec implements a test that verifies the ClusterClass rollout behavior.
@@ -94,7 +105,7 @@ type ClusterClassRolloutSpecInput struct {
 //   - Verify that fields were mutated in-place and assert cluster objects
 //   - Modify fields in KCP and MachineDeployments to trigger a full rollout of all Machines
 //   - Verify that all Machines have been replaced and assert cluster objects
-//   - Set RolloutAfter on KCP and MachineDeployments to trigger a full rollout of all Machines
+//   - Set spec.rollout.after on KCP and MachineDeployments to trigger a full rollout of all Machines
 //   - Verify that all Machines have been replaced and assert cluster objects
 //
 // While asserting cluster objects we check that all objects have the right labels, annotations and selectors.
@@ -116,6 +127,11 @@ func ClusterClassRolloutSpec(ctx context.Context, inputGetter func() ClusterClas
 		Expect(os.MkdirAll(input.ArtifactFolder, 0750)).To(Succeed(), "Invalid argument. input.ArtifactFolder can't be created for %s spec", specName)
 		Expect(input.E2EConfig.Variables).To(HaveKey(KubernetesVersion))
 		Expect(input.E2EConfig.Variables).To(HaveValidVersion(input.E2EConfig.MustGetVariable(KubernetesVersion)))
+		if input.ExtensionServiceNamespace != "" && input.ExtensionServiceName != "" {
+			if input.ExtensionConfigName == "" {
+				input.ExtensionConfigName = specName
+			}
+		}
 
 		// Set a default function to ensure that FilterMetadataBeforeValidation has a default behavior for
 		// filtering metadata if it is not specified by infrastructure provider.
@@ -131,11 +147,27 @@ func ClusterClassRolloutSpec(ctx context.Context, inputGetter func() ClusterClas
 	})
 
 	It("Should successfully rollout the managed topology upon changes to the ClusterClass", func() {
+		if input.ExtensionServiceNamespace != "" && input.ExtensionServiceName != "" {
+			By("Deploy Test Extension ExtensionConfig")
+			defaultAllHandlersToBlocking := false
+			extensionConfig := extensionConfig(input.ExtensionConfigName, input.ExtensionServiceNamespace, input.ExtensionServiceName, true, defaultAllHandlersToBlocking, namespace.Name)
+			Expect(client.IgnoreAlreadyExists(input.BootstrapClusterProxy.GetClient().Create(ctx,
+				extensionConfig))).
+				To(Succeed(), "Failed to create the ExtensionConfig")
+		}
+
 		By("Creating a workload cluster")
 		infrastructureProvider := clusterctl.DefaultInfrastructureProvider
 		if input.InfrastructureProvider != nil {
 			infrastructureProvider = *input.InfrastructureProvider
 		}
+
+		variables := map[string]string{}
+		if input.ExtensionConfigName != "" {
+			// This is used to template the name of the ExtensionConfig into the ClusterClass.
+			variables["EXTENSION_CONFIG_NAME"] = input.ExtensionConfigName
+		}
+
 		clusterctl.ApplyClusterTemplateAndWait(ctx, clusterctl.ApplyClusterTemplateAndWaitInput{
 			ClusterProxy: input.BootstrapClusterProxy,
 			ConfigCluster: clusterctl.ConfigClusterInput{
@@ -149,6 +181,7 @@ func ClusterClassRolloutSpec(ctx context.Context, inputGetter func() ClusterClas
 				KubernetesVersion:        input.E2EConfig.MustGetVariable(KubernetesVersion),
 				ControlPlaneMachineCount: ptr.To[int64](1),
 				WorkerMachineCount:       ptr.To[int64](1),
+				ClusterctlVariables:      variables,
 			},
 			ControlPlaneWaiters:          input.ControlPlaneWaiters,
 			WaitForClusterIntervals:      input.E2EConfig.GetIntervals(specName, "wait-cluster"),
@@ -172,9 +205,10 @@ func ClusterClassRolloutSpec(ctx context.Context, inputGetter func() ClusterClas
 				topology.Metadata.Annotations = map[string]string{
 					"Cluster.topology.controlPlane.newAnnotation": "Cluster.topology.controlPlane.newAnnotationValue",
 				}
-				topology.NodeDrainTimeout = &metav1.Duration{Duration: time.Duration(rand.Intn(20)) * time.Second}        //nolint:gosec
-				topology.NodeDeletionTimeout = &metav1.Duration{Duration: time.Duration(rand.Intn(20)) * time.Second}     //nolint:gosec
-				topology.NodeVolumeDetachTimeout = &metav1.Duration{Duration: time.Duration(rand.Intn(20)) * time.Second} //nolint:gosec
+				topology.Rollout.After = metav1.NewTime(time.Now().Add(24 * time.Hour))
+				topology.Deletion.NodeDrainTimeoutSeconds = ptr.To(rand.Int31n(20))        //nolint:gosec
+				topology.Deletion.NodeDeletionTimeoutSeconds = ptr.To(rand.Int31n(20))     //nolint:gosec
+				topology.Deletion.NodeVolumeDetachTimeoutSeconds = ptr.To(rand.Int31n(20)) //nolint:gosec
 			},
 			WaitForControlPlane: input.E2EConfig.GetIntervals(specName, "wait-control-plane"),
 		})
@@ -190,20 +224,21 @@ func ClusterClassRolloutSpec(ctx context.Context, inputGetter func() ClusterClas
 				topology.Metadata.Annotations = map[string]string{
 					"Cluster.topology.machineDeployment.newAnnotation": "Cluster.topology.machineDeployment.newAnnotationValue",
 				}
-				topology.NodeDrainTimeout = &metav1.Duration{Duration: time.Duration(rand.Intn(20)) * time.Second}        //nolint:gosec
-				topology.NodeDeletionTimeout = &metav1.Duration{Duration: time.Duration(rand.Intn(20)) * time.Second}     //nolint:gosec
-				topology.NodeVolumeDetachTimeout = &metav1.Duration{Duration: time.Duration(rand.Intn(20)) * time.Second} //nolint:gosec
-				topology.MinReadySeconds = ptr.To[int32](rand.Int31n(20))                                                 //nolint:gosec
-				topology.Strategy = &clusterv1.MachineDeploymentStrategy{
+				topology.Deletion.NodeDrainTimeoutSeconds = ptr.To(rand.Int31n(20))        //nolint:gosec
+				topology.Deletion.NodeDeletionTimeoutSeconds = ptr.To(rand.Int31n(20))     //nolint:gosec
+				topology.Deletion.NodeVolumeDetachTimeoutSeconds = ptr.To(rand.Int31n(20)) //nolint:gosec
+				topology.MinReadySeconds = ptr.To[int32](rand.Int31n(20))                  //nolint:gosec
+				topology.Rollout.After = metav1.NewTime(time.Now().Add(24 * time.Hour))
+				topology.Rollout.Strategy = clusterv1.MachineDeploymentTopologyRolloutStrategy{
 					Type: clusterv1.RollingUpdateMachineDeploymentStrategyType,
-					RollingUpdate: &clusterv1.MachineRollingUpdateDeployment{
+					RollingUpdate: clusterv1.MachineDeploymentTopologyRolloutStrategyRollingUpdate{
 						MaxUnavailable: &intstr.IntOrString{Type: intstr.Int, IntVal: 0},
 						MaxSurge:       &intstr.IntOrString{Type: intstr.Int, IntVal: 5 + rand.Int31n(20)}, //nolint:gosec
-						DeletePolicy:   ptr.To(string(clusterv1.NewestMachineSetDeletePolicy)),
 					},
-					Remediation: &clusterv1.RemediationStrategy{
-						MaxInFlight: &intstr.IntOrString{Type: intstr.Int, IntVal: 2 + rand.Int31n(20)}, //nolint:gosec
-					},
+				}
+				topology.HealthCheck.Remediation.MaxInFlight = &intstr.IntOrString{Type: intstr.Int, IntVal: 2 + rand.Int31n(20)} //nolint:gosec
+				topology.Deletion = clusterv1.MachineDeploymentTopologyMachineDeletionSpec{
+					Order: clusterv1.NewestMachineSetDeletionOrder,
 				}
 			},
 			WaitForMachineDeployments: input.E2EConfig.GetIntervals(specName, "wait-worker-nodes"),
@@ -220,13 +255,200 @@ func ClusterClassRolloutSpec(ctx context.Context, inputGetter func() ClusterClas
 				topology.Metadata.Annotations = map[string]string{
 					"Cluster.topology.machinePool.newAnnotation": "Cluster.topology.machinePool.newAnnotationValue",
 				}
-				topology.NodeDrainTimeout = &metav1.Duration{Duration: time.Duration(rand.Intn(20)) * time.Second}        //nolint:gosec
-				topology.NodeDeletionTimeout = &metav1.Duration{Duration: time.Duration(rand.Intn(20)) * time.Second}     //nolint:gosec
-				topology.NodeVolumeDetachTimeout = &metav1.Duration{Duration: time.Duration(rand.Intn(20)) * time.Second} //nolint:gosec
-				topology.MinReadySeconds = ptr.To[int32](rand.Int31n(20))                                                 //nolint:gosec
+				topology.Deletion.NodeDrainTimeoutSeconds = ptr.To(rand.Int31n(20))        //nolint:gosec
+				topology.Deletion.NodeDeletionTimeoutSeconds = ptr.To(rand.Int31n(20))     //nolint:gosec
+				topology.Deletion.NodeVolumeDetachTimeoutSeconds = ptr.To(rand.Int31n(20)) //nolint:gosec
+				topology.MinReadySeconds = ptr.To[int32](rand.Int31n(20))                  //nolint:gosec
 			},
 			WaitForMachinePools: input.E2EConfig.GetIntervals(specName, "wait-machine-pool-nodes"),
 		})
+
+		additionalControlPlaneNodeTaint := corev1.Taint{
+			Key:    "node-role.kubernetes.io/control-plane",
+			Value:  "",
+			Effect: "NoSchedule",
+		}
+
+		preExistingAlwaysTaint := clusterv1.MachineTaint{
+			Key:         "pre-existing-always-taint",
+			Value:       "always-value",
+			Effect:      corev1.TaintEffectPreferNoSchedule,
+			Propagation: clusterv1.MachineTaintPropagationAlways,
+		}
+
+		preExistingOnInitializationTaint := clusterv1.MachineTaint{
+			Key:         "pre-existing-on-initialization-taint",
+			Value:       "on-initialization-value",
+			Effect:      corev1.TaintEffectPreferNoSchedule,
+			Propagation: clusterv1.MachineTaintPropagationOnInitialization,
+		}
+		addingAlwaysTaint := clusterv1.MachineTaint{
+			Key:         "added-always-taint",
+			Value:       "added-always-value",
+			Effect:      corev1.TaintEffectPreferNoSchedule,
+			Propagation: clusterv1.MachineTaintPropagationAlways,
+		}
+
+		addingOnInitializationTaint := clusterv1.MachineTaint{
+			Key:         "added-on-initialization-taint",
+			Value:       "added-on-initialization-value",
+			Effect:      corev1.TaintEffectPreferNoSchedule,
+			Propagation: clusterv1.MachineTaintPropagationOnInitialization,
+		}
+
+		wantMachineTaints := []clusterv1.MachineTaint{
+			preExistingAlwaysTaint,
+			preExistingOnInitializationTaint,
+		}
+		wantNodeTaints := toCoreV1Taints(
+			preExistingAlwaysTaint,
+			preExistingOnInitializationTaint,
+		)
+
+		wlClient := input.BootstrapClusterProxy.GetWorkloadCluster(ctx, clusterResources.Cluster.Namespace, clusterResources.Cluster.Name).GetClient()
+
+		Byf("Verify ControlPlane Machines and Nodes have the correct taints")
+		verifyControlPlaneMachineAndNodeTaints(ctx, verifyControlPlaneMachineAndNodeTaintsInput{
+			BootstrapClusterClient: input.BootstrapClusterProxy.GetClient(),
+			WorkloadClusterClient:  wlClient,
+			ClusterName:            clusterResources.Cluster.Name,
+			Namespace:              clusterResources.Cluster.Namespace,
+			ControlPlaneReplicas:   clusterResources.ControlPlane.Spec.Replicas,
+			MachineTaints:          wantMachineTaints,
+			NodeTaints:             append(wantNodeTaints, additionalControlPlaneNodeTaint),
+		})
+
+		Byf("Verify MachineDeployment Machines and Nodes have the correct taints")
+		verifyMachineDeploymentMachineAndNodeTaints(ctx, verifyMachineDeploymentMachineAndNodeTaintsInput{
+			BootstrapClusterClient: input.BootstrapClusterProxy.GetClient(),
+			WorkloadClusterClient:  wlClient,
+			ClusterName:            clusterResources.Cluster.Name,
+			MachineDeployments:     clusterResources.MachineDeployments,
+			MachineTaints:          wantMachineTaints,
+			NodeTaints:             wantNodeTaints,
+		})
+
+		Byf("Verify in-place propagation by adding new taints to the ControlPlane and MachineDeployment")
+		wantMachineTaints = []clusterv1.MachineTaint{
+			preExistingAlwaysTaint,
+			preExistingOnInitializationTaint,
+			addingAlwaysTaint,
+			addingOnInitializationTaint,
+		}
+		wantNodeTaints = toCoreV1Taints(
+			preExistingAlwaysTaint,
+			preExistingOnInitializationTaint,
+			addingAlwaysTaint,
+		)
+
+		patchHelper, err := patch.NewHelper(clusterResources.Cluster, input.BootstrapClusterProxy.GetClient())
+		Expect(err).ToNot(HaveOccurred())
+		clusterResources.Cluster.Spec.Topology.ControlPlane.Taints = wantMachineTaints
+		for i, md := range clusterResources.Cluster.Spec.Topology.Workers.MachineDeployments {
+			md.Taints = wantMachineTaints
+			clusterResources.Cluster.Spec.Topology.Workers.MachineDeployments[i] = md
+		}
+		Expect(patchHelper.Patch(ctx, clusterResources.Cluster)).To(Succeed())
+
+		verifyControlPlaneMachineAndNodeTaints(ctx, verifyControlPlaneMachineAndNodeTaintsInput{
+			BootstrapClusterClient: input.BootstrapClusterProxy.GetClient(),
+			WorkloadClusterClient:  wlClient,
+			ClusterName:            clusterResources.Cluster.Name,
+			Namespace:              clusterResources.Cluster.Namespace,
+			ControlPlaneReplicas:   clusterResources.ControlPlane.Spec.Replicas,
+			MachineTaints:          wantMachineTaints,
+			NodeTaints:             append(wantNodeTaints, additionalControlPlaneNodeTaint),
+		})
+
+		verifyMachineDeploymentMachineAndNodeTaints(ctx, verifyMachineDeploymentMachineAndNodeTaintsInput{
+			BootstrapClusterClient: input.BootstrapClusterProxy.GetClient(),
+			WorkloadClusterClient:  wlClient,
+			ClusterName:            clusterResources.Cluster.Name,
+			MachineDeployments:     clusterResources.MachineDeployments,
+			MachineTaints:          wantMachineTaints,
+			NodeTaints:             wantNodeTaints,
+		})
+
+		Byf("Verify in-place propagation when removing preExisting Always and OnInitialization taint from the nodes")
+		nodes := corev1.NodeList{}
+		Expect(wlClient.List(ctx, &nodes)).To(Succeed())
+		// Remove the initial taints from the nodes.
+		for _, node := range nodes.Items {
+			patchHelper, err := patch.NewHelper(&node, wlClient)
+			Expect(err).ToNot(HaveOccurred())
+			newTaints := []corev1.Taint{}
+			for _, taint := range node.Spec.Taints {
+				if taint.Key == preExistingAlwaysTaint.Key {
+					continue
+				}
+				if taint.Key == preExistingOnInitializationTaint.Key {
+					continue
+				}
+				newTaints = append(newTaints, taint)
+			}
+			node.Spec.Taints = newTaints
+			Expect(patchHelper.Patch(ctx, &node)).To(Succeed())
+		}
+
+		wantNodeTaints = toCoreV1Taints(
+			preExistingAlwaysTaint,
+			addingAlwaysTaint,
+		)
+
+		verifyControlPlaneMachineAndNodeTaints(ctx, verifyControlPlaneMachineAndNodeTaintsInput{
+			BootstrapClusterClient: input.BootstrapClusterProxy.GetClient(),
+			WorkloadClusterClient:  wlClient,
+			ClusterName:            clusterResources.Cluster.Name,
+			Namespace:              clusterResources.Cluster.Namespace,
+			ControlPlaneReplicas:   clusterResources.ControlPlane.Spec.Replicas,
+			MachineTaints:          wantMachineTaints,
+			NodeTaints:             append(wantNodeTaints, additionalControlPlaneNodeTaint),
+		})
+
+		verifyMachineDeploymentMachineAndNodeTaints(ctx, verifyMachineDeploymentMachineAndNodeTaintsInput{
+			BootstrapClusterClient: input.BootstrapClusterProxy.GetClient(),
+			WorkloadClusterClient:  wlClient,
+			ClusterName:            clusterResources.Cluster.Name,
+			MachineDeployments:     clusterResources.MachineDeployments,
+			MachineTaints:          wantMachineTaints,
+			NodeTaints:             wantNodeTaints,
+		})
+
+		Byf("Verify in-place propagation by removing taints from ControlPlane and the MachineDeployment")
+		wantMachineTaints = []clusterv1.MachineTaint{
+			preExistingOnInitializationTaint,
+			addingOnInitializationTaint,
+		}
+		wantNodeTaints = toCoreV1Taints()
+
+		patchHelper, err = patch.NewHelper(clusterResources.Cluster, input.BootstrapClusterProxy.GetClient())
+		Expect(err).ToNot(HaveOccurred())
+		clusterResources.Cluster.Spec.Topology.ControlPlane.Taints = wantMachineTaints
+		for i, md := range clusterResources.Cluster.Spec.Topology.Workers.MachineDeployments {
+			md.Taints = wantMachineTaints
+			clusterResources.Cluster.Spec.Topology.Workers.MachineDeployments[i] = md
+		}
+		Expect(patchHelper.Patch(ctx, clusterResources.Cluster)).To(Succeed())
+
+		verifyControlPlaneMachineAndNodeTaints(ctx, verifyControlPlaneMachineAndNodeTaintsInput{
+			BootstrapClusterClient: input.BootstrapClusterProxy.GetClient(),
+			WorkloadClusterClient:  wlClient,
+			ClusterName:            clusterResources.Cluster.Name,
+			Namespace:              clusterResources.Cluster.Namespace,
+			ControlPlaneReplicas:   clusterResources.ControlPlane.Spec.Replicas,
+			MachineTaints:          wantMachineTaints,
+			NodeTaints:             append(wantNodeTaints, additionalControlPlaneNodeTaint),
+		})
+
+		verifyMachineDeploymentMachineAndNodeTaints(ctx, verifyMachineDeploymentMachineAndNodeTaintsInput{
+			BootstrapClusterClient: input.BootstrapClusterProxy.GetClient(),
+			WorkloadClusterClient:  wlClient,
+			ClusterName:            clusterResources.Cluster.Name,
+			MachineDeployments:     clusterResources.MachineDeployments,
+			MachineTaints:          wantMachineTaints,
+			NodeTaints:             wantNodeTaints,
+		})
+
 		By("Verifying there are no unexpected rollouts through in-place rollout")
 		Consistently(func(g Gomega) {
 			machinesAfterUpgrade := getMachinesByCluster(ctx, input.BootstrapClusterProxy.GetClient(), clusterResources.Cluster)
@@ -275,40 +497,78 @@ func ClusterClassRolloutSpec(ctx context.Context, inputGetter func() ClusterClas
 		}, input.E2EConfig.GetIntervals(specName, "wait-control-plane")...).Should(Succeed())
 		assertClusterObjects(ctx, input.BootstrapClusterProxy, clusterResources.Cluster, clusterResources.ClusterClass, input.FilterMetadataBeforeValidation)
 
-		By("Rolling out control plane and MachineDeployment (rolloutAfter)")
+		By("Rolling out control plane and MachineDeployment (rollout.after)")
 		machinesBeforeUpgrade = getMachinesByCluster(ctx, input.BootstrapClusterProxy.GetClient(), clusterResources.Cluster)
-		By("Setting rolloutAfter on control plane")
-		Eventually(func(g Gomega) {
-			kcp := clusterResources.ControlPlane
-			g.Expect(input.BootstrapClusterProxy.GetClient().Get(ctx, client.ObjectKeyFromObject(kcp), kcp)).To(Succeed())
-			patchHelper, err := patch.NewHelper(kcp, input.BootstrapClusterProxy.GetClient())
-			g.Expect(err).ToNot(HaveOccurred())
-			kcp.Spec.RolloutAfter = &metav1.Time{Time: time.Now()}
-			g.Expect(patchHelper.Patch(ctx, kcp)).To(Succeed())
-		}, 10*time.Second, 1*time.Second).Should(Succeed())
-		By("Setting rolloutAfter on MachineDeployments")
-		for _, md := range clusterResources.MachineDeployments {
+		if !clusterResources.Cluster.Spec.Topology.IsDefined() {
+			By("Setting rollout.after on control plane")
 			Eventually(func(g Gomega) {
-				g.Expect(input.BootstrapClusterProxy.GetClient().Get(ctx, client.ObjectKeyFromObject(md), md)).To(Succeed())
-				patchHelper, err := patch.NewHelper(md, input.BootstrapClusterProxy.GetClient())
+				kcp := clusterResources.ControlPlane
+				g.Expect(input.BootstrapClusterProxy.GetClient().Get(ctx, client.ObjectKeyFromObject(kcp), kcp)).To(Succeed())
+				patchHelper, err := patch.NewHelper(kcp, input.BootstrapClusterProxy.GetClient())
 				g.Expect(err).ToNot(HaveOccurred())
-				md.Spec.RolloutAfter = &metav1.Time{Time: time.Now()}
-				g.Expect(patchHelper.Patch(ctx, md)).To(Succeed())
+				kcp.Spec.Rollout.After = metav1.Time{Time: time.Now()}
+				g.Expect(patchHelper.Patch(ctx, kcp)).To(Succeed())
 			}, 10*time.Second, 1*time.Second).Should(Succeed())
+			By("Setting rollout.after on MachineDeployments")
+			for _, md := range clusterResources.MachineDeployments {
+				Eventually(func(g Gomega) {
+					g.Expect(input.BootstrapClusterProxy.GetClient().Get(ctx, client.ObjectKeyFromObject(md), md)).To(Succeed())
+					patchHelper, err := patch.NewHelper(md, input.BootstrapClusterProxy.GetClient())
+					g.Expect(err).ToNot(HaveOccurred())
+					md.Spec.Rollout.After = metav1.Time{Time: time.Now()}
+					g.Expect(patchHelper.Patch(ctx, md)).To(Succeed())
+				}, 10*time.Second, 1*time.Second).Should(Succeed())
+			}
+		} else {
+			By("Setting rollout.after on control plane")
+			Eventually(func(g Gomega) {
+				cluster := clusterResources.Cluster
+				g.Expect(input.BootstrapClusterProxy.GetClient().Get(ctx, client.ObjectKeyFromObject(cluster), cluster)).To(Succeed())
+				patchHelper, err := patch.NewHelper(cluster, input.BootstrapClusterProxy.GetClient())
+				g.Expect(err).ToNot(HaveOccurred())
+				cluster.Spec.Topology.ControlPlane.Rollout.After = metav1.Time{Time: time.Now()}
+				g.Expect(patchHelper.Patch(ctx, cluster)).To(Succeed())
+			}, 10*time.Second, 1*time.Second).Should(Succeed())
+			By("Setting rollout.after on MachineDeployments")
+			for i, md := range clusterResources.Cluster.Spec.Topology.Workers.MachineDeployments {
+				Eventually(func(g Gomega) {
+					cluster := clusterResources.Cluster
+					g.Expect(input.BootstrapClusterProxy.GetClient().Get(ctx, client.ObjectKeyFromObject(cluster), cluster)).To(Succeed())
+					patchHelper, err := patch.NewHelper(cluster, input.BootstrapClusterProxy.GetClient())
+					g.Expect(err).ToNot(HaveOccurred())
+					md.Rollout.After = metav1.Time{Time: time.Now()}
+					clusterResources.Cluster.Spec.Topology.Workers.MachineDeployments[i] = md
+					g.Expect(patchHelper.Patch(ctx, cluster)).To(Succeed())
+				}, 10*time.Second, 1*time.Second).Should(Succeed())
+			}
 		}
-		By("Verifying all Machines are replaced through rolloutAfter")
+		By("Verifying all Machines are replaced through rollout.after")
 		Eventually(func(g Gomega) {
 			machinesAfterUpgrade := getMachinesByCluster(ctx, input.BootstrapClusterProxy.GetClient(), clusterResources.Cluster)
-			g.Expect(machinesAfterUpgrade.HasAny(machinesBeforeUpgrade.UnsortedList()...)).To(BeFalse(), "All Machines must be replaced through rollout with rolloutAfter")
+			g.Expect(machinesAfterUpgrade.HasAny(machinesBeforeUpgrade.UnsortedList()...)).To(BeFalse(), "All Machines must be replaced through rollout with rollout.after")
 		}, input.E2EConfig.GetIntervals(specName, "wait-machine-upgrade")...).Should(Succeed())
 		assertClusterObjects(ctx, input.BootstrapClusterProxy, clusterResources.Cluster, clusterResources.ClusterClass, input.FilterMetadataBeforeValidation)
+
+		Byf("Verify Cluster Available condition is true")
+		framework.VerifyClusterAvailable(ctx, framework.VerifyClusterAvailableInput{
+			Getter:    input.BootstrapClusterProxy.GetClient(),
+			Name:      clusterResources.Cluster.Name,
+			Namespace: clusterResources.Cluster.Namespace,
+		})
+
+		Byf("Verify Machines Ready condition is true")
+		framework.VerifyMachinesReady(ctx, framework.VerifyMachinesReadyInput{
+			Lister:    input.BootstrapClusterProxy.GetClient(),
+			Name:      clusterResources.Cluster.Name,
+			Namespace: clusterResources.Cluster.Namespace,
+		})
 
 		By("PASSED!")
 	})
 
 	AfterEach(func() {
 		// Dumps all the resources in the spec namespace, then cleanups the cluster object and the spec namespace itself.
-		framework.DumpSpecResourcesAndCleanup(ctx, specName, input.BootstrapClusterProxy, input.ArtifactFolder, namespace, cancelWatches, clusterResources.Cluster, input.E2EConfig.GetIntervals, input.SkipCleanup)
+		framework.DumpSpecResourcesAndCleanup(ctx, specName, input.BootstrapClusterProxy, input.ClusterctlConfigPath, input.ArtifactFolder, namespace, cancelWatches, clusterResources.Cluster, input.E2EConfig.GetIntervals, input.SkipCleanup)
 	})
 }
 
@@ -322,29 +582,39 @@ func assertClusterObjects(ctx context.Context, clusterProxy framework.ClusterPro
 		clusterClassObjects := getClusterClassObjects(ctx, g, clusterProxy, clusterClass)
 
 		// InfrastructureCluster
-		assertInfrastructureCluster(g, clusterClassObjects, clusterObjects, cluster, clusterClass)
+		By("Checking InfrastructureCluster object has the right labels, annotations and selectors")
+		assertInfrastructureCluster(g, clusterClassObjects, clusterObjects, cluster, clusterClass, filterMetadataBeforeValidation)
 
 		// ControlPlane
+		controlPlaneContractVersion, err := contract.GetContractVersionForVersion(ctx, clusterProxy.GetClient(), clusterObjects.ControlPlane.GroupVersionKind().GroupKind(), clusterObjects.ControlPlane.GroupVersionKind().Version)
+		g.Expect(err).ToNot(HaveOccurred())
+		By("Checking ControlPlane object has the right labels, annotations and selectors")
 		assertControlPlane(g, clusterClassObjects, clusterObjects, cluster, clusterClass)
-		assertControlPlaneMachines(g, clusterObjects, cluster, filterMetadataBeforeValidation)
+		By("Checking ControlPlane machines objects have the right labels, annotations and selectors")
+		assertControlPlaneMachines(g, clusterObjects, cluster, controlPlaneContractVersion, filterMetadataBeforeValidation)
 
 		// MachineDeployments
+		By("Checking MachineDeployments objects have the right labels, annotations and selectors")
 		assertMachineDeployments(g, clusterClassObjects, clusterObjects, cluster, clusterClass)
+		By("Checking MachineSets objects have the right labels, annotations and selectors")
 		assertMachineSets(g, clusterObjects, cluster)
+		By("Checking MachineSets machines objects have the right labels, annotations and selectors")
 		assertMachineSetsMachines(g, clusterObjects, cluster, filterMetadataBeforeValidation)
 
 		// MachinePools
+		By("Checking MachinePools objects have the right labels, annotations and selectors")
 		assertMachinePools(g, clusterClassObjects, clusterObjects, cluster, clusterClass)
 
 		By("All cluster objects have the right labels, annotations and selectors")
 	}, 30*time.Second, 1*time.Second).Should(Succeed())
 }
 
-func assertInfrastructureCluster(g Gomega, clusterClassObjects clusterClassObjects, clusterObjects clusterObjects, cluster *clusterv1.Cluster, clusterClass *clusterv1.ClusterClass) {
+func assertInfrastructureCluster(g Gomega, clusterClassObjects clusterClassObjects, clusterObjects ClusterObjects, cluster *clusterv1.Cluster, clusterClass *clusterv1.ClusterClass, filterMetadataBeforeValidation func(object client.Object) clusterv1.ObjectMeta) {
 	ccInfrastructureClusterTemplateTemplateMetadata := mustMetadata(contract.InfrastructureClusterTemplate().Template().Metadata().Get(clusterClassObjects.InfrastructureClusterTemplate))
+	infraClusterMetadata := filterMetadataBeforeValidation(clusterObjects.InfrastructureCluster)
 
 	// InfrastructureCluster.metadata
-	expectMapsToBeEquivalent(g, clusterObjects.InfrastructureCluster.GetLabels(),
+	expectMapsToBeEquivalent(g, infraClusterMetadata.Labels,
 		union(
 			map[string]string{
 				clusterv1.ClusterNameLabel:          cluster.Name,
@@ -353,18 +623,18 @@ func assertInfrastructureCluster(g Gomega, clusterClassObjects clusterClassObjec
 			ccInfrastructureClusterTemplateTemplateMetadata.Labels,
 		),
 	)
-	expectMapsToBeEquivalent(g, clusterObjects.InfrastructureCluster.GetAnnotations(),
+	expectMapsToBeEquivalent(g, infraClusterMetadata.Annotations,
 		union(
 			map[string]string{
-				clusterv1.TemplateClonedFromGroupKindAnnotation: groupKind(clusterClass.Spec.Infrastructure.Ref),
-				clusterv1.TemplateClonedFromNameAnnotation:      clusterClass.Spec.Infrastructure.Ref.Name,
+				clusterv1.TemplateClonedFromGroupKindAnnotation: clusterClass.Spec.Infrastructure.TemplateRef.GroupVersionKind().GroupKind().String(),
+				clusterv1.TemplateClonedFromNameAnnotation:      clusterClass.Spec.Infrastructure.TemplateRef.Name,
 			},
 			ccInfrastructureClusterTemplateTemplateMetadata.Annotations,
 		),
 	)
 }
 
-func assertControlPlane(g Gomega, clusterClassObjects clusterClassObjects, clusterObjects clusterObjects, cluster *clusterv1.Cluster, clusterClass *clusterv1.ClusterClass) {
+func assertControlPlane(g Gomega, clusterClassObjects clusterClassObjects, clusterObjects ClusterObjects, cluster *clusterv1.Cluster, clusterClass *clusterv1.ClusterClass) {
 	ccControlPlaneTemplateTemplateMetadata := mustMetadata(contract.ControlPlaneTemplate().Template().Metadata().Get(clusterClassObjects.ControlPlaneTemplate))
 	ccControlPlaneTemplateMachineTemplateMetadata := mustMetadata(contract.ControlPlaneTemplate().Template().MachineTemplate().Metadata().Get(clusterClassObjects.ControlPlaneTemplate))
 	ccControlPlaneInfrastructureMachineTemplateTemplateMetadata := mustMetadata(contract.InfrastructureMachineTemplate().Template().Metadata().Get(clusterClassObjects.ControlPlaneInfrastructureMachineTemplate))
@@ -386,13 +656,16 @@ func assertControlPlane(g Gomega, clusterClassObjects clusterClassObjects, clust
 	expectMapsToBeEquivalent(g, clusterObjects.ControlPlane.GetAnnotations(),
 		union(
 			map[string]string{
-				clusterv1.TemplateClonedFromGroupKindAnnotation: groupKind(clusterClass.Spec.ControlPlane.Ref),
-				clusterv1.TemplateClonedFromNameAnnotation:      clusterClass.Spec.ControlPlane.Ref.Name,
+				clusterv1.TemplateClonedFromGroupKindAnnotation: clusterClass.Spec.ControlPlane.TemplateRef.GroupVersionKind().GroupKind().String(),
+				clusterv1.TemplateClonedFromNameAnnotation:      clusterClass.Spec.ControlPlane.TemplateRef.Name,
 			},
 			cluster.Spec.Topology.ControlPlane.Metadata.Annotations,
 			clusterClass.Spec.ControlPlane.Metadata.Annotations,
 			ccControlPlaneTemplateTemplateMetadata.Annotations,
 		),
+		// Note: ignoring utilconversion.DataAnnotation so we accept both control plane objects using the latest API version and
+		// control plane objects using older releases (with conversion data).
+		conversionutil.DataAnnotation,
 	)
 
 	// ControlPlane.spec.machineTemplate.metadata
@@ -428,8 +701,8 @@ func assertControlPlane(g Gomega, clusterClassObjects clusterClassObjects, clust
 	expectMapsToBeEquivalent(g, clusterObjects.ControlPlaneInfrastructureMachineTemplate.GetAnnotations(),
 		union(
 			map[string]string{
-				clusterv1.TemplateClonedFromGroupKindAnnotation: groupKind(clusterClass.Spec.ControlPlane.MachineInfrastructure.Ref),
-				clusterv1.TemplateClonedFromNameAnnotation:      clusterClass.Spec.ControlPlane.MachineInfrastructure.Ref.Name,
+				clusterv1.TemplateClonedFromGroupKindAnnotation: clusterClass.Spec.ControlPlane.MachineInfrastructure.TemplateRef.GroupVersionKind().GroupKind().String(),
+				clusterv1.TemplateClonedFromNameAnnotation:      clusterClass.Spec.ControlPlane.MachineInfrastructure.TemplateRef.Name,
 			},
 			clusterClassObjects.ControlPlaneInfrastructureMachineTemplate.GetAnnotations(),
 		),
@@ -444,7 +717,7 @@ func assertControlPlane(g Gomega, clusterClassObjects clusterClassObjects, clust
 	)
 }
 
-func assertControlPlaneMachines(g Gomega, clusterObjects clusterObjects, cluster *clusterv1.Cluster, filterMetadataBeforeValidation func(object client.Object) clusterv1.ObjectMeta) {
+func assertControlPlaneMachines(g Gomega, clusterObjects ClusterObjects, cluster *clusterv1.Cluster, controlPlaneContractVersion string, filterMetadataBeforeValidation func(object client.Object) clusterv1.ObjectMeta) {
 	controlPlaneMachineTemplateMetadata := mustMetadata(contract.ControlPlane().MachineTemplate().Metadata().Get(clusterObjects.ControlPlane))
 	controlPlaneInfrastructureMachineTemplateTemplateMetadata := mustMetadata(contract.InfrastructureMachineTemplate().Template().Metadata().Get(clusterObjects.ControlPlaneInfrastructureMachineTemplate))
 
@@ -465,15 +738,25 @@ func assertControlPlaneMachines(g Gomega, clusterObjects clusterObjects, cluster
 		expectMapsToBeEquivalent(g,
 			union(
 				machineMetadata.Annotations,
-			).without(g, controlplanev1.KubeadmClusterConfigurationAnnotation, controlplanev1.PreTerminateHookCleanupAnnotation),
+			).without(g, controlplanev1.PreTerminateHookCleanupAnnotation),
 			controlPlaneMachineTemplateMetadata.Annotations,
 		)
 
 		// ControlPlane Machine InfrastructureMachine.metadata
 		infrastructureMachine := clusterObjects.InfrastructureMachineByMachine[machine.Name]
 		infrastructureMachineMetadata := filterMetadataBeforeValidation(infrastructureMachine)
-		controlPlaneMachineTemplateInfrastructureRef, err := contract.ControlPlane().MachineTemplate().InfrastructureRef().Get(clusterObjects.ControlPlane)
-		g.Expect(err).ToNot(HaveOccurred())
+		var controlPlaneMachineTemplateInfrastructureRefGroupKind, controlPlaneMachineTemplateInfrastructureRefName string
+		if controlPlaneContractVersion == "v1beta1" {
+			controlPlaneMachineTemplateInfrastructureRef, err := contract.ControlPlane().MachineTemplate().InfrastructureV1Beta1Ref().Get(clusterObjects.ControlPlane)
+			g.Expect(err).ToNot(HaveOccurred())
+			controlPlaneMachineTemplateInfrastructureRefGroupKind = controlPlaneMachineTemplateInfrastructureRef.GroupVersionKind().GroupKind().String()
+			controlPlaneMachineTemplateInfrastructureRefName = controlPlaneMachineTemplateInfrastructureRef.Name
+		} else {
+			controlPlaneMachineTemplateInfrastructureRef, err := contract.ControlPlane().MachineTemplate().InfrastructureRef().Get(clusterObjects.ControlPlane)
+			g.Expect(err).ToNot(HaveOccurred())
+			controlPlaneMachineTemplateInfrastructureRefGroupKind = controlPlaneMachineTemplateInfrastructureRef.GroupKind().String()
+			controlPlaneMachineTemplateInfrastructureRefName = controlPlaneMachineTemplateInfrastructureRef.Name
+		}
 		expectMapsToBeEquivalent(g, infrastructureMachineMetadata.Labels,
 			union(
 				map[string]string{
@@ -489,8 +772,8 @@ func assertControlPlaneMachines(g Gomega, clusterObjects clusterObjects, cluster
 		expectMapsToBeEquivalent(g, infrastructureMachineMetadata.Annotations,
 			union(
 				map[string]string{
-					clusterv1.TemplateClonedFromGroupKindAnnotation: groupKind(controlPlaneMachineTemplateInfrastructureRef),
-					clusterv1.TemplateClonedFromNameAnnotation:      controlPlaneMachineTemplateInfrastructureRef.Name,
+					clusterv1.TemplateClonedFromGroupKindAnnotation: controlPlaneMachineTemplateInfrastructureRefGroupKind,
+					clusterv1.TemplateClonedFromNameAnnotation:      controlPlaneMachineTemplateInfrastructureRefName,
 				},
 				controlPlaneMachineTemplateMetadata.Annotations,
 				controlPlaneInfrastructureMachineTemplateTemplateMetadata.Annotations,
@@ -516,19 +799,26 @@ func assertControlPlaneMachines(g Gomega, clusterObjects clusterObjects, cluster
 				bootstrapConfigMetadata.Annotations,
 			).without(g, clusterv1.MachineCertificatesExpiryDateAnnotation),
 			controlPlaneMachineTemplateMetadata.Annotations,
+			// Note: ignoring utilconversion.DataAnnotation so we accept both bootstrap config objects using the latest API version and
+			// control bootstrap config objects using older releases (with conversion data).
+			conversionutil.DataAnnotation,
 		)
 
 		// ControlPlane Machine Node.metadata
 		node := clusterObjects.NodesByMachine[machine.Name]
 		nodeMetadata := filterMetadataBeforeValidation(node)
 
-		for k, v := range getManagedLabels(machineMetadata.Labels) {
+		for k, v := range labels.GetManagedLabels(machineMetadata.Labels) {
 			g.Expect(nodeMetadata.Labels).To(HaveKeyWithValue(k, v))
+		}
+
+		for k, v := range annotations.GetManagedAnnotations(machine) {
+			g.Expect(nodeMetadata.Annotations).To(HaveKeyWithValue(k, v))
 		}
 	}
 }
 
-func assertMachineDeployments(g Gomega, clusterClassObjects clusterClassObjects, clusterObjects clusterObjects, cluster *clusterv1.Cluster, clusterClass *clusterv1.ClusterClass) {
+func assertMachineDeployments(g Gomega, clusterClassObjects clusterClassObjects, clusterObjects ClusterObjects, cluster *clusterv1.Cluster, clusterClass *clusterv1.ClusterClass) {
 	for _, machineDeployment := range clusterObjects.MachineDeployments {
 		mdTopology := getMDTopology(cluster, machineDeployment)
 		mdClass := getMDClass(cluster, clusterClass, machineDeployment)
@@ -542,7 +832,7 @@ func assertMachineDeployments(g Gomega, clusterClassObjects clusterClassObjects,
 					clusterv1.ClusterTopologyMachineDeploymentNameLabel: mdTopology.Name,
 				},
 				mdTopology.Metadata.Labels,
-				mdClass.Template.Metadata.Labels,
+				mdClass.Metadata.Labels,
 			),
 		)
 		expectMapsToBeEquivalent(g,
@@ -551,7 +841,7 @@ func assertMachineDeployments(g Gomega, clusterClassObjects clusterClassObjects,
 			).without(g, clusterv1.RevisionAnnotation),
 			union(
 				mdTopology.Metadata.Annotations,
-				mdClass.Template.Metadata.Annotations,
+				mdClass.Metadata.Annotations,
 			),
 		)
 
@@ -574,13 +864,13 @@ func assertMachineDeployments(g Gomega, clusterClassObjects clusterClassObjects,
 					clusterv1.ClusterTopologyMachineDeploymentNameLabel: mdTopology.Name,
 				},
 				mdTopology.Metadata.Labels,
-				mdClass.Template.Metadata.Labels,
+				mdClass.Metadata.Labels,
 			),
 		)
 		expectMapsToBeEquivalent(g, machineDeployment.Spec.Template.Annotations,
 			union(
 				mdTopology.Metadata.Annotations,
-				mdClass.Template.Metadata.Annotations,
+				mdClass.Metadata.Annotations,
 			),
 		)
 
@@ -602,8 +892,8 @@ func assertMachineDeployments(g Gomega, clusterClassObjects clusterClassObjects,
 		expectMapsToBeEquivalent(g, infrastructureMachineTemplate.GetAnnotations(),
 			union(
 				map[string]string{
-					clusterv1.TemplateClonedFromGroupKindAnnotation: groupKind(mdClass.Template.Infrastructure.Ref),
-					clusterv1.TemplateClonedFromNameAnnotation:      mdClass.Template.Infrastructure.Ref.Name,
+					clusterv1.TemplateClonedFromGroupKindAnnotation: mdClass.Infrastructure.TemplateRef.GroupVersionKind().GroupKind().String(),
+					clusterv1.TemplateClonedFromNameAnnotation:      mdClass.Infrastructure.TemplateRef.Name,
 				},
 				ccInfrastructureMachineTemplate.GetAnnotations(),
 			),
@@ -634,11 +924,14 @@ func assertMachineDeployments(g Gomega, clusterClassObjects clusterClassObjects,
 		expectMapsToBeEquivalent(g, bootstrapConfigTemplate.GetAnnotations(),
 			union(
 				map[string]string{
-					clusterv1.TemplateClonedFromGroupKindAnnotation: groupKind(mdClass.Template.Bootstrap.Ref),
-					clusterv1.TemplateClonedFromNameAnnotation:      mdClass.Template.Bootstrap.Ref.Name,
+					clusterv1.TemplateClonedFromGroupKindAnnotation: mdClass.Bootstrap.TemplateRef.GroupVersionKind().GroupKind().String(),
+					clusterv1.TemplateClonedFromNameAnnotation:      mdClass.Bootstrap.TemplateRef.Name,
 				},
 				ccBootstrapConfigTemplate.GetAnnotations(),
 			),
+			// Note: ignoring utilconversion.DataAnnotation so we accept both bootstrap config template objects using the latest API version and
+			// bootstrap config template objects using older releases (with conversion data).
+			conversionutil.DataAnnotation,
 		)
 		// MachineDeployment BootstrapConfigTemplate.spec.template.metadata
 		expectMapsToBeEquivalent(g, bootstrapConfigTemplateTemplateMetadata.Labels,
@@ -650,7 +943,7 @@ func assertMachineDeployments(g Gomega, clusterClassObjects clusterClassObjects,
 	}
 }
 
-func assertMachinePools(g Gomega, clusterClassObjects clusterClassObjects, clusterObjects clusterObjects, cluster *clusterv1.Cluster, clusterClass *clusterv1.ClusterClass) {
+func assertMachinePools(g Gomega, clusterClassObjects clusterClassObjects, clusterObjects ClusterObjects, cluster *clusterv1.Cluster, clusterClass *clusterv1.ClusterClass) {
 	for _, machinePool := range clusterObjects.MachinePools {
 		mpTopology := getMPTopology(cluster, machinePool)
 		mpClass := getMPClass(cluster, clusterClass, machinePool)
@@ -664,13 +957,13 @@ func assertMachinePools(g Gomega, clusterClassObjects clusterClassObjects, clust
 					clusterv1.ClusterTopologyMachinePoolNameLabel: mpTopology.Name,
 				},
 				mpTopology.Metadata.Labels,
-				mpClass.Template.Metadata.Labels,
+				mpClass.Metadata.Labels,
 			),
 		)
 		expectMapsToBeEquivalent(g, machinePool.Annotations,
 			union(
 				mpTopology.Metadata.Annotations,
-				mpClass.Template.Metadata.Annotations,
+				mpClass.Metadata.Annotations,
 			),
 		)
 
@@ -683,13 +976,13 @@ func assertMachinePools(g Gomega, clusterClassObjects clusterClassObjects, clust
 					clusterv1.ClusterTopologyMachinePoolNameLabel: mpTopology.Name,
 				},
 				mpTopology.Metadata.Labels,
-				mpClass.Template.Metadata.Labels,
+				mpClass.Metadata.Labels,
 			),
 		)
 		expectMapsToBeEquivalent(g, machinePool.Spec.Template.Annotations,
 			union(
 				mpTopology.Metadata.Annotations,
-				mpClass.Template.Metadata.Annotations,
+				mpClass.Metadata.Annotations,
 			),
 		)
 
@@ -710,8 +1003,8 @@ func assertMachinePools(g Gomega, clusterClassObjects clusterClassObjects, clust
 		expectMapsToBeEquivalent(g, infrastructureMachinePool.GetAnnotations(),
 			union(
 				map[string]string{
-					clusterv1.TemplateClonedFromGroupKindAnnotation: groupKind(mpClass.Template.Infrastructure.Ref),
-					clusterv1.TemplateClonedFromNameAnnotation:      mpClass.Template.Infrastructure.Ref.Name,
+					clusterv1.TemplateClonedFromGroupKindAnnotation: mpClass.Infrastructure.TemplateRef.GroupVersionKind().GroupKind().String(),
+					clusterv1.TemplateClonedFromNameAnnotation:      mpClass.Infrastructure.TemplateRef.Name,
 				},
 				ccInfrastructureMachinePoolTemplateTemplateMetadata.Annotations,
 			),
@@ -734,16 +1027,19 @@ func assertMachinePools(g Gomega, clusterClassObjects clusterClassObjects, clust
 		expectMapsToBeEquivalent(g, bootstrapConfig.GetAnnotations(),
 			union(
 				map[string]string{
-					clusterv1.TemplateClonedFromGroupKindAnnotation: groupKind(mpClass.Template.Bootstrap.Ref),
-					clusterv1.TemplateClonedFromNameAnnotation:      mpClass.Template.Bootstrap.Ref.Name,
+					clusterv1.TemplateClonedFromGroupKindAnnotation: mpClass.Bootstrap.TemplateRef.GroupVersionKind().GroupKind().String(),
+					clusterv1.TemplateClonedFromNameAnnotation:      mpClass.Bootstrap.TemplateRef.Name,
 				},
 				ccBootstrapConfigTemplateTemplateMetadata.Annotations,
 			),
+			// Note: ignoring utilconversion.DataAnnotation so we accept both bootstrap config objects using the latest API version and
+			// bootstrap config objects using older releases (with conversion data).
+			conversionutil.DataAnnotation,
 		)
 	}
 }
 
-func assertMachineSets(g Gomega, clusterObjects clusterObjects, cluster *clusterv1.Cluster) {
+func assertMachineSets(g Gomega, clusterObjects ClusterObjects, cluster *clusterv1.Cluster) {
 	for _, machineDeployment := range clusterObjects.MachineDeployments {
 		mdTopology := getMDTopology(cluster, machineDeployment)
 
@@ -768,7 +1064,11 @@ func assertMachineSets(g Gomega, clusterObjects clusterObjects, cluster *cluster
 					machineSet.Annotations,
 				).without(g, clusterv1.DesiredReplicasAnnotation, clusterv1.MaxReplicasAnnotation, clusterv1.RevisionAnnotation),
 				union(
-					machineDeployment.Annotations,
+					union(machineDeployment.Annotations,
+						map[string]string{
+							clusterv1.DisableMachineCreateAnnotation: "false",
+						},
+					),
 				).without(g, clusterv1.RevisionAnnotation),
 			)
 			// MachineDeployment MachineSet.spec.selector
@@ -801,7 +1101,7 @@ func assertMachineSets(g Gomega, clusterObjects clusterObjects, cluster *cluster
 	}
 }
 
-func assertMachineSetsMachines(g Gomega, clusterObjects clusterObjects, cluster *clusterv1.Cluster, filterMetadataBeforeValidation func(object client.Object) clusterv1.ObjectMeta) {
+func assertMachineSetsMachines(g Gomega, clusterObjects ClusterObjects, cluster *clusterv1.Cluster, filterMetadataBeforeValidation func(object client.Object) clusterv1.ObjectMeta) {
 	for _, machineDeployment := range clusterObjects.MachineDeployments {
 		mdTopology := getMDTopology(cluster, machineDeployment)
 		infrastructureMachineTemplate := clusterObjects.InfrastructureMachineTemplateByMachineDeployment[machineDeployment.Name]
@@ -852,7 +1152,7 @@ func assertMachineSetsMachines(g Gomega, clusterObjects clusterObjects, cluster 
 				expectMapsToBeEquivalent(g, infrastructureMachineMetadata.Annotations,
 					union(
 						map[string]string{
-							clusterv1.TemplateClonedFromGroupKindAnnotation: groupKind(&machineSet.Spec.Template.Spec.InfrastructureRef),
+							clusterv1.TemplateClonedFromGroupKindAnnotation: machineSet.Spec.Template.Spec.InfrastructureRef.GroupKind().String(),
 							clusterv1.TemplateClonedFromNameAnnotation:      machineSet.Spec.Template.Spec.InfrastructureRef.Name,
 						},
 						machineSet.Spec.Template.Annotations,
@@ -880,19 +1180,26 @@ func assertMachineSetsMachines(g Gomega, clusterObjects clusterObjects, cluster 
 				expectMapsToBeEquivalent(g, bootstrapConfigMetadata.Annotations,
 					union(
 						map[string]string{
-							clusterv1.TemplateClonedFromGroupKindAnnotation: groupKind(machineSet.Spec.Template.Spec.Bootstrap.ConfigRef),
+							clusterv1.TemplateClonedFromGroupKindAnnotation: machineSet.Spec.Template.Spec.Bootstrap.ConfigRef.GroupKind().String(),
 							clusterv1.TemplateClonedFromNameAnnotation:      machineSet.Spec.Template.Spec.Bootstrap.ConfigRef.Name,
 						},
 						machineSet.Spec.Template.Annotations,
 						bootstrapConfigTemplateTemplateMetadata.Annotations,
 					),
+					// Note: ignoring utilconversion.DataAnnotation so we accept both bootstrap config objects using the latest API version and
+					// bootstrap config objects using older releases (with conversion data).
+					conversionutil.DataAnnotation,
 				)
 
 				// MachineDeployment MachineSet Machine Node.metadata
 				node := clusterObjects.NodesByMachine[machine.Name]
 				nodeMetadata := filterMetadataBeforeValidation(node)
-				for k, v := range getManagedLabels(machineMetadata.Labels) {
+				for k, v := range labels.GetManagedLabels(machineMetadata.Labels) {
 					g.Expect(nodeMetadata.Labels).To(HaveKeyWithValue(k, v))
+				}
+
+				for k, v := range annotations.GetManagedAnnotations(machine) {
+					g.Expect(nodeMetadata.Annotations).To(HaveKeyWithValue(k, v))
 				}
 			}
 		}
@@ -949,7 +1256,7 @@ func getMDTopology(cluster *clusterv1.Cluster, md *clusterv1.MachineDeployment) 
 }
 
 // getMPClass looks up the MachinePoolClass for a MachinePool in the ClusterClass.
-func getMPClass(cluster *clusterv1.Cluster, clusterClass *clusterv1.ClusterClass, mp *expv1.MachinePool) *clusterv1.MachinePoolClass {
+func getMPClass(cluster *clusterv1.Cluster, clusterClass *clusterv1.ClusterClass, mp *clusterv1.MachinePool) *clusterv1.MachinePoolClass {
 	mpTopology := getMPTopology(cluster, mp)
 
 	for _, mdClass := range clusterClass.Spec.Workers.MachinePools {
@@ -962,7 +1269,7 @@ func getMPClass(cluster *clusterv1.Cluster, clusterClass *clusterv1.ClusterClass
 }
 
 // getMPTopology looks up the MachinePoolTopology for a mp in the Cluster.
-func getMPTopology(cluster *clusterv1.Cluster, mp *expv1.MachinePool) *clusterv1.MachinePoolTopology {
+func getMPTopology(cluster *clusterv1.Cluster, mp *clusterv1.MachinePool) *clusterv1.MachinePoolTopology {
 	for _, mpTopology := range cluster.Spec.Topology.Workers.MachinePools {
 		if mpTopology.Name == mp.Labels[clusterv1.ClusterTopologyMachinePoolNameLabel] {
 			return &mpTopology
@@ -970,18 +1277,6 @@ func getMPTopology(cluster *clusterv1.Cluster, mp *expv1.MachinePool) *clusterv1
 	}
 	Fail(fmt.Sprintf("could not find MachinePool topology %q", mp.Labels[clusterv1.ClusterTopologyMachinePoolNameLabel]))
 	return nil
-}
-
-// groupKind returns the GroupKind string of a ref.
-func groupKind(ref *corev1.ObjectReference) string {
-	gv, err := schema.ParseGroupVersion(ref.APIVersion)
-	Expect(err).ToNot(HaveOccurred())
-
-	gk := metav1.GroupKind{
-		Group: gv.Group,
-		Kind:  ref.Kind,
-	}
-	return gk.String()
 }
 
 type unionMap map[string]string
@@ -1012,28 +1307,6 @@ func (m unionMap) without(g Gomega, keys ...string) unionMap {
 	return m
 }
 
-// getManagedLabels gets a map[string]string and returns another map[string]string
-// filtering out labels not managed by CAPI.
-// Note: This is replicated from machine_controller_noderef.go.
-// TODO: Consider moving this func to an internal util or the API package.
-func getManagedLabels(labels map[string]string) map[string]string {
-	managedLabels := make(map[string]string)
-	for key, value := range labels {
-		dnsSubdomainOrName := strings.Split(key, "/")[0]
-		if dnsSubdomainOrName == clusterv1.NodeRoleLabelPrefix {
-			managedLabels[key] = value
-		}
-		if dnsSubdomainOrName == clusterv1.NodeRestrictionLabelDomain || strings.HasSuffix(dnsSubdomainOrName, "."+clusterv1.NodeRestrictionLabelDomain) {
-			managedLabels[key] = value
-		}
-		if dnsSubdomainOrName == clusterv1.ManagedNodeLabelDomain || strings.HasSuffix(dnsSubdomainOrName, "."+clusterv1.ManagedNodeLabelDomain) {
-			managedLabels[key] = value
-		}
-	}
-
-	return managedLabels
-}
-
 type clusterClassObjects struct {
 	InfrastructureClusterTemplate             *unstructured.Unstructured
 	ControlPlaneTemplate                      *unstructured.Unstructured
@@ -1058,31 +1331,31 @@ func getClusterClassObjects(ctx context.Context, g Gomega, clusterProxy framewor
 	}
 	var err error
 
-	res.InfrastructureClusterTemplate, err = external.Get(ctx, mgmtClient, clusterClass.Spec.Infrastructure.Ref)
+	res.InfrastructureClusterTemplate, err = external.Get(ctx, mgmtClient, clusterClass.Spec.Infrastructure.TemplateRef.ToObjectReference(clusterClass.Namespace))
 	g.Expect(err).ToNot(HaveOccurred())
 
-	res.ControlPlaneTemplate, err = external.Get(ctx, mgmtClient, clusterClass.Spec.ControlPlane.Ref)
+	res.ControlPlaneTemplate, err = external.Get(ctx, mgmtClient, clusterClass.Spec.ControlPlane.TemplateRef.ToObjectReference(clusterClass.Namespace))
 	g.Expect(err).ToNot(HaveOccurred())
 
-	res.ControlPlaneInfrastructureMachineTemplate, err = external.Get(ctx, mgmtClient, clusterClass.Spec.ControlPlane.MachineInfrastructure.Ref)
+	res.ControlPlaneInfrastructureMachineTemplate, err = external.Get(ctx, mgmtClient, clusterClass.Spec.ControlPlane.MachineInfrastructure.TemplateRef.ToObjectReference(clusterClass.Namespace))
 	g.Expect(err).ToNot(HaveOccurred())
 
 	for _, mdClass := range clusterClass.Spec.Workers.MachineDeployments {
-		infrastructureMachineTemplate, err := external.Get(ctx, mgmtClient, mdClass.Template.Infrastructure.Ref)
+		infrastructureMachineTemplate, err := external.Get(ctx, mgmtClient, mdClass.Infrastructure.TemplateRef.ToObjectReference(clusterClass.Namespace))
 		g.Expect(err).ToNot(HaveOccurred())
 		res.InfrastructureMachineTemplateByMachineDeploymentClass[mdClass.Class] = infrastructureMachineTemplate
 
-		bootstrapConfigTemplate, err := external.Get(ctx, mgmtClient, mdClass.Template.Bootstrap.Ref)
+		bootstrapConfigTemplate, err := external.Get(ctx, mgmtClient, mdClass.Bootstrap.TemplateRef.ToObjectReference(clusterClass.Namespace))
 		g.Expect(err).ToNot(HaveOccurred())
 		res.BootstrapConfigTemplateByMachineDeploymentClass[mdClass.Class] = bootstrapConfigTemplate
 	}
 
 	for _, mpClass := range clusterClass.Spec.Workers.MachinePools {
-		infrastructureMachinePoolTemplate, err := external.Get(ctx, mgmtClient, mpClass.Template.Infrastructure.Ref)
+		infrastructureMachinePoolTemplate, err := external.Get(ctx, mgmtClient, mpClass.Infrastructure.TemplateRef.ToObjectReference(clusterClass.Namespace))
 		g.Expect(err).ToNot(HaveOccurred())
 		res.InfrastructureMachinePoolTemplateByMachinePoolClass[mpClass.Class] = infrastructureMachinePoolTemplate
 
-		bootstrapConfigTemplate, err := external.Get(ctx, mgmtClient, mpClass.Template.Bootstrap.Ref)
+		bootstrapConfigTemplate, err := external.Get(ctx, mgmtClient, mpClass.Bootstrap.TemplateRef.ToObjectReference(clusterClass.Namespace))
 		g.Expect(err).ToNot(HaveOccurred())
 		res.BootstrapConfigTemplateByMachinePoolClass[mpClass.Class] = bootstrapConfigTemplate
 	}
@@ -1090,7 +1363,7 @@ func getClusterClassObjects(ctx context.Context, g Gomega, clusterProxy framewor
 	return res
 }
 
-type clusterObjects struct {
+type ClusterObjects struct {
 	InfrastructureCluster *unstructured.Unstructured
 
 	ControlPlane                              *unstructured.Unstructured
@@ -1102,7 +1375,7 @@ type clusterObjects struct {
 	MachinesByMachineSet           map[string][]*clusterv1.Machine
 	NodesByMachine                 map[string]*corev1.Node
 
-	MachinePools []*expv1.MachinePool
+	MachinePools []*clusterv1.MachinePool
 
 	InfrastructureMachineTemplateByMachineDeployment map[string]*unstructured.Unstructured
 	BootstrapConfigTemplateByMachineDeployment       map[string]*unstructured.Unstructured
@@ -1115,11 +1388,11 @@ type clusterObjects struct {
 }
 
 // getClusterObjects retrieves objects from the Cluster topology.
-func getClusterObjects(ctx context.Context, g Gomega, clusterProxy framework.ClusterProxy, cluster *clusterv1.Cluster) clusterObjects {
+func getClusterObjects(ctx context.Context, g Gomega, clusterProxy framework.ClusterProxy, cluster *clusterv1.Cluster) ClusterObjects {
 	mgmtClient := clusterProxy.GetClient()
 	workloadClient := clusterProxy.GetWorkloadCluster(ctx, cluster.Namespace, cluster.Name).GetClient()
 
-	res := clusterObjects{
+	res := ClusterObjects{
 		MachineSetsByMachineDeployment:                   map[string][]*clusterv1.MachineSet{},
 		MachinesByMachineSet:                             map[string][]*clusterv1.Machine{},
 		NodesByMachine:                                   map[string]*corev1.Node{},
@@ -1133,16 +1406,25 @@ func getClusterObjects(ctx context.Context, g Gomega, clusterProxy framework.Clu
 	var err error
 
 	// InfrastructureCluster
-	res.InfrastructureCluster, err = external.Get(ctx, mgmtClient, cluster.Spec.InfrastructureRef)
+	res.InfrastructureCluster, err = external.GetObjectFromContractVersionedRef(ctx, mgmtClient, cluster.Spec.InfrastructureRef, cluster.Namespace)
 	g.Expect(err).ToNot(HaveOccurred())
 
 	// ControlPlane
-	res.ControlPlane, err = external.Get(ctx, mgmtClient, cluster.Spec.ControlPlaneRef)
+	res.ControlPlane, err = external.GetObjectFromContractVersionedRef(ctx, mgmtClient, cluster.Spec.ControlPlaneRef, cluster.Namespace)
 	g.Expect(err).ToNot(HaveOccurred())
-	controlPlaneInfrastructureMachineTemplateRef, err := contract.ControlPlane().MachineTemplate().InfrastructureRef().Get(res.ControlPlane)
+	controlPlaneContractVersion, err := contract.GetContractVersionForVersion(ctx, clusterProxy.GetClient(), res.ControlPlane.GroupVersionKind().GroupKind(), res.ControlPlane.GroupVersionKind().Version)
 	g.Expect(err).ToNot(HaveOccurred())
-	res.ControlPlaneInfrastructureMachineTemplate, err = external.Get(ctx, mgmtClient, controlPlaneInfrastructureMachineTemplateRef)
-	g.Expect(err).ToNot(HaveOccurred())
+	if controlPlaneContractVersion == "v1beta1" {
+		controlPlaneInfrastructureMachineTemplateRef, err := contract.ControlPlane().MachineTemplate().InfrastructureV1Beta1Ref().Get(res.ControlPlane)
+		g.Expect(err).ToNot(HaveOccurred())
+		res.ControlPlaneInfrastructureMachineTemplate, err = external.Get(ctx, mgmtClient, controlPlaneInfrastructureMachineTemplateRef)
+		g.Expect(err).ToNot(HaveOccurred())
+	} else {
+		controlPlaneInfrastructureMachineTemplateRef, err := contract.ControlPlane().MachineTemplate().InfrastructureRef().Get(res.ControlPlane)
+		g.Expect(err).ToNot(HaveOccurred())
+		res.ControlPlaneInfrastructureMachineTemplate, err = external.GetObjectFromContractVersionedRef(ctx, mgmtClient, *controlPlaneInfrastructureMachineTemplateRef, res.ControlPlane.GetNamespace())
+		g.Expect(err).ToNot(HaveOccurred())
+	}
 	controlPlaneMachineList := &clusterv1.MachineList{}
 	g.Expect(mgmtClient.List(ctx, controlPlaneMachineList, client.InNamespace(cluster.Namespace), client.MatchingLabels{
 		clusterv1.MachineControlPlaneLabel: "",
@@ -1168,11 +1450,11 @@ func getClusterObjects(ctx context.Context, g Gomega, clusterProxy framework.Clu
 		md := mdList.Items[0]
 		res.MachineDeployments = append(res.MachineDeployments, &md)
 
-		bootstrapConfigTemplate, err := external.Get(ctx, mgmtClient, md.Spec.Template.Spec.Bootstrap.ConfigRef)
+		bootstrapConfigTemplate, err := external.GetObjectFromContractVersionedRef(ctx, mgmtClient, md.Spec.Template.Spec.Bootstrap.ConfigRef, md.Namespace)
 		g.Expect(err).ToNot(HaveOccurred())
 		res.BootstrapConfigTemplateByMachineDeployment[md.Name] = bootstrapConfigTemplate
 
-		infrastructureMachineTemplate, err := external.Get(ctx, mgmtClient, &md.Spec.Template.Spec.InfrastructureRef)
+		infrastructureMachineTemplate, err := external.GetObjectFromContractVersionedRef(ctx, mgmtClient, md.Spec.Template.Spec.InfrastructureRef, md.Namespace)
 		g.Expect(err).ToNot(HaveOccurred())
 		res.InfrastructureMachineTemplateByMachineDeployment[md.Name] = infrastructureMachineTemplate
 
@@ -1198,7 +1480,7 @@ func getClusterObjects(ctx context.Context, g Gomega, clusterProxy framework.Clu
 	// MachinePools.
 	for _, mpTopology := range cluster.Spec.Topology.Workers.MachinePools {
 		// Get MachinePool for the current MachinePoolTopology.
-		mpList := &expv1.MachinePoolList{}
+		mpList := &clusterv1.MachinePoolList{}
 		g.Expect(mgmtClient.List(ctx, mpList, client.InNamespace(cluster.Namespace), client.MatchingLabels{
 			clusterv1.ClusterTopologyMachinePoolNameLabel: mpTopology.Name,
 		})).To(Succeed())
@@ -1206,11 +1488,11 @@ func getClusterObjects(ctx context.Context, g Gomega, clusterProxy framework.Clu
 		mp := mpList.Items[0]
 		res.MachinePools = append(res.MachinePools, &mp)
 
-		bootstrapConfig, err := external.Get(ctx, mgmtClient, mp.Spec.Template.Spec.Bootstrap.ConfigRef)
+		bootstrapConfig, err := external.GetObjectFromContractVersionedRef(ctx, mgmtClient, mp.Spec.Template.Spec.Bootstrap.ConfigRef, mp.Namespace)
 		g.Expect(err).ToNot(HaveOccurred())
 		res.BootstrapConfigByMachinePool[mp.Name] = bootstrapConfig
 
-		infrastructureMachinePool, err := external.Get(ctx, mgmtClient, &mp.Spec.Template.Spec.InfrastructureRef)
+		infrastructureMachinePool, err := external.GetObjectFromContractVersionedRef(ctx, mgmtClient, mp.Spec.Template.Spec.InfrastructureRef, mp.Namespace)
 		g.Expect(err).ToNot(HaveOccurred())
 		res.InfrastructureMachinePoolByMachinePool[mp.Name] = infrastructureMachinePool
 	}
@@ -1218,17 +1500,17 @@ func getClusterObjects(ctx context.Context, g Gomega, clusterProxy framework.Clu
 	return res
 }
 
-// addMachineObjects adds objects related to the Machine (BootstrapConfig, InfraMachine, Node) to clusterObjects.
-func addMachineObjects(ctx context.Context, mgmtClient, workloadClient client.Client, g Gomega, res clusterObjects, machine *clusterv1.Machine) {
-	bootstrapConfig, err := external.Get(ctx, mgmtClient, machine.Spec.Bootstrap.ConfigRef)
+// addMachineObjects adds objects related to the Machine (BootstrapConfig, InfraMachine, Node) to ClusterObjects.
+func addMachineObjects(ctx context.Context, mgmtClient, workloadClient client.Client, g Gomega, res ClusterObjects, machine *clusterv1.Machine) {
+	bootstrapConfig, err := external.GetObjectFromContractVersionedRef(ctx, mgmtClient, machine.Spec.Bootstrap.ConfigRef, machine.Namespace)
 	g.Expect(err).ToNot(HaveOccurred())
 	res.BootstrapConfigByMachine[machine.Name] = bootstrapConfig
 
-	infrastructureMachine, err := external.Get(ctx, mgmtClient, &machine.Spec.InfrastructureRef)
+	infrastructureMachine, err := external.GetObjectFromContractVersionedRef(ctx, mgmtClient, machine.Spec.InfrastructureRef, machine.Namespace)
 	g.Expect(err).ToNot(HaveOccurred())
 	res.InfrastructureMachineByMachine[machine.Name] = infrastructureMachine
 
-	g.Expect(machine.Status.NodeRef).ToNot(BeNil())
+	g.Expect(machine.Status.NodeRef.IsDefined()).To(BeTrue())
 	node := &corev1.Node{}
 	g.Expect(workloadClient.Get(ctx, client.ObjectKey{Namespace: "", Name: machine.Status.NodeRef.Name}, node)).To(Succeed())
 	res.NodesByMachine[machine.Name] = node
@@ -1266,11 +1548,14 @@ func modifyControlPlaneViaClusterAndWait(ctx context.Context, input modifyContro
 		// Get the ControlPlane.
 		controlPlaneRef := input.Cluster.Spec.ControlPlaneRef
 		controlPlaneTopology := input.Cluster.Spec.Topology.ControlPlane
-		controlPlane, err := external.Get(ctx, mgmtClient, controlPlaneRef)
+		controlPlane, err := external.GetObjectFromContractVersionedRef(ctx, mgmtClient, controlPlaneRef, input.Cluster.Namespace)
+		g.Expect(err).ToNot(HaveOccurred())
+
+		contractVersion, err := contract.GetContractVersion(ctx, mgmtClient, controlPlane.GroupVersionKind().GroupKind())
 		g.Expect(err).ToNot(HaveOccurred())
 
 		// Verify that the fields from Cluster topology are set on the control plane.
-		assertControlPlaneTopologyFields(g, controlPlane, controlPlaneTopology)
+		assertControlPlaneTopologyFields(g, contractVersion, controlPlane, controlPlaneTopology)
 	}, input.WaitForControlPlane...).Should(Succeed())
 }
 
@@ -1352,7 +1637,7 @@ func modifyMachinePoolViaClusterAndWait(ctx context.Context, input modifyMachine
 			log.Logf("Waiting for MachinePool rollout for MachinePoolTopology %q to complete.", mpTopology.Name)
 			Eventually(func(g Gomega) {
 				// Get MachinePool for the current MachinePoolTopology.
-				mpList := &expv1.MachinePoolList{}
+				mpList := &clusterv1.MachinePoolList{}
 				g.Expect(mgmtClient.List(ctx, mpList, client.InNamespace(input.Cluster.Namespace), client.MatchingLabels{
 					clusterv1.ClusterTopologyMachinePoolNameLabel: mpTopology.Name,
 				})).To(Succeed())
@@ -1366,12 +1651,17 @@ func modifyMachinePoolViaClusterAndWait(ctx context.Context, input modifyMachine
 	}
 }
 
-func expectMapsToBeEquivalent(g Gomega, m1, m2 map[string]string) {
-	if m1 == nil {
-		m1 = map[string]string{}
+func expectMapsToBeEquivalent(g Gomega, m1, m2 map[string]string, ignoreKeys ...string) {
+	m1Copy, m2Copy := map[string]string{}, map[string]string{}
+	for k, v := range m1 {
+		m1Copy[k] = v
 	}
-	if m2 == nil {
-		m2 = map[string]string{}
+	for k, v := range m2 {
+		m2Copy[k] = v
 	}
-	g.ExpectWithOffset(1, m1).To(BeEquivalentTo(m2))
+	for _, key := range ignoreKeys {
+		delete(m1Copy, key)
+		delete(m2Copy, key)
+	}
+	g.ExpectWithOffset(1, m1Copy).To(BeEquivalentTo(m2Copy))
 }

@@ -23,47 +23,38 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
 	"github.com/blang/semver/v4"
-	"github.com/go-logr/logr"
 	"github.com/pkg/errors"
-	corev1 "k8s.io/api/core/v1"
-	apimachinerytypes "k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
 	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/kind/pkg/apis/config/v1alpha4"
 	"sigs.k8s.io/kind/pkg/cluster/constants"
 
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
-	bootstrapv1 "sigs.k8s.io/cluster-api/bootstrap/kubeadm/api/v1beta1"
-	"sigs.k8s.io/cluster-api/internal/util/taints"
+	bootstrapv1 "sigs.k8s.io/cluster-api/api/bootstrap/kubeadm/v1beta2"
+	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/cluster-api/test/infrastructure/container"
-	infrav1 "sigs.k8s.io/cluster-api/test/infrastructure/docker/api/v1beta1"
+	infrav1 "sigs.k8s.io/cluster-api/test/infrastructure/docker/api/v1beta2"
 	"sigs.k8s.io/cluster-api/test/infrastructure/docker/internal/docker/types"
 	"sigs.k8s.io/cluster-api/test/infrastructure/docker/internal/provisioning"
 	"sigs.k8s.io/cluster-api/test/infrastructure/docker/internal/provisioning/cloudinit"
 	"sigs.k8s.io/cluster-api/test/infrastructure/docker/internal/provisioning/ignition"
 	"sigs.k8s.io/cluster-api/test/infrastructure/kind"
-	"sigs.k8s.io/cluster-api/util/patch"
-)
-
-var (
-	cloudProviderTaint = corev1.Taint{Key: "node.cloudprovider.kubernetes.io/uninitialized", Effect: corev1.TaintEffectNoSchedule}
 )
 
 type nodeCreator interface {
-	CreateControlPlaneNode(ctx context.Context, name, clusterName, listenAddress string, port int32, mounts []v1alpha4.Mount, portMappings []v1alpha4.PortMapping, labels map[string]string, ipFamily clusterv1.ClusterIPFamily, kindMapping kind.Mapping) (node *types.Node, err error)
-	CreateWorkerNode(ctx context.Context, name, clusterName string, mounts []v1alpha4.Mount, portMappings []v1alpha4.PortMapping, labels map[string]string, ipFamily clusterv1.ClusterIPFamily, kindMapping kind.Mapping) (node *types.Node, err error)
+	CreateControlPlaneNode(ctx context.Context, name, clusterName, listenAddress string, port int32, mounts []v1alpha4.Mount, portMappings []v1alpha4.PortMapping, labels map[string]string, ipFamily container.ClusterIPFamily, kindMapping kind.Mapping) (node *types.Node, err error)
+	CreateWorkerNode(ctx context.Context, name, clusterName string, mounts []v1alpha4.Mount, portMappings []v1alpha4.PortMapping, labels map[string]string, ipFamily container.ClusterIPFamily, kindMapping kind.Mapping) (node *types.Node, err error)
 }
 
 // Machine implement a service for managing the docker containers hosting a kubernetes nodes.
 type Machine struct {
 	cluster     string
 	machine     string
-	ipFamily    clusterv1.ClusterIPFamily
+	ipFamily    container.ClusterIPFamily
 	container   *types.Node
 	nodeCreator nodeCreator
 }
@@ -92,10 +83,7 @@ func NewMachine(ctx context.Context, cluster *clusterv1.Cluster, machine string,
 		return nil, err
 	}
 
-	// We tolerate this until removal;
-	// after removal IPFamily will become an internal CAPD concept.
-	// See https://github.com/kubernetes-sigs/cluster-api/issues/7521.
-	ipFamily, err := cluster.GetIPFamily() //nolint:staticcheck
+	ipFamily, err := container.GetClusterIPFamily(cluster)
 	if err != nil {
 		return nil, fmt.Errorf("create docker machine: %s", err)
 	}
@@ -129,10 +117,7 @@ func ListMachinesByCluster(ctx context.Context, cluster *clusterv1.Cluster, labe
 		return nil, err
 	}
 
-	// We tolerate this until removal;
-	// after removal IPFamily will become an internal CAPD concept.
-	// See https://github.com/kubernetes-sigs/cluster-api/issues/7521 .
-	ipFamily, err := cluster.GetIPFamily() //nolint:staticcheck
+	ipFamily, err := container.GetClusterIPFamily(cluster)
 	if err != nil {
 		return nil, fmt.Errorf("list docker machines by cluster: %s", err)
 	}
@@ -164,6 +149,15 @@ func (m *Machine) Exists() bool {
 	return m.container != nil
 }
 
+// IsRunning returns true if the container for this machine is running.
+func (m *Machine) IsRunning() bool {
+	if !m.Exists() {
+		return false
+	}
+
+	return m.container.IsRunning()
+}
+
 // Name returns the name of the machine.
 func (m *Machine) Name() string {
 	return m.machine
@@ -172,6 +166,11 @@ func (m *Machine) Name() string {
 // ContainerName return the name of the container for this machine.
 func (m *Machine) ContainerName() string {
 	return MachineContainerName(m.cluster, m.machine)
+}
+
+// Command return a "docker exec" command for the container for this machine.
+func (m *Machine) Command(command string, args ...string) *types.ContainerCmd {
+	return m.container.Commander.Command(command, args...)
 }
 
 // ProviderID return the provider identifier for this machine.
@@ -187,11 +186,11 @@ func (m *Machine) Address(ctx context.Context) ([]string, error) {
 		return nil, err
 	}
 	switch m.ipFamily {
-	case clusterv1.IPv6IPFamily:
+	case container.IPv6IPFamily:
 		return []string{ipv6}, nil
-	case clusterv1.IPv4IPFamily:
+	case container.IPv4IPFamily:
 		return []string{ipv4}, nil
-	case clusterv1.DualStackIPFamily:
+	case container.DualStackIPFamily:
 		return []string{ipv4, ipv6}, nil
 	}
 	return nil, errors.New("unknown ipFamily")
@@ -207,7 +206,7 @@ func (m *Machine) ContainerImage() string {
 }
 
 // Create creates a docker container hosting a Kubernetes node.
-func (m *Machine) Create(ctx context.Context, image string, role string, version *string, labels map[string]string, mounts []infrav1.Mount) error {
+func (m *Machine) Create(ctx context.Context, image string, role string, version string, labels map[string]string, mounts []infrav1.Mount) error {
 	log := ctrl.LoggerFrom(ctx)
 
 	// Create if not exists.
@@ -217,11 +216,11 @@ func (m *Machine) Create(ctx context.Context, image string, role string, version
 		// Get the KindMapping for the target K8s version.
 		// NOTE: The KindMapping allows to select the most recent kindest/node image available, if any, as well as
 		// provide info about the mode to be used when starting the kindest/node image itself.
-		if version == nil {
+		if version == "" {
 			return errors.New("cannot create a DockerMachine for a nil version")
 		}
 
-		semVer, err := semver.Parse(strings.TrimPrefix(*version, "v"))
+		semVer, err := semver.ParseTolerant(version)
 		if err != nil {
 			return errors.Wrap(err, "failed to parse DockerMachine version")
 		}
@@ -264,18 +263,23 @@ func (m *Machine) Create(ctx context.Context, image string, role string, version
 		default:
 			return errors.Errorf("unable to create machine for role %s", role)
 		}
-		// After creating a node we need to wait a small amount of time until crictl does not return an error.
-		// This fixes an issue where we try to kubeadm init too quickly after creating the container.
-		err = wait.PollUntilContextTimeout(ctx, 500*time.Millisecond, 4*time.Second, true, func(ctx context.Context) (bool, error) {
-			ps := m.container.Commander.Command("crictl", "ps")
-			return ps.Run(ctx) == nil, nil
-		})
-		if err != nil {
-			log.Info("Failed running command", "command", "crictl ps")
-			logContainerDebugInfo(ctx, log, m.ContainerName())
-			return errors.Wrap(err, "failed to run crictl ps")
-		}
-		return nil
+	}
+	return nil
+}
+
+// WaitForCrictlPs wait a small amount of time until crictl does not return an error.
+// Note: This was an initial try to avoid issues that might happen when we try to kubeadm init too quickly after creating the container.
+// We now have a better solution that also checks for cgroups ready.
+func (m *Machine) WaitForCrictlPs(ctx context.Context) error {
+	log := ctrl.LoggerFrom(ctx)
+	err := wait.PollUntilContextTimeout(ctx, 500*time.Millisecond, 4*time.Second, true, func(ctx context.Context) (bool, error) {
+		ps := m.Command("crictl", "ps")
+		return ps.Run(ctx) == nil, nil
+	})
+	if err != nil {
+		log.Info("Failed running command", "command", "crictl ps")
+		m.LogContainerDebugInfo(ctx)
+		return errors.Wrap(err, "failed to run crictl ps")
 	}
 	return nil
 }
@@ -297,8 +301,8 @@ func kindMounts(mounts []infrav1.Mount) []v1alpha4.Mount {
 	return ret
 }
 
-// PreloadLoadImages takes a list of container images and imports them into a machine.
-func (m *Machine) PreloadLoadImages(ctx context.Context, images []string) error {
+// PreloadLoadImage import an image into a machine.
+func (m *Machine) PreloadLoadImage(ctx context.Context, image string) error {
 	// Save the image into a tar
 	dir, err := os.MkdirTemp("", "image-tar")
 	if err != nil {
@@ -311,47 +315,66 @@ func (m *Machine) PreloadLoadImages(ctx context.Context, images []string) error 
 		return errors.Wrap(err, "failed to connect to container runtime")
 	}
 
-	for i, image := range images {
-		imageTarPath := filepath.Clean(filepath.Join(dir, fmt.Sprintf("image-%d.tar", i)))
+	imageTarPath := filepath.Clean(filepath.Join(dir, "image.tar"))
 
-		err = containerRuntime.SaveContainerImage(ctx, image, imageTarPath)
-		if err != nil {
-			return errors.Wrapf(err, "failed to save image %q to %q", image, imageTarPath)
-		}
+	err = containerRuntime.SaveContainerImage(ctx, image, imageTarPath)
+	if err != nil {
+		return errors.Wrapf(err, "failed to save image %q to %q", image, imageTarPath)
+	}
 
-		f, err := os.Open(imageTarPath)
-		if err != nil {
-			return errors.Wrapf(err, "failed to open image %q from %q", image, imageTarPath)
-		}
-		defer f.Close() //nolint:gocritic // No resource leak.
+	f, err := os.Open(imageTarPath)
+	if err != nil {
+		return errors.Wrapf(err, "failed to open image %q from %q", image, imageTarPath)
+	}
+	defer func() {
+		_ = f.Close()
+	}()
 
-		ps := m.container.Commander.Command("ctr", "--namespace=k8s.io", "images", "import", "-")
-		ps.SetStdin(f)
-		if err := ps.Run(ctx); err != nil {
-			return errors.Wrapf(err, "failed to load image %q", image)
-		}
+	ps := m.Command("ctr", "--namespace=k8s.io", "images", "import", "-")
+	ps.SetStdin(f)
+	if err := ps.Run(ctx); err != nil {
+		return errors.Wrapf(err, "failed to load image %q", image)
 	}
 	return nil
 }
 
-// ExecBootstrap runs bootstrap on a node, this is generally `kubeadm <init|join>`.
-func (m *Machine) ExecBootstrap(ctx context.Context, data string, format bootstrapv1.Format, version *string, image string) error {
-	log := ctrl.LoggerFrom(ctx)
+// Note: See https://github.com/kubernetes-sigs/kind/pull/2421 for more context.
+var waitUntilLogRegExp = regexp.MustCompile("Reached target .*Multi-User System.*")
 
+// WaitForMultiUserTarget checks if the multi-user target is reached to figure out if the container is ready for bootstrap exec.
+func (m *Machine) WaitForMultiUserTarget(ctx context.Context, containerRuntime container.Runtime) error {
 	if m.container == nil {
-		return errors.New("unable to set ExecBootstrap. the container hosting this machine does not exists")
+		return errors.New("the container hosting this machine does not exist")
+	}
+
+	logs, err := containerRuntime.GetContainerLogs(ctx, m.container.Name)
+	if err != nil {
+		return err
+	}
+
+	if !waitUntilLogRegExp.MatchString(logs) {
+		return errors.New("multi-user target not reached yet")
+	}
+
+	return m.WaitForCrictlPs(ctx)
+}
+
+// GetBootstrapCommands return bootstrap commands for a Machine, this is generally `kubeadm <init|join>` plus additional commands.
+func (m *Machine) GetBootstrapCommands(_ context.Context, data string, format bootstrapv1.Format, version string, image string) ([]provisioning.Cmd, error) {
+	if m.container == nil {
+		return nil, errors.New("unable to set ExecBootstrap. the container hosting this machine does not exist")
 	}
 
 	// Get the kindMapping for the target K8s version.
 	// NOTE: The kindMapping allows to select the most recent kindest/node image available, if any, as well as
 	// provide info about the mode to be used when starting the kindest/node image itself.
-	if version == nil {
-		return errors.New("cannot create a DockerMachine for a nil version")
+	if version == "" {
+		return nil, errors.New("cannot create a DockerMachine for a nil version")
 	}
 
-	semVer, err := semver.Parse(strings.TrimPrefix(*version, "v"))
+	semVer, err := semver.ParseTolerant(version)
 	if err != nil {
-		return errors.Wrap(err, "failed to parse DockerMachine version")
+		return nil, errors.Wrap(err, "failed to parse DockerMachine version")
 	}
 
 	kindMapping := kind.GetMapping(semVer, image)
@@ -359,7 +382,7 @@ func (m *Machine) ExecBootstrap(ctx context.Context, data string, format bootstr
 	// Decode the cloud config
 	cloudConfig, err := base64.StdEncoding.DecodeString(data)
 	if err != nil {
-		return errors.Wrap(err, "failed to decode machine's bootstrap data")
+		return nil, errors.Wrap(err, "failed to decode machine's bootstrap data")
 	}
 
 	var commands []provisioning.Cmd
@@ -370,170 +393,30 @@ func (m *Machine) ExecBootstrap(ctx context.Context, data string, format bootstr
 	case bootstrapv1.Ignition:
 		commands, err = ignition.RawIgnitionToProvisioningCommands(cloudConfig)
 	default:
-		return fmt.Errorf("unknown provisioning format %q", format)
+		return nil, fmt.Errorf("unknown provisioning format %q", format)
 	}
 
 	if err != nil {
-		log.Info("provisioning code failed to parse", "bootstrap data", data)
-		return errors.Wrap(err, "failed to join a control plane node with kubeadm")
+		return nil, errors.Wrap(err, "failed to join a control plane node with kubeadm")
 	}
-
-	var outErr bytes.Buffer
-	var outStd bytes.Buffer
-	for _, command := range commands {
-		cmd := m.container.Commander.Command(command.Cmd, command.Args...)
-		cmd.SetStderr(&outErr)
-		cmd.SetStdout(&outStd)
-		if command.Stdin != "" {
-			cmd.SetStdin(strings.NewReader(command.Stdin))
-		}
-		err := cmd.Run(ctx)
-		if err != nil {
-			log.Info("Failed running command", "instance", m.Name(), "command", command, "stdout", outStd.String(), "stderr", outErr.String(), "bootstrap data", data)
-			logContainerDebugInfo(ctx, log, m.ContainerName())
-			return errors.Wrapf(err, "failed to run cloud config: stdout: %s stderr: %s", outStd.String(), outErr.String())
-		}
-	}
-
-	return nil
+	return commands, nil
 }
 
-// CheckForBootstrapSuccess checks if bootstrap was successful by checking for existence of the sentinel file.
-func (m *Machine) CheckForBootstrapSuccess(ctx context.Context, logResult bool) error {
-	log := ctrl.LoggerFrom(ctx)
-
+// CheckForSentinelFile checks if bootstrap was already started by checking for existence of the sentinel file.
+func (m *Machine) CheckForSentinelFile(ctx context.Context) (bool, error) {
 	if m.container == nil {
-		return errors.New("unable to set CheckForBootstrapSuccess. the container hosting this machine does not exists")
+		return false, errors.New("unable to set CheckForBootstrapSuccess. the container hosting this machine does not exists")
 	}
 
 	var outErr bytes.Buffer
 	var outStd bytes.Buffer
-	cmd := m.container.Commander.Command("test", "-f", "/run/cluster-api/bootstrap-success.complete")
+	cmd := m.container.Commander.Command("/bin/sh", "-c", "test -f /run/cluster-api/capd.bootstrap.started && echo \"true\" || echo \"false\"")
 	cmd.SetStderr(&outErr)
 	cmd.SetStdout(&outStd)
 	if err := cmd.Run(ctx); err != nil {
-		if logResult {
-			log.Info("Failed running command", "command", "test -f /run/cluster-api/bootstrap-success.complete", "stdout", outStd.String(), "stderr", outErr.String())
-		}
-		return errors.Wrap(err, "failed to run bootstrap check")
+		return false, errors.Wrap(err, "failed to run bootstrap check")
 	}
-	return nil
-}
-
-// SetNodeProviderID sets the docker provider ID for the kubernetes node.
-func (m *Machine) SetNodeProviderID(ctx context.Context, c client.Client) error {
-	log := ctrl.LoggerFrom(ctx)
-
-	dockerNode, err := m.getDockerNode(ctx)
-	if err != nil {
-		return errors.Wrapf(err, "unable to set NodeProviderID. error getting a kubectl node")
-	}
-	if !dockerNode.IsRunning() {
-		return errors.Wrapf(ContainerNotRunningError{Name: dockerNode.Name}, "unable to set NodeProviderID")
-	}
-
-	node := &corev1.Node{}
-	if err = c.Get(ctx, apimachinerytypes.NamespacedName{Name: m.ContainerName()}, node); err != nil {
-		return errors.Wrap(err, "failed to retrieve node")
-	}
-
-	log.Info("Setting Kubernetes node providerID")
-
-	patchHelper, err := patch.NewHelper(node, c)
-	if err != nil {
-		return err
-	}
-
-	node.Spec.ProviderID = m.ProviderID()
-
-	if err = patchHelper.Patch(ctx, node); err != nil {
-		return errors.Wrap(err, "failed to set providerID")
-	}
-
-	return nil
-}
-
-// CloudProviderNodePatch performs the tasks that would normally be down by an external cloud provider.
-// 1) For all CAPD Nodes it sets the ProviderID on the Kubernetes Node.
-// 2) If the cloudProviderTaint is set it updates the addresses in the Kubernetes Node `.status.addresses`.
-// 3) If the cloudProviderTaint is set it removes it to inform Kubernetes that this Node is now initialized.
-func (m *Machine) CloudProviderNodePatch(ctx context.Context, c client.Client, dockerMachine *infrav1.DockerMachine) error {
-	log := ctrl.LoggerFrom(ctx)
-
-	dockerNode, err := m.getDockerNode(ctx)
-	if err != nil {
-		return errors.Wrapf(err, "unable to complete Docker Cloud Provider tasks. Error getting a docker node")
-	}
-	if !dockerNode.IsRunning() {
-		return errors.Wrapf(ContainerNotRunningError{Name: dockerNode.Name}, "unable to complete Docker Cloud Provider tasks")
-	}
-
-	node := &corev1.Node{}
-	if err = c.Get(ctx, apimachinerytypes.NamespacedName{Name: m.ContainerName()}, node); err != nil {
-		return errors.Wrap(err, "unable to complete Docker Cloud Provider tasks: failed to retrieve node")
-	}
-
-	patchHelper, err := patch.NewHelper(node, c)
-	if err != nil {
-		return err
-	}
-
-	// 1) Set the providerID on the node.
-	log.Info("Setting Kubernetes node providerID")
-	node.Spec.ProviderID = m.ProviderID()
-
-	// If the node is managed by an external cloud provider - e.g. in dualstack tests - add the
-	// machine addresses on the node and remove the cloudProviderTaint.
-	if taints.HasTaint(node.Spec.Taints, cloudProviderTaint) {
-		// The machine addresses must retain their order - i.e. new addresses should only be appended to the list.
-		// This is what Kubelet expects when setting new IPs for pods using the host network.
-		nodeAddressMap := map[corev1.NodeAddress]bool{}
-		for _, addr := range node.Status.Addresses {
-			nodeAddressMap[addr] = true
-		}
-		log.Info("Setting Kubernetes node IP Addresses")
-		for _, addr := range dockerMachine.Status.Addresses {
-			if _, ok := nodeAddressMap[corev1.NodeAddress{Address: addr.Address, Type: corev1.NodeAddressType(addr.Type)}]; ok {
-				continue
-			}
-			// Set the addresses in the Node `.status.addresses`
-			// Only add "InternalIP" type addresses.
-			// Node "ExternalIP" addresses are not well defined in Kubernetes across different cloud providers.
-			// This keeps parity with what is done for dualstack nodes in Kind.
-			if addr.Type != clusterv1.MachineInternalIP {
-				continue
-			}
-			node.Status.Addresses = append(node.Status.Addresses, corev1.NodeAddress{
-				Type:    corev1.NodeAddressType(addr.Type),
-				Address: addr.Address,
-			})
-		}
-		// R3) emove the cloud provider taint on the node - if it exists - to initialize it.
-		if taints.RemoveNodeTaint(node, cloudProviderTaint) {
-			log.Info("Removing the cloudprovider taint to initialize node")
-		}
-	}
-
-	return patchHelper.Patch(ctx, node)
-}
-
-func (m *Machine) getDockerNode(ctx context.Context) (*types.Node, error) {
-	// collect info about the existing nodes
-	filters := container.FilterBuilder{}
-	filters.AddKeyNameValue(filterLabel, clusterLabelKey, m.cluster)
-
-	dockerNodes, err := listContainers(ctx, filters)
-	if err != nil {
-		return nil, errors.WithStack(err)
-	}
-	// Return the node matching the current machine, required to patch itself using its kubelet config
-	for _, node := range dockerNodes {
-		if node.Name == m.container.Name {
-			return node, nil
-		}
-	}
-
-	return nil, fmt.Errorf("there are no Docker nodes matching the container name")
+	return strings.Contains(outStd.String(), "true"), nil
 }
 
 // Delete deletes a docker container hosting a Kubernetes node.
@@ -546,11 +429,16 @@ func (m *Machine) Delete(ctx context.Context) error {
 		if err := m.container.Delete(ctx); err != nil {
 			return err
 		}
+
+		m.container = nil
 	}
 	return nil
 }
 
-func logContainerDebugInfo(ctx context.Context, log logr.Logger, name string) {
+// LogContainerDebugInfo logs additional debug info for the container.
+func (m *Machine) LogContainerDebugInfo(ctx context.Context) {
+	log := ctrl.LoggerFrom(ctx)
+
 	containerRuntime, err := container.RuntimeFrom(ctx)
 	if err != nil {
 		log.Error(err, "Failed to connect to container runtime")
@@ -565,10 +453,10 @@ func logContainerDebugInfo(ctx context.Context, log logr.Logger, name string) {
 	debugCtx = container.RuntimeInto(debugCtx, containerRuntime)
 
 	var buffer bytes.Buffer
-	err = containerRuntime.ContainerDebugInfo(debugCtx, name, &buffer)
+	err = containerRuntime.ContainerDebugInfo(debugCtx, m.Name(), &buffer)
 	if err != nil {
-		log.Error(err, "Failed to get logs from the machine container")
+		log.Error(err, "Failed to get logs from container")
 		return
 	}
-	log.Info("Got logs from the machine container", "output", strings.ReplaceAll(buffer.String(), "\\n", "\n"))
+	log.Info("Debug info from the container", "info", strings.ReplaceAll(buffer.String(), "\\n", "\n"))
 }

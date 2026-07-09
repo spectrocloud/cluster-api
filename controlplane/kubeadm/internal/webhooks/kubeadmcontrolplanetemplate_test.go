@@ -19,48 +19,18 @@ package webhooks
 import (
 	"strings"
 	"testing"
-	"time"
 
 	. "github.com/onsi/gomega"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	utilfeature "k8s.io/component-base/featuregate/testing"
+	"k8s.io/utils/ptr"
 
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
-	bootstrapv1 "sigs.k8s.io/cluster-api/bootstrap/kubeadm/api/v1beta1"
-	controlplanev1 "sigs.k8s.io/cluster-api/controlplane/kubeadm/api/v1beta1"
+	bootstrapv1 "sigs.k8s.io/cluster-api/api/bootstrap/kubeadm/v1beta2"
+	controlplanev1 "sigs.k8s.io/cluster-api/api/controlplane/kubeadm/v1beta2"
+	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/cluster-api/feature"
-	"sigs.k8s.io/cluster-api/internal/webhooks/util"
 )
-
-func TestKubeadmControlPlaneTemplateDefault(t *testing.T) {
-	utilfeature.SetFeatureGateDuringTest(t, feature.Gates, feature.ClusterTopology, true)
-
-	g := NewWithT(t)
-
-	kcpTemplate := &controlplanev1.KubeadmControlPlaneTemplate{
-		ObjectMeta: metav1.ObjectMeta{
-			Namespace: "foo",
-		},
-		Spec: controlplanev1.KubeadmControlPlaneTemplateSpec{
-			Template: controlplanev1.KubeadmControlPlaneTemplateResource{
-				Spec: controlplanev1.KubeadmControlPlaneTemplateResourceSpec{
-					MachineTemplate: &controlplanev1.KubeadmControlPlaneTemplateMachineTemplate{
-						NodeDrainTimeout: &metav1.Duration{Duration: 10 * time.Second},
-					},
-				},
-			},
-		},
-	}
-	updateDefaultingValidationKCPTemplate := kcpTemplate.DeepCopy()
-	updateDefaultingValidationKCPTemplate.Spec.Template.Spec.MachineTemplate.NodeDrainTimeout = &metav1.Duration{Duration: 20 * time.Second}
-	webhook := &KubeadmControlPlaneTemplate{}
-	t.Run("for KubeadmControlPlaneTemplate", util.CustomDefaultValidateTest(ctx, updateDefaultingValidationKCPTemplate, webhook))
-	g.Expect(webhook.Default(ctx, kcpTemplate)).To(Succeed())
-
-	g.Expect(kcpTemplate.Spec.Template.Spec.KubeadmConfigSpec.Format).To(Equal(bootstrapv1.CloudConfig))
-	g.Expect(kcpTemplate.Spec.Template.Spec.RolloutStrategy.Type).To(Equal(controlplanev1.RollingUpdateStrategyType))
-	g.Expect(kcpTemplate.Spec.Template.Spec.RolloutStrategy.RollingUpdate.MaxSurge.IntVal).To(Equal(int32(1)))
-}
 
 func TestKubeadmControlPlaneTemplateValidationFeatureGateEnabled(t *testing.T) {
 	utilfeature.SetFeatureGateDuringTest(t, feature.Gates, feature.ClusterTopology, true)
@@ -76,8 +46,12 @@ func TestKubeadmControlPlaneTemplateValidationFeatureGateEnabled(t *testing.T) {
 			Spec: controlplanev1.KubeadmControlPlaneTemplateSpec{
 				Template: controlplanev1.KubeadmControlPlaneTemplateResource{
 					Spec: controlplanev1.KubeadmControlPlaneTemplateResourceSpec{
-						MachineTemplate: &controlplanev1.KubeadmControlPlaneTemplateMachineTemplate{
-							NodeDrainTimeout: &metav1.Duration{Duration: time.Second},
+						MachineTemplate: controlplanev1.KubeadmControlPlaneTemplateMachineTemplate{
+							Spec: controlplanev1.KubeadmControlPlaneTemplateMachineTemplateSpec{
+								Deletion: controlplanev1.KubeadmControlPlaneTemplateMachineTemplateDeletionSpec{
+									NodeDrainTimeoutSeconds: ptr.To(int32(1)),
+								},
+							},
 						},
 					},
 				},
@@ -103,8 +77,12 @@ func TestKubeadmControlPlaneTemplateValidationFeatureGateDisabled(t *testing.T) 
 			Spec: controlplanev1.KubeadmControlPlaneTemplateSpec{
 				Template: controlplanev1.KubeadmControlPlaneTemplateResource{
 					Spec: controlplanev1.KubeadmControlPlaneTemplateResourceSpec{
-						MachineTemplate: &controlplanev1.KubeadmControlPlaneTemplateMachineTemplate{
-							NodeDrainTimeout: &metav1.Duration{Duration: time.Second},
+						MachineTemplate: controlplanev1.KubeadmControlPlaneTemplateMachineTemplate{
+							Spec: controlplanev1.KubeadmControlPlaneTemplateMachineTemplateSpec{
+								Deletion: controlplanev1.KubeadmControlPlaneTemplateMachineTemplateDeletionSpec{
+									NodeDrainTimeoutSeconds: ptr.To(int32(1)),
+								},
+							},
 						},
 					},
 				},
@@ -134,7 +112,7 @@ func TestKubeadmControlPlaneTemplateValidationMetadata(t *testing.T) {
 						},
 					},
 					Spec: controlplanev1.KubeadmControlPlaneTemplateResourceSpec{
-						MachineTemplate: &controlplanev1.KubeadmControlPlaneTemplateMachineTemplate{
+						MachineTemplate: controlplanev1.KubeadmControlPlaneTemplateMachineTemplate{
 							ObjectMeta: clusterv1.ObjectMeta{
 								Labels: map[string]string{
 									"foo":          "$invalid-key",
@@ -164,8 +142,12 @@ func TestKubeadmControlPlaneTemplateUpdateValidation(t *testing.T) {
 			Spec: controlplanev1.KubeadmControlPlaneTemplateSpec{
 				Template: controlplanev1.KubeadmControlPlaneTemplateResource{
 					Spec: controlplanev1.KubeadmControlPlaneTemplateResourceSpec{
-						MachineTemplate: &controlplanev1.KubeadmControlPlaneTemplateMachineTemplate{
-							NodeDrainTimeout: &metav1.Duration{Duration: time.Duration(10) * time.Minute},
+						MachineTemplate: controlplanev1.KubeadmControlPlaneTemplateMachineTemplate{
+							Spec: controlplanev1.KubeadmControlPlaneTemplateMachineTemplateSpec{
+								Deletion: controlplanev1.KubeadmControlPlaneTemplateMachineTemplateDeletionSpec{
+									NodeDrainTimeoutSeconds: ptr.To(int32(10 * 60)),
+								},
+							},
 						},
 					},
 				},
@@ -179,8 +161,12 @@ func TestKubeadmControlPlaneTemplateUpdateValidation(t *testing.T) {
 							// Only this field is different, but defaulting will set it as well, so this should pass the immutability check.
 							Format: bootstrapv1.CloudConfig,
 						},
-						MachineTemplate: &controlplanev1.KubeadmControlPlaneTemplateMachineTemplate{
-							NodeDrainTimeout: &metav1.Duration{Duration: time.Duration(10) * time.Minute},
+						MachineTemplate: controlplanev1.KubeadmControlPlaneTemplateMachineTemplate{
+							Spec: controlplanev1.KubeadmControlPlaneTemplateMachineTemplateSpec{
+								Deletion: controlplanev1.KubeadmControlPlaneTemplateMachineTemplateDeletionSpec{
+									NodeDrainTimeoutSeconds: ptr.To(int32(10 * 60)),
+								},
+							},
 						},
 					},
 				},
@@ -197,8 +183,12 @@ func TestKubeadmControlPlaneTemplateUpdateValidation(t *testing.T) {
 			Spec: controlplanev1.KubeadmControlPlaneTemplateSpec{
 				Template: controlplanev1.KubeadmControlPlaneTemplateResource{
 					Spec: controlplanev1.KubeadmControlPlaneTemplateResourceSpec{
-						MachineTemplate: &controlplanev1.KubeadmControlPlaneTemplateMachineTemplate{
-							NodeDrainTimeout: &metav1.Duration{Duration: time.Duration(10) * time.Minute},
+						MachineTemplate: controlplanev1.KubeadmControlPlaneTemplateMachineTemplate{
+							Spec: controlplanev1.KubeadmControlPlaneTemplateMachineTemplateSpec{
+								Deletion: controlplanev1.KubeadmControlPlaneTemplateMachineTemplateDeletionSpec{
+									NodeDrainTimeoutSeconds: ptr.To(int32(10 * 60)),
+								},
+							},
 						},
 					},
 				},
@@ -216,8 +206,12 @@ func TestKubeadmControlPlaneTemplateUpdateValidation(t *testing.T) {
 								"new-cmd",
 							},
 						},
-						MachineTemplate: &controlplanev1.KubeadmControlPlaneTemplateMachineTemplate{
-							NodeDrainTimeout: &metav1.Duration{Duration: time.Duration(10) * time.Minute},
+						MachineTemplate: controlplanev1.KubeadmControlPlaneTemplateMachineTemplate{
+							Spec: controlplanev1.KubeadmControlPlaneTemplateMachineTemplateSpec{
+								Deletion: controlplanev1.KubeadmControlPlaneTemplateMachineTemplateDeletionSpec{
+									NodeDrainTimeoutSeconds: ptr.To(int32(10 * 60)),
+								},
+							},
 						},
 					},
 				},
@@ -227,6 +221,38 @@ func TestKubeadmControlPlaneTemplateUpdateValidation(t *testing.T) {
 		warnings, err := webhook.ValidateUpdate(ctx, oldKCPTemplate, newKCPTemplate)
 		g.Expect(err).To(HaveOccurred())
 		g.Expect(err.Error()).To(ContainSubstring("KubeadmControlPlaneTemplate spec.template.spec field is immutable"))
+		g.Expect(warnings).To(BeEmpty())
+	})
+	t.Run("update KubeadmControlPlaneTemplate should pass when transitioning from the previously defaulted rolloutStrategy to an unset rolloutStrategy", func(t *testing.T) {
+		g := NewWithT(t)
+		oldKCPTemplate := &controlplanev1.KubeadmControlPlaneTemplate{
+			Spec: controlplanev1.KubeadmControlPlaneTemplateSpec{
+				Template: controlplanev1.KubeadmControlPlaneTemplateResource{
+					Spec: controlplanev1.KubeadmControlPlaneTemplateResourceSpec{
+						Rollout: controlplanev1.KubeadmControlPlaneRolloutSpec{
+							Strategy: controlplanev1.KubeadmControlPlaneRolloutStrategy{
+								Type: controlplanev1.RollingUpdateStrategyType,
+								RollingUpdate: controlplanev1.KubeadmControlPlaneRolloutStrategyRollingUpdate{
+									MaxSurge: ptr.To(intstr.FromInt32(1)),
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+		newKCPTemplate := &controlplanev1.KubeadmControlPlaneTemplate{
+			Spec: controlplanev1.KubeadmControlPlaneTemplateSpec{
+				Template: controlplanev1.KubeadmControlPlaneTemplateResource{
+					Spec: controlplanev1.KubeadmControlPlaneTemplateResourceSpec{
+						Rollout: controlplanev1.KubeadmControlPlaneRolloutSpec{},
+					},
+				},
+			},
+		}
+		webhook := &KubeadmControlPlaneTemplate{}
+		warnings, err := webhook.ValidateUpdate(ctx, oldKCPTemplate, newKCPTemplate)
+		g.Expect(err).ToNot(HaveOccurred())
 		g.Expect(warnings).To(BeEmpty())
 	})
 }

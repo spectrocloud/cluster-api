@@ -25,7 +25,7 @@ import (
 	utilfeature "k8s.io/component-base/featuregate/testing"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
+	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/cluster-api/feature"
 	"sigs.k8s.io/cluster-api/util/test/builder"
 )
@@ -74,7 +74,7 @@ func TestClusterClassWebhook_Succeed_Create(t *testing.T) {
 		WithWorkerMachineDeploymentClasses(
 			*builder.MachineDeploymentClass("md1").
 				WithInfrastructureTemplate(
-					builder.InfrastructureMachineTemplate(ns.Name, "OLD_INFRA").Build()).
+					builder.InfrastructureMachineTemplate(ns.Name, "old-infra").Build()).
 				WithBootstrapTemplate(
 					builder.BootstrapTemplate(ns.Name, bootstrapTemplateName1).Build()).
 				Build(),
@@ -212,7 +212,7 @@ func TestClusterWebhook_Succeed_Update(t *testing.T) {
 		actualClusterClass.Spec.Workers.MachineDeployments[1],
 	}
 	// Change the template used in the ClusterClass to a compatible alternative (Only name is changed).
-	actualClusterClass.Spec.Infrastructure.Ref.Name = infrastructureClusterTemplateName2
+	actualClusterClass.Spec.Infrastructure.TemplateRef.Name = infrastructureClusterTemplateName2
 
 	// Attempt to update the ClusterClass with the above changes.
 	// Expect no error here as the updates are compatible with the current Clusters using the ClusterClass.

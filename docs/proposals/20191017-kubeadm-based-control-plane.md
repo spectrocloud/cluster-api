@@ -131,7 +131,7 @@ Non-Goals listed in this document are intended to scope bound the current v1alph
 - To manage etcd clusters in any topology other than stacked etcd (externally managed etcd clusters can still be leveraged).
 - To address disaster recovery constraints, e.g. restoring a control plane from 0 replicas using a filesystem or volume snapshot copy of data persisted in etcd.
 - To support rollbacks, as there is no data store rollback guarantee for Kubernetes. Consumers should perform backups of the cluster prior to performing potentially destructive operations.
-- To mutate the configuration of live, running clusters (e.g. changing api-server flags), as this is the responsibility of the [component configuration working group](https://github.com/orgs/kubernetes/projects/26).
+- To mutate the configuration of live, running clusters (e.g. changing api-server flags), as this is the responsibility of the `component configuration working group`.
 - To provide configuration of external cloud providers (i.e. the [cloud-controller-manager](https://kubernetes.io/docs/tasks/administer-cluster/running-cloud-controller/)). This is deferred to kubeadm.
 - To provide CNI configuration. This is deferred to external, higher level tooling.
 - To provide the upgrade logic to handle changes to infrastructure (networks, firewalls etc…) that may need to be done to support a control plane on a newer version of Kubernetes (e.g. a cloud controller manager requires updated permissions against infrastructure APIs). We expect the work on [add-on components](https://git.k8s.io/community/sig-cluster-lifecycle#cluster-addons) to help to resolve some of these issues.
@@ -417,7 +417,7 @@ spec:
 
 ##### KubeadmControlPlane rollout
 
-KubeadmControlPlane rollout operations rely on [scale up](#scale up) and [scale down](#scale_down) which are be blocked based on Etcd and control plane preflight checks.
+KubeadmControlPlane rollout operations rely on [scale up](#scale-up) and [scale down](#scale-down) which are be blocked based on Etcd and control plane preflight checks.
   - See [Preflight checks](#preflight-checks) below.
 
 KubeadmControlPlane rollout is triggered by:
@@ -425,18 +425,18 @@ KubeadmControlPlane rollout is triggered by:
   - Changes to Version
   - Changes to the kubeadmConfigSpec
   - Changes to the infrastructureRef
-  - The `rolloutAfter` field, which can be set to a specific time in the future
+  - The `spec.rollout.after` field, which can be set to a specific time in the future
     - Set to `nil` or the zero value of `time.Time` if no upgrades are desired
     - An upgrade will run after that timestamp is passed
     - Good for scheduling upgrades/SLOs
-    - Set `rolloutAfter` to now (in RFC3339 form) if an upgrade is required immediately
+    - Set `spec.rollout.after` to now (in RFC3339 form) if an upgrade is required immediately
 
 - The controller should tolerate the manual or automatic removal of a replica during the upgrade process. A replica that fails during the upgrade may block the completion of the upgrade. Removal or other remedial action may be necessary to allow the upgrade to complete.
 
 - In order to determine if a Machine to be rolled out, KCP implements the following:
     - The infrastructureRef link used by each machine at creation time is stored in annotations at machine level.
     - The kubeadmConfigSpec used by each machine at creation time is stored in annotations at machine level.
-        - If the annotation is not present (machine is either old or adopted), we won't roll out on any possible changes made in KCP's ClusterConfiguration given that we don't have enough information to make a decision. Users should use KCP.Spec.RolloutAfter field to force a rollout in this case.
+        - If the annotation is not present (machine is either old or adopted), we won't roll out on any possible changes made in KCP's ClusterConfiguration given that we don't have enough information to make a decision. Users should use `KCP.spec.rollout.after` field to force a rollout in this case.
 
 ##### Rolling update strategy
 

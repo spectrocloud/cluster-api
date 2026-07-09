@@ -19,6 +19,7 @@ package cluster
 import (
 	"context"
 	_ "embed"
+	"slices"
 	"time"
 
 	"github.com/blang/semver/v4"
@@ -43,12 +44,6 @@ const (
 	waitCertManagerInterval = 1 * time.Second
 
 	certManagerNamespace = "cert-manager"
-
-	// This is maintained only for supporting upgrades from cluster created with clusterctl v1alpha3.
-	//
-	// Deprecated: Use clusterctlv1.CertManagerVersionAnnotation instead.
-	// TODO: Remove once upgrades from v1alpha3 are no longer supported.
-	certManagerVersionAnnotation = "certmanager.clusterctl.cluster.x-k8s.io/version"
 )
 
 var (
@@ -347,7 +342,7 @@ func (cm *certManagerClient) shouldUpgrade(desiredVersion string, objs, installO
 	// the number of objects when version of objects are equal
 	relevantObjs := []unstructured.Unstructured{}
 	for _, o := range objs {
-		if !(o.GetKind() == "Endpoints" || o.GetKind() == "EndpointSlice") {
+		if o.GetKind() != "Endpoints" && o.GetKind() != "EndpointSlice" {
 			relevantObjs = append(relevantObjs, o)
 		}
 	}
@@ -358,13 +353,9 @@ func (cm *certManagerClient) shouldUpgrade(desiredVersion string, objs, installO
 		// if there is no version annotation, this means the obj is cert-manager v0.11.0 (installed with older version of clusterctl)
 		objVersion, ok := obj.GetAnnotations()[clusterctlv1.CertManagerVersionAnnotation]
 		if !ok {
-			// try the old annotation name
-			objVersion, ok = obj.GetAnnotations()[certManagerVersionAnnotation]
-			if !ok {
-				currentVersion = "v0.11.0"
-				needUpgrade = true
-				break
-			}
+			currentVersion = "v0.11.0"
+			needUpgrade = true
+			break
 		}
 
 		objSemVersion, err := semver.ParseTolerant(objVersion)
@@ -380,10 +371,16 @@ func (cm *certManagerClient) shouldUpgrade(desiredVersion string, objs, installO
 			currentVersion = objVersion
 			needUpgrade = true
 		case c == 0:
-			// The installed version is equal to the desired version. Upgrade is required only if the number
-			// of available objects and objects to install differ. This would act as a re-install.
+			// The installed version is equal to the desired version. Upgrade is required if the number
+			// of available objects and objects to install differ or if the images differ. This would act as a re-install.
 			currentVersion = objVersion
 			needUpgrade = len(relevantObjs) != len(installObjs)
+			if !needUpgrade {
+				needUpgrade, err = certManagerImagesDiffer(relevantObjs, installObjs)
+				if err != nil {
+					return "", false, err
+				}
+			}
 		case c > 0:
 			// The installed version is greater than the desired version. Upgrade is not required.
 			currentVersion = objVersion
@@ -394,6 +391,28 @@ func (cm *certManagerClient) shouldUpgrade(desiredVersion string, objs, installO
 		}
 	}
 	return currentVersion, needUpgrade, nil
+}
+
+func certManagerImagesDiffer(objs, installObjs []unstructured.Unstructured) (bool, error) {
+	currentImages, err := util.InspectImages(objs)
+	if err != nil {
+		return false, err
+	}
+	desiredImages, err := util.InspectImages(installObjs)
+	if err != nil {
+		return false, err
+	}
+
+	slices.Sort(currentImages)
+	slices.Sort(desiredImages)
+
+	if len(currentImages) == 0 && len(desiredImages) == 0 {
+		return false, nil
+	}
+	if len(currentImages) != len(desiredImages) {
+		return true, nil
+	}
+	return !slices.Equal(currentImages, desiredImages), nil
 }
 
 func (cm *certManagerClient) getWaitTimeout() time.Duration {

@@ -30,7 +30,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
 
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
+	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/cluster-api/test/framework"
 )
 
@@ -43,7 +43,6 @@ var _ = Describe("When testing Node drain", func() {
 			ArtifactFolder:         artifactFolder,
 			SkipCleanup:            skipCleanup,
 			Flavor:                 ptr.To("topology"),
-			InfrastructureProvider: ptr.To("docker"),
 			VerifyNodeVolumeDetach: true,
 			CreateAdditionalResources: func(ctx context.Context, clusterProxy framework.ClusterProxy, cluster *clusterv1.Cluster) {
 				workloadClusterClient := clusterProxy.GetWorkloadCluster(ctx, cluster.Namespace, cluster.Name).GetClient()

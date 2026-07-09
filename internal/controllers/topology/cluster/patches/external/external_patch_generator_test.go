@@ -21,15 +21,14 @@ import (
 	"testing"
 
 	. "github.com/onsi/gomega"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	utilfeature "k8s.io/component-base/featuregate/testing"
-	"k8s.io/utils/ptr"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
-	runtimev1 "sigs.k8s.io/cluster-api/exp/runtime/api/v1alpha1"
-	runtimecatalog "sigs.k8s.io/cluster-api/exp/runtime/catalog"
+	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
+	runtimecatalog "sigs.k8s.io/cluster-api/api/runtime/catalog"
+	runtimehooksv1 "sigs.k8s.io/cluster-api/api/runtime/hooks/v1alpha1"
+	runtimev1 "sigs.k8s.io/cluster-api/api/runtime/v1beta2"
 	runtimeclient "sigs.k8s.io/cluster-api/exp/runtime/client"
-	runtimehooksv1 "sigs.k8s.io/cluster-api/exp/runtime/hooks/api/v1alpha1"
 	"sigs.k8s.io/cluster-api/feature"
 )
 
@@ -50,11 +49,11 @@ func TestExternalPatchGenerator_Generate(t *testing.T) {
 			patch: &clusterv1.ClusterClassPatch{
 				Name:        "",
 				Description: "",
-				EnabledIf:   nil,
+				EnabledIf:   "",
 				Definitions: nil,
 				External: &clusterv1.ExternalPatchDefinition{
-					GenerateExtension: ptr.To("test-generate-extension"),
-					Settings:          nil,
+					GeneratePatchesExtension: "test-generate-extension",
+					Settings:                 nil,
 				},
 			},
 			request: &runtimehooksv1.GeneratePatchesRequest{},
@@ -69,10 +68,10 @@ func TestExternalPatchGenerator_Generate(t *testing.T) {
 			patch: &clusterv1.ClusterClassPatch{
 				Name:        "",
 				Description: "",
-				EnabledIf:   nil,
+				EnabledIf:   "",
 				Definitions: nil,
 				External: &clusterv1.ExternalPatchDefinition{
-					GenerateExtension: ptr.To("test-generate-extension"),
+					GeneratePatchesExtension: "test-generate-extension",
 					Settings: map[string]string{
 						"key1": "value1",
 					},
@@ -125,11 +124,15 @@ func (f *fakeRuntimeClient) Unregister(_ *runtimev1.ExtensionConfig) error {
 	panic("implement me")
 }
 
-func (f *fakeRuntimeClient) CallAllExtensions(_ context.Context, _ runtimecatalog.Hook, _ metav1.Object, _ runtimehooksv1.RequestObject, _ runtimehooksv1.ResponseObject) error {
+func (f *fakeRuntimeClient) GetAllExtensions(_ context.Context, _ runtimecatalog.Hook, _ client.Object) ([]string, error) {
 	panic("implement me")
 }
 
-func (f *fakeRuntimeClient) CallExtension(_ context.Context, _ runtimecatalog.Hook, _ metav1.Object, _ string, request runtimehooksv1.RequestObject, _ runtimehooksv1.ResponseObject, _ ...runtimeclient.CallExtensionOption) error {
+func (f *fakeRuntimeClient) CallAllExtensions(_ context.Context, _ runtimecatalog.Hook, _ client.Object, _ runtimehooksv1.RequestObject, _ runtimehooksv1.ResponseObject) error {
+	panic("implement me")
+}
+
+func (f *fakeRuntimeClient) CallExtension(_ context.Context, _ runtimecatalog.Hook, _ client.Object, _ string, request runtimehooksv1.RequestObject, _ runtimehooksv1.ResponseObject, _ ...runtimeclient.CallExtensionOption) error {
 	// Keep a copy of the request object.
 	// We keep a copy because the request is modified after the call is made. So we keep a copy to perform assertions.
 	f.callExtensionRequest = request.DeepCopyObject().(runtimehooksv1.RequestObject)

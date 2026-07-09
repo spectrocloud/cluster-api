@@ -24,8 +24,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
-	"sigs.k8s.io/cluster-api/util/conversion"
+	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
+	conversionutil "sigs.k8s.io/cluster-api/util/conversion"
 )
 
 func Test_cleanupManagedFieldsAndAnnotation(t *testing.T) {
@@ -56,7 +56,7 @@ func Test_cleanupManagedFieldsAndAnnotation(t *testing.T) {
 		{
 			name: "filter out conversion annotation",
 			obj: newObjectBuilder().
-				WithAnnotation(conversion.DataAnnotation, "").
+				WithAnnotation(conversionutil.DataAnnotation, "").
 				Build(),
 			wantErr: false,
 			want: newObjectBuilder().
@@ -177,7 +177,7 @@ func (b objectBuilder) WithManagedFieldsEntry(manager, subresource string, opera
 		Manager:     manager,
 		Operation:   operation,
 		Subresource: subresource,
-		FieldsV1:    &metav1.FieldsV1{Raw: fieldsV1},
+		FieldsV1:    metav1.NewFieldsV1(string(fieldsV1)),
 		Time:        time,
 	})
 	b.u.SetManagedFields(managedFields)

@@ -4,16 +4,24 @@ Cluster API now ships with a new experimental package that lives under the `exp/
 temporary location for features which will be moved to their permanent locations after graduation. Users can experiment with these features by enabling them using feature gates.
 
 Currently Cluster API has the following experimental features:
+* `ClusterTopology` (env var: `CLUSTER_TOPOLOGY`): [ClusterClass](./cluster-class/index.md)
+* `InPlaceUpdates` (env var: `EXP_IN_PLACE_UPDATES`):
+  * Allows users to execute changes on existing machines without deleting the Machine and creating a new one.
+  * See the [proposal](https://github.com/kubernetes-sigs/cluster-api/blob/main/docs/proposals/20240807-in-place-updates.md) for more details.
+* `KubeadmBootstrapFormatIgnition` (env var: `EXP_KUBEADM_BOOTSTRAP_FORMAT_IGNITION`): [Ignition](./ignition.md)
 * `MachinePool` (env var: `EXP_MACHINE_POOL`): [MachinePools](./machine-pools.md)
 * `MachineSetPreflightChecks` (env var: `EXP_MACHINE_SET_PREFLIGHT_CHECKS`): [MachineSetPreflightChecks](./machineset-preflight-checks.md)
-* `PriorityQueue` (env var: `EXP_PRIORITY_QUEUE`): Enables the usage of the controller-runtime PriorityQueue: https://github.com/kubernetes-sigs/controller-runtime/issues/2374
+* `MachineTaintPropagation` (env var: `EXP_MACHINE_TAINT_PROPAGATION`):
+  * Allows in-place propagation of taints to nodes using the taint fields within Machines, MachineSets, and MachineDeployments.
+  * In future this feature is planned to also cover topology clusters and KCP. See the proposal [Propagating taints from Cluster API to Nodes](https://github.com/kubernetes-sigs/cluster-api/blob/main/docs/proposals/20250513-propogate-taints.md) for more information.
 * `MachineWaitForVolumeDetachConsiderVolumeAttachments` (env var: `EXP_MACHINE_WAITFORVOLUMEDETACH_CONSIDER_VOLUMEATTACHMENTS`):
   * During Machine drain the Machine controller waits for volumes to be detached. Per default, the controller considers
     `Nodes.status.volumesAttached` and `VolumesAttachments`. This feature flag allows to opt-out from considering `VolumeAttachments`.
     The feature gate was added to allow to opt-out in case unforeseen issues occur with `VolumeAttachments`.
-* `ClusterTopology` (env var: `CLUSTER_TOPOLOGY`): [ClusterClass](./cluster-class/index.md)
+* `PriorityQueue` (env var: `EXP_PRIORITY_QUEUE`): Enables the usage of the controller-runtime PriorityQueue: https://github.com/kubernetes-sigs/controller-runtime/issues/2374
+* `ReconcilerRateLimiting` (env var: `EXP_RECONCILER_RATE_LIMITING`): Enables reconciler rate-limiting: https://github.com/kubernetes-sigs/cluster-api/issues/13005
+  * Note: starting from CAPI v1.12.4 `ReconcilerRateLimiting` also requires `PriorityQueue`
 * `RuntimeSDK` (env var: `EXP_RUNTIME_SDK`): [RuntimeSDK](./runtime-sdk/index.md)
-* `KubeadmBootstrapFormatIgnition` (env var: `EXP_KUBEADM_BOOTSTRAP_FORMAT_IGNITION`): [Ignition](./ignition.md)
 
 ## Enabling Experimental Features for Management Clusters Started with clusterctl
 
@@ -92,8 +100,6 @@ Following controller manager deployments have to be edited in order to enable/di
   * [CAPD](https://cluster-api.sigs.k8s.io/reference/glossary.html?highlight=Providers#capd). Other [Infrastructure Providers](https://cluster-api.sigs.k8s.io/reference/glossary.html?highlight=Providers#infrastructure-provider)
     might also require this. Please consult the docs of the concrete [Infrastructure Provider](https://cluster-api.sigs.k8s.io/reference/providers#infrastructure)
     regarding this.
-
-  * [CAPI](https://cluster-api.sigs.k8s.io/reference/glossary.html?highlight=Gloss#capi).
 * [ClusterClass](./cluster-class/index.md):
   * [CAPI](https://cluster-api.sigs.k8s.io/reference/glossary.html?highlight=Gloss#capi).
   * [KCP](https://cluster-api.sigs.k8s.io/reference/glossary.html?highlight=Gloss#kcp).

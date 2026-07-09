@@ -28,7 +28,7 @@ import (
 
 	"github.com/adrg/xdg"
 	"github.com/blang/semver/v4"
-	"github.com/google/go-github/v53/github"
+	"github.com/google/go-github/v82/github"
 	"github.com/pkg/errors"
 	"golang.org/x/oauth2"
 	"sigs.k8s.io/yaml"
@@ -41,7 +41,7 @@ import (
 
 var (
 	// gitVersionRegEx matches git versions of style 0.3.7-45-c1aeccb679cd56
-	// see ./hack/version.sh for more info.
+	// see ./hack/scripts/release/version.sh for more info.
 	gitVersionRegEx = regexp.MustCompile(`(.*)-(\d+)-([0-9,a-f]{14})`)
 )
 
@@ -157,7 +157,7 @@ func (v *versionChecker) getLatestRelease(ctx context.Context) (*ReleaseInfo, er
 	// NOTE: local state file is ignored if older than 1d.
 	vs, err := readStateFile(v.versionFilePath)
 	if err != nil {
-		return nil, errors.Wrap(err, "unable to read version state file")
+		return nil, errors.Wrapf(err, "unable to read version state file %s", v.versionFilePath)
 	}
 	if vs != nil {
 		return &vs.LatestRelease, nil

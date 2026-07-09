@@ -37,26 +37,28 @@ import (
 	"k8s.io/klog/v2"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/yaml"
 
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
-	bootstrapv1 "sigs.k8s.io/cluster-api/bootstrap/kubeadm/api/v1beta1"
+	bootstrapv1 "sigs.k8s.io/cluster-api/api/bootstrap/kubeadm/v1beta2"
+	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/cluster-api/bootstrap/kubeadm/internal/cloudinit"
 	"sigs.k8s.io/cluster-api/bootstrap/kubeadm/internal/ignition"
 	"sigs.k8s.io/cluster-api/bootstrap/kubeadm/internal/locking"
 	kubeadmtypes "sigs.k8s.io/cluster-api/bootstrap/kubeadm/types"
+	"sigs.k8s.io/cluster-api/bootstrap/kubeadm/types/upstream"
 	bsutil "sigs.k8s.io/cluster-api/bootstrap/util"
 	"sigs.k8s.io/cluster-api/controllers/clustercache"
-	expv1 "sigs.k8s.io/cluster-api/exp/api/v1beta1"
+	"sigs.k8s.io/cluster-api/controllers/external"
 	"sigs.k8s.io/cluster-api/feature"
+	"sigs.k8s.io/cluster-api/internal/contract"
 	"sigs.k8s.io/cluster-api/internal/util/taints"
 	"sigs.k8s.io/cluster-api/util"
 	"sigs.k8s.io/cluster-api/util/conditions"
-	v1beta2conditions "sigs.k8s.io/cluster-api/util/conditions/v1beta2"
+	v1beta1conditions "sigs.k8s.io/cluster-api/util/conditions/deprecated/v1beta1"
+	capicontrollerutil "sigs.k8s.io/cluster-api/util/controller"
 	clog "sigs.k8s.io/cluster-api/util/log"
 	"sigs.k8s.io/cluster-api/util/patch"
 	"sigs.k8s.io/cluster-api/util/paused"
@@ -77,6 +79,7 @@ type InitLocker interface {
 
 // +kubebuilder:rbac:groups=bootstrap.cluster.x-k8s.io,resources=kubeadmconfigs;kubeadmconfigs/status;kubeadmconfigs/finalizers,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=cluster.x-k8s.io,resources=clusters;clusters/status;machinesets;machines;machines/status;machinepools;machinepools/status,verbs=get;list;watch
+// +kubebuilder:rbac:groups=controlplane.cluster.x-k8s.io,resources=kubeadmcontrolplanes,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=secrets;configmaps,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=core,resources=events,verbs=create;patch
 
@@ -84,8 +87,12 @@ type InitLocker interface {
 type KubeadmConfigReconciler struct {
 	Client              client.Client
 	SecretCachingClient client.Client
-	ClusterCache        clustercache.ClusterCache
-	KubeadmInitLock     InitLocker
+	// APIReader is used to read objects without caching them, e.g. the referenced control plane object when
+	// resolving the control plane version. This avoids setting up an informer (and its memory cost) for kinds
+	// like KubeadmControlPlane that the controller otherwise does not watch.
+	APIReader       client.Reader
+	ClusterCache    clustercache.ClusterCache
+	KubeadmInitLock InitLocker
 
 	// WatchFilterValue is the label value used to filter events prior to reconciliation.
 	WatchFilterValue string
@@ -116,43 +123,36 @@ func (r *KubeadmConfigReconciler) SetupWithManager(ctx context.Context, mgr ctrl
 	}
 
 	predicateLog := ctrl.LoggerFrom(ctx).WithValues("controller", "kubeadmconfig")
-	b := ctrl.NewControllerManagedBy(mgr).
+	b := capicontrollerutil.NewControllerManagedBy(mgr, predicateLog).
 		For(&bootstrapv1.KubeadmConfig{}).
 		WithOptions(options).
 		Watches(
 			&clusterv1.Machine{},
 			handler.EnqueueRequestsFromMapFunc(r.MachineToBootstrapMapFunc),
-			builder.WithPredicates(predicates.ResourceIsChanged(mgr.GetScheme(), predicateLog)),
 		).WithEventFilter(predicates.ResourceHasFilterLabel(mgr.GetScheme(), predicateLog, r.WatchFilterValue))
 
 	if feature.Gates.Enabled(feature.MachinePool) {
 		b = b.Watches(
-			&expv1.MachinePool{},
+			&clusterv1.MachinePool{},
 			handler.EnqueueRequestsFromMapFunc(r.MachinePoolToBootstrapMapFunc),
-			builder.WithPredicates(predicates.ResourceIsChanged(mgr.GetScheme(), predicateLog)),
 		)
 	}
 
 	b = b.Watches(
 		&clusterv1.Cluster{},
 		handler.EnqueueRequestsFromMapFunc(r.ClusterToKubeadmConfigs),
-		builder.WithPredicates(
-			predicates.All(mgr.GetScheme(), predicateLog,
-				predicates.ResourceIsChanged(mgr.GetScheme(), predicateLog),
-				predicates.ClusterPausedTransitionsOrInfrastructureReady(mgr.GetScheme(), predicateLog),
-				predicates.ResourceHasFilterLabel(mgr.GetScheme(), predicateLog, r.WatchFilterValue),
-			),
-		),
+		predicates.ClusterPausedTransitionsOrInfrastructureProvisioned(mgr.GetScheme(), predicateLog),
+		predicates.ResourceHasFilterLabel(mgr.GetScheme(), predicateLog, r.WatchFilterValue),
 	).WatchesRawSource(r.ClusterCache.GetClusterSource("kubeadmconfig", r.ClusterToKubeadmConfigs))
 
-	if err := b.Complete(r); err != nil {
+	if err := b.Complete(ctx, r); err != nil {
 		return errors.Wrap(err, "failed setting up with a controller manager")
 	}
 	return nil
 }
 
 // Reconcile handles KubeadmConfig events.
-func (r *KubeadmConfigReconciler) Reconcile(ctx context.Context, req ctrl.Request) (_ ctrl.Result, rerr error) {
+func (r *KubeadmConfigReconciler) Reconcile(ctx context.Context, req ctrl.Request) (retRes ctrl.Result, rerr error) {
 	log := ctrl.LoggerFrom(ctx)
 
 	// Look up the kubeadm config
@@ -194,11 +194,6 @@ func (r *KubeadmConfigReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	// Lookup the cluster the config owner is associated with
 	cluster, err := util.GetClusterByName(ctx, r.Client, configOwner.GetNamespace(), configOwner.ClusterName())
 	if err != nil {
-		if errors.Cause(err) == util.ErrNoCluster {
-			log.Info(fmt.Sprintf("%s does not belong to a cluster yet, waiting until it's part of a cluster", configOwner.GetKind()))
-			return ctrl.Result{}, nil
-		}
-
 		if apierrors.IsNotFound(err) {
 			log.Info("Cluster does not exist yet, waiting until it is created")
 			return ctrl.Result{}, nil
@@ -207,7 +202,13 @@ func (r *KubeadmConfigReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		return ctrl.Result{}, err
 	}
 
-	if isPaused, conditionChanged, err := paused.EnsurePausedCondition(ctx, r.Client, cluster, config); err != nil || isPaused || conditionChanged {
+	// Initialize the patch helper.
+	patchHelper, err := patch.NewHelper(config, r.Client)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+
+	if isPaused, requeue, err := paused.EnsurePausedCondition(ctx, r.Client, cluster, config); err != nil || isPaused || requeue {
 		return ctrl.Result{}, err
 	}
 
@@ -218,35 +219,29 @@ func (r *KubeadmConfigReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		Cluster:     cluster,
 	}
 
-	// Initialize the patch helper.
-	patchHelper, err := patch.NewHelper(config, r.Client)
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-
 	// Attempt to Patch the KubeadmConfig object and status after each reconciliation if no error occurs.
 	defer func() {
 		// always update the readyCondition; the summary is represented using the "1 of x completed" notation.
-		conditions.SetSummary(config,
-			conditions.WithConditions(
-				bootstrapv1.DataSecretAvailableCondition,
-				bootstrapv1.CertificatesAvailableCondition,
+		v1beta1conditions.SetSummary(config,
+			v1beta1conditions.WithConditions(
+				bootstrapv1.DataSecretAvailableV1Beta1Condition,
+				bootstrapv1.CertificatesAvailableV1Beta1Condition,
 			),
 		)
-		if err := v1beta2conditions.SetSummaryCondition(config, config, bootstrapv1.KubeadmConfigReadyV1Beta2Condition,
-			v1beta2conditions.ForConditionTypes{
-				bootstrapv1.KubeadmConfigDataSecretAvailableV1Beta2Condition,
-				bootstrapv1.KubeadmConfigCertificatesAvailableV1Beta2Condition,
+		if err := conditions.SetSummaryCondition(config, config, bootstrapv1.KubeadmConfigReadyCondition,
+			conditions.ForConditionTypes{
+				bootstrapv1.KubeadmConfigDataSecretAvailableCondition,
+				bootstrapv1.KubeadmConfigCertificatesAvailableCondition,
 			},
 			// Using a custom merge strategy to override reasons applied during merge and to ignore some
 			// info message so the ready condition aggregation in other resources is less noisy.
-			v1beta2conditions.CustomMergeStrategy{
-				MergeStrategy: v1beta2conditions.DefaultMergeStrategy(
+			conditions.CustomMergeStrategy{
+				MergeStrategy: conditions.DefaultMergeStrategy(
 					// Use custom reasons.
-					v1beta2conditions.ComputeReasonFunc(v1beta2conditions.GetDefaultComputeMergeReasonFunc(
-						bootstrapv1.KubeadmConfigNotReadyV1Beta2Reason,
-						bootstrapv1.KubeadmConfigReadyUnknownV1Beta2Reason,
-						bootstrapv1.KubeadmConfigReadyV1Beta2Reason,
+					conditions.ComputeReasonFunc(conditions.GetDefaultComputeMergeReasonFunc(
+						bootstrapv1.KubeadmConfigNotReadyReason,
+						bootstrapv1.KubeadmConfigReadyUnknownReason,
+						bootstrapv1.KubeadmConfigReadyReason,
 					)),
 				),
 			},
@@ -255,15 +250,16 @@ func (r *KubeadmConfigReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		}
 		// Patch ObservedGeneration only if the reconciliation completed successfully
 		patchOpts := []patch.Option{
-			patch.WithOwnedConditions{Conditions: []clusterv1.ConditionType{
-				clusterv1.ReadyCondition,
-				bootstrapv1.DataSecretAvailableCondition,
-				bootstrapv1.CertificatesAvailableCondition,
+			patch.WithOwnedV1Beta1Conditions{Conditions: []clusterv1.ConditionType{
+				clusterv1.ReadyV1Beta1Condition,
+				bootstrapv1.DataSecretAvailableV1Beta1Condition,
+				bootstrapv1.CertificatesAvailableV1Beta1Condition,
 			}},
-			patch.WithOwnedV1Beta2Conditions{Conditions: []string{
-				bootstrapv1.KubeadmConfigReadyV1Beta2Condition,
-				bootstrapv1.KubeadmConfigDataSecretAvailableV1Beta2Condition,
-				bootstrapv1.KubeadmConfigCertificatesAvailableV1Beta2Condition,
+			patch.WithOwnedConditions{Conditions: []string{
+				clusterv1.PausedCondition,
+				bootstrapv1.KubeadmConfigReadyCondition,
+				bootstrapv1.KubeadmConfigDataSecretAvailableCondition,
+				bootstrapv1.KubeadmConfigCertificatesAvailableCondition,
 			}},
 		}
 		if rerr == nil {
@@ -290,37 +286,58 @@ func (r *KubeadmConfigReconciler) reconcile(ctx context.Context, scope *Scope, c
 		return ctrl.Result{}, err
 	}
 	switch {
-	// Wait for the infrastructure to be ready.
-	case !cluster.Status.InfrastructureReady:
+	// Wait for the infrastructure to be provisioned.
+	case !ptr.Deref(cluster.Status.Initialization.InfrastructureProvisioned, false):
 		log.Info("Cluster infrastructure is not ready, waiting")
-		conditions.MarkFalse(config, bootstrapv1.DataSecretAvailableCondition, bootstrapv1.WaitingForClusterInfrastructureReason, clusterv1.ConditionSeverityInfo, "")
-		v1beta2conditions.Set(scope.Config, metav1.Condition{
-			Type:    bootstrapv1.KubeadmConfigDataSecretAvailableV1Beta2Condition,
+		v1beta1conditions.MarkFalse(config, bootstrapv1.DataSecretAvailableV1Beta1Condition, bootstrapv1.WaitingForClusterInfrastructureV1Beta1Reason, clusterv1.ConditionSeverityInfo, "")
+		conditions.Set(scope.Config, metav1.Condition{
+			Type:    bootstrapv1.KubeadmConfigDataSecretAvailableCondition,
 			Status:  metav1.ConditionFalse,
-			Reason:  bootstrapv1.KubeadmConfigDataSecretNotAvailableV1Beta2Reason,
+			Reason:  bootstrapv1.KubeadmConfigDataSecretNotAvailableReason,
 			Message: "Waiting for Cluster status.infrastructureReady to be true",
 		})
 		return ctrl.Result{}, nil
 	// Reconcile status for machines that already have a secret reference, but our status isn't up to date.
 	// This case solves the pivoting scenario (or a backup restore) which doesn't preserve the status subresource on objects.
-	case configOwner.DataSecretName() != nil && (!config.Status.Ready || config.Status.DataSecretName == nil):
-		config.Status.Ready = true
-		config.Status.DataSecretName = configOwner.DataSecretName()
-		conditions.MarkTrue(config, bootstrapv1.DataSecretAvailableCondition)
-		v1beta2conditions.Set(scope.Config, metav1.Condition{
-			Type:   bootstrapv1.KubeadmConfigDataSecretAvailableV1Beta2Condition,
+	case configOwner.DataSecretName() != nil && (!ptr.Deref(config.Status.Initialization.DataSecretCreated, false) || config.Status.DataSecretName == ""):
+		config.Status.Initialization.DataSecretCreated = ptr.To(true)
+		config.Status.DataSecretName = *configOwner.DataSecretName()
+		v1beta1conditions.MarkTrue(config, bootstrapv1.DataSecretAvailableV1Beta1Condition)
+		conditions.Set(scope.Config, metav1.Condition{
+			Type:   bootstrapv1.KubeadmConfigDataSecretAvailableCondition,
 			Status: metav1.ConditionTrue,
-			Reason: bootstrapv1.KubeadmConfigDataSecretAvailableV1Beta2Reason,
+			Reason: bootstrapv1.KubeadmConfigDataSecretAvailableReason,
+		})
+		conditions.Set(scope.Config, metav1.Condition{
+			Type:   bootstrapv1.KubeadmConfigCertificatesAvailableCondition,
+			Status: metav1.ConditionTrue,
+			Reason: bootstrapv1.KubeadmConfigCertificatesAvailableReason,
 		})
 		return ctrl.Result{}, nil
 	// Status is ready means a config has been generated.
-	case config.Status.Ready:
-		if config.Spec.JoinConfiguration != nil && config.Spec.JoinConfiguration.Discovery.BootstrapToken != nil {
+	// This also solves the upgrade scenario to a version which includes v1beta2 to ensure v1beta2 conditions are properly set.
+	case ptr.Deref(config.Status.Initialization.DataSecretCreated, false):
+		// Based on existing code paths status.Ready is only true if status.dataSecretName is set
+		// So we can assume that the DataSecret is available.
+		v1beta1conditions.MarkTrue(config, bootstrapv1.DataSecretAvailableV1Beta1Condition)
+		conditions.Set(scope.Config, metav1.Condition{
+			Type:   bootstrapv1.KubeadmConfigDataSecretAvailableCondition,
+			Status: metav1.ConditionTrue,
+			Reason: bootstrapv1.KubeadmConfigDataSecretAvailableReason,
+		})
+		// Same applies for the CertificatesAvailable, which must have been the case to generate
+		// the DataSecret.
+		conditions.Set(scope.Config, metav1.Condition{
+			Type:   bootstrapv1.KubeadmConfigCertificatesAvailableCondition,
+			Status: metav1.ConditionTrue,
+			Reason: bootstrapv1.KubeadmConfigCertificatesAvailableReason,
+		})
+		if config.Spec.JoinConfiguration.Discovery.BootstrapToken.IsDefined() {
 			if !configOwner.HasNodeRefs() {
 				// If the BootstrapToken has been generated for a join but the config owner has no nodeRefs,
 				// this indicates that the node has not yet joined and the token in the join config has not
 				// been consumed and it may need a refresh.
-				return r.refreshBootstrapTokenIfNeeded(ctx, config, cluster)
+				return r.refreshBootstrapTokenIfNeeded(ctx, config, cluster, scope)
 			}
 			if configOwner.IsMachinePool() {
 				// If the BootstrapToken has been generated and infrastructure is ready but the configOwner is a MachinePool,
@@ -333,7 +350,7 @@ func (r *KubeadmConfigReconciler) reconcile(ctx context.Context, scope *Scope, c
 	}
 
 	// Note: can't use IsFalse here because we need to handle the absence of the condition as well as false.
-	if !conditions.IsTrue(cluster, clusterv1.ControlPlaneInitializedCondition) {
+	if !conditions.IsTrue(cluster, clusterv1.ClusterControlPlaneInitializedCondition) {
 		return r.handleClusterNotInitialized(ctx, scope)
 	}
 
@@ -342,12 +359,6 @@ func (r *KubeadmConfigReconciler) reconcile(ctx context.Context, scope *Scope, c
 
 	// Unlock any locks that might have been set during init process
 	r.KubeadmInitLock.Unlock(ctx, cluster)
-
-	// if the JoinConfiguration is missing, create a default one
-	if config.Spec.JoinConfiguration == nil {
-		log.Info("Creating default JoinConfiguration")
-		config.Spec.JoinConfiguration = &bootstrapv1.JoinConfiguration{}
-	}
 
 	// it's a control plane join
 	if configOwner.IsControlPlaneMachine() {
@@ -358,7 +369,7 @@ func (r *KubeadmConfigReconciler) reconcile(ctx context.Context, scope *Scope, c
 	return r.joinWorker(ctx, scope)
 }
 
-func (r *KubeadmConfigReconciler) refreshBootstrapTokenIfNeeded(ctx context.Context, config *bootstrapv1.KubeadmConfig, cluster *clusterv1.Cluster) (ctrl.Result, error) {
+func (r *KubeadmConfigReconciler) refreshBootstrapTokenIfNeeded(ctx context.Context, config *bootstrapv1.KubeadmConfig, cluster *clusterv1.Cluster, scope *Scope) (ctrl.Result, error) {
 	log := ctrl.LoggerFrom(ctx)
 	token := config.Spec.JoinConfiguration.Discovery.BootstrapToken.Token
 
@@ -369,6 +380,11 @@ func (r *KubeadmConfigReconciler) refreshBootstrapTokenIfNeeded(ctx context.Cont
 
 	secret, err := getToken(ctx, remoteClient, token)
 	if err != nil {
+		if apierrors.IsNotFound(err) && scope.ConfigOwner.IsMachinePool() {
+			log.Info("Bootstrap token secret not found, triggering creation of new token")
+			config.Spec.JoinConfiguration.Discovery.BootstrapToken.Token = ""
+			return r.recreateBootstrapToken(ctx, config, scope, remoteClient)
+		}
 		return ctrl.Result{}, errors.Wrapf(err, "failed to get bootstrap token secret in order to refresh it")
 	}
 	log = log.WithValues("Secret", klog.KObj(secret))
@@ -399,11 +415,31 @@ func (r *KubeadmConfigReconciler) refreshBootstrapTokenIfNeeded(ctx context.Cont
 	log.Info("Refreshing token until the infrastructure has a chance to consume it", "oldExpiration", secretExpiration, "newExpiration", newExpiration)
 	err = remoteClient.Update(ctx, secret)
 	if err != nil {
+		if apierrors.IsNotFound(err) && scope.ConfigOwner.IsMachinePool() {
+			log.Info("Bootstrap token secret not found, triggering creation of new token")
+			config.Spec.JoinConfiguration.Discovery.BootstrapToken.Token = ""
+			return r.recreateBootstrapToken(ctx, config, scope, remoteClient)
+		}
 		return ctrl.Result{}, errors.Wrapf(err, "failed to refresh bootstrap token")
 	}
 	return ctrl.Result{
 		RequeueAfter: r.tokenCheckRefreshOrRotationInterval(),
 	}, nil
+}
+
+func (r *KubeadmConfigReconciler) recreateBootstrapToken(ctx context.Context, config *bootstrapv1.KubeadmConfig, scope *Scope, remoteClient client.Client) (ctrl.Result, error) {
+	log := ctrl.LoggerFrom(ctx)
+
+	token, err := createToken(ctx, remoteClient, r.TokenTTL)
+	if err != nil {
+		return ctrl.Result{}, errors.Wrapf(err, "failed to create new bootstrap token")
+	}
+
+	config.Spec.JoinConfiguration.Discovery.BootstrapToken.Token = token
+	log.V(3).Info("Altering JoinConfiguration.Discovery.BootstrapToken.Token")
+
+	// Update the bootstrap data
+	return r.joinWorker(ctx, scope)
 }
 
 func (r *KubeadmConfigReconciler) rotateMachinePoolBootstrapToken(ctx context.Context, config *bootstrapv1.KubeadmConfig, cluster *clusterv1.Cluster, scope *Scope) (ctrl.Result, error) {
@@ -421,16 +457,7 @@ func (r *KubeadmConfigReconciler) rotateMachinePoolBootstrapToken(ctx context.Co
 	}
 	if shouldRotate {
 		log.Info("Creating new bootstrap token, the existing one should be rotated")
-		token, err := createToken(ctx, remoteClient, r.TokenTTL)
-		if err != nil {
-			return ctrl.Result{}, errors.Wrapf(err, "failed to create new bootstrap token")
-		}
-
-		config.Spec.JoinConfiguration.Discovery.BootstrapToken.Token = token
-		log.V(3).Info("Altering JoinConfiguration.Discovery.BootstrapToken.Token")
-
-		// update the bootstrap data
-		return r.joinWorker(ctx, scope)
+		return r.recreateBootstrapToken(ctx, config, scope, remoteClient)
 	}
 	return ctrl.Result{
 		RequeueAfter: r.tokenCheckRefreshOrRotationInterval(),
@@ -441,24 +468,18 @@ func (r *KubeadmConfigReconciler) handleClusterNotInitialized(ctx context.Contex
 	// initialize the DataSecretAvailableCondition if missing.
 	// this is required in order to avoid the condition's LastTransitionTime to flicker in case of errors surfacing
 	// using the DataSecretGeneratedFailedReason
-	if conditions.GetReason(scope.Config, bootstrapv1.DataSecretAvailableCondition) != bootstrapv1.DataSecretGenerationFailedReason {
-		conditions.MarkFalse(scope.Config, bootstrapv1.DataSecretAvailableCondition, clusterv1.WaitingForControlPlaneAvailableReason, clusterv1.ConditionSeverityInfo, "")
-		v1beta2conditions.Set(scope.Config, metav1.Condition{
-			Type:    bootstrapv1.KubeadmConfigDataSecretAvailableV1Beta2Condition,
+	if !conditions.Has(scope.Config, bootstrapv1.KubeadmConfigDataSecretAvailableCondition) {
+		v1beta1conditions.MarkFalse(scope.Config, bootstrapv1.DataSecretAvailableV1Beta1Condition, clusterv1.WaitingForControlPlaneAvailableV1Beta1Reason, clusterv1.ConditionSeverityInfo, "")
+		conditions.Set(scope.Config, metav1.Condition{
+			Type:    bootstrapv1.KubeadmConfigDataSecretAvailableCondition,
 			Status:  metav1.ConditionFalse,
-			Reason:  bootstrapv1.KubeadmConfigDataSecretNotAvailableV1Beta2Reason,
+			Reason:  bootstrapv1.KubeadmConfigDataSecretNotAvailableReason,
 			Message: "Waiting for Cluster control plane to be initialized",
 		})
 	}
 
 	// if it's NOT a control plane machine, requeue
 	if !scope.ConfigOwner.IsControlPlaneMachine() {
-		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
-	}
-
-	// if the machine has not ClusterConfiguration and InitConfiguration, requeue
-	if scope.Config.Spec.InitConfiguration == nil && scope.Config.Spec.ClusterConfiguration == nil {
-		scope.Info("Control plane is not ready, requeuing joining control planes until ready.")
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 
@@ -471,7 +492,6 @@ func (r *KubeadmConfigReconciler) handleClusterNotInitialized(ctx context.Contex
 	// as control plane get processed here
 	// if not the first, requeue
 	if !r.KubeadmInitLock.Lock(ctx, scope.Cluster, machine) {
-		scope.Info("A control plane is already being initialized, requeuing until control plane is ready")
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 
@@ -497,47 +517,26 @@ func (r *KubeadmConfigReconciler) handleClusterNotInitialized(ctx context.Contex
 		return ctrl.Result{}, errors.Wrapf(err, "failed to parse kubernetes version %q", kubernetesVersion)
 	}
 
-	if scope.Config.Spec.ClusterConfiguration == nil {
-		scope.Config.Spec.ClusterConfiguration = &bootstrapv1.ClusterConfiguration{
-			TypeMeta: metav1.TypeMeta{
-				APIVersion: "kubeadm.k8s.io/v1beta4",
-				Kind:       "ClusterConfiguration",
-			},
-		}
-	}
+	additionalData := r.computeClusterConfigurationAndAdditionalData(scope.Cluster, machine, &scope.Config.Spec.ClusterConfiguration, &scope.Config.Spec.InitConfiguration)
 
-	// injects into config.ClusterConfiguration values from top level object
-	r.reconcileTopLevelObjectSettings(ctx, scope.Cluster, machine, scope.Config)
-
-	clusterdata, err := kubeadmtypes.MarshalClusterConfigurationForVersion(scope.Config.Spec.ClusterConfiguration, parsedVersion)
+	clusterdata, err := kubeadmtypes.MarshalClusterConfigurationForVersion(&scope.Config.Spec.ClusterConfiguration, parsedVersion, additionalData)
 	if err != nil {
 		scope.Error(err, "Failed to marshal cluster configuration")
 		return ctrl.Result{}, err
 	}
 
-	if scope.Config.Spec.InitConfiguration == nil {
-		scope.Config.Spec.InitConfiguration = &bootstrapv1.InitConfiguration{
-			TypeMeta: metav1.TypeMeta{
-				APIVersion: "kubeadm.k8s.io/v1beta4",
-				Kind:       "InitConfiguration",
-			},
-		}
-	}
-
-	// NOTE: It is required to provide in input the ClusterConfiguration because clusterConfiguration.APIServer.TimeoutForControlPlane
-	// has been migrated to InitConfiguration in the kubeadm v1beta4 API version.
-	initdata, err := kubeadmtypes.MarshalInitConfigurationForVersion(scope.Config.Spec.ClusterConfiguration, scope.Config.Spec.InitConfiguration, parsedVersion)
+	initdata, err := kubeadmtypes.MarshalInitConfigurationForVersion(&scope.Config.Spec.InitConfiguration, parsedVersion)
 	if err != nil {
 		scope.Error(err, "Failed to marshal init configuration")
 		return ctrl.Result{}, err
 	}
 
-	certificates := secret.NewCertificatesForInitialControlPlane(scope.Config.Spec.ClusterConfiguration)
+	certificates := secret.NewCertificatesForInitialControlPlane(&scope.Config.Spec.ClusterConfiguration)
 
 	// If the Cluster does not have a ControlPlane reference look up and generate the certificates.
 	// Otherwise rely on certificates generated by the ControlPlane controller.
 	// Note: A cluster does not have a ControlPlane reference when using standalone CP machines.
-	if scope.Cluster.Spec.ControlPlaneRef == nil {
+	if !scope.Cluster.Spec.ControlPlaneRef.IsDefined() {
 		err = certificates.LookupOrGenerateCached(
 			ctx,
 			r.SecretCachingClient,
@@ -551,21 +550,21 @@ func (r *KubeadmConfigReconciler) handleClusterNotInitialized(ctx context.Contex
 			util.ObjectKey(scope.Cluster))
 	}
 	if err != nil {
-		conditions.MarkFalse(scope.Config, bootstrapv1.CertificatesAvailableCondition, bootstrapv1.CertificatesGenerationFailedReason, clusterv1.ConditionSeverityWarning, err.Error())
-		v1beta2conditions.Set(scope.Config, metav1.Condition{
-			Type:    bootstrapv1.KubeadmConfigCertificatesAvailableV1Beta2Condition,
+		v1beta1conditions.MarkFalse(scope.Config, bootstrapv1.CertificatesAvailableV1Beta1Condition, bootstrapv1.CertificatesGenerationFailedV1Beta1Reason, clusterv1.ConditionSeverityWarning, "%s", err.Error())
+		conditions.Set(scope.Config, metav1.Condition{
+			Type:    bootstrapv1.KubeadmConfigCertificatesAvailableCondition,
 			Status:  metav1.ConditionUnknown,
-			Reason:  bootstrapv1.KubeadmConfigCertificatesAvailableInternalErrorV1Beta2Reason,
+			Reason:  bootstrapv1.KubeadmConfigCertificatesAvailableInternalErrorReason,
 			Message: "Please check controller logs for errors",
 		})
 		return ctrl.Result{}, err
 	}
 
-	conditions.MarkTrue(scope.Config, bootstrapv1.CertificatesAvailableCondition)
-	v1beta2conditions.Set(scope.Config, metav1.Condition{
-		Type:   bootstrapv1.KubeadmConfigCertificatesAvailableV1Beta2Condition,
+	v1beta1conditions.MarkTrue(scope.Config, bootstrapv1.CertificatesAvailableV1Beta1Condition)
+	conditions.Set(scope.Config, metav1.Condition{
+		Type:   bootstrapv1.KubeadmConfigCertificatesAvailableCondition,
 		Status: metav1.ConditionTrue,
-		Reason: bootstrapv1.KubeadmConfigCertificatesAvailableV1Beta2Reason,
+		Reason: bootstrapv1.KubeadmConfigCertificatesAvailableReason,
 	})
 
 	verbosityFlag := ""
@@ -573,25 +572,25 @@ func (r *KubeadmConfigReconciler) handleClusterNotInitialized(ctx context.Contex
 		verbosityFlag = fmt.Sprintf("--v %s", strconv.Itoa(int(*scope.Config.Spec.Verbosity)))
 	}
 
-	files, err := r.resolveFiles(ctx, scope.Config)
+	files, err := r.resolveFiles(ctx, scope.Config, scope.Cluster)
 	if err != nil {
-		conditions.MarkFalse(scope.Config, bootstrapv1.DataSecretAvailableCondition, bootstrapv1.DataSecretGenerationFailedReason, clusterv1.ConditionSeverityWarning, err.Error())
-		v1beta2conditions.Set(scope.Config, metav1.Condition{
-			Type:    bootstrapv1.KubeadmConfigDataSecretAvailableV1Beta2Condition,
+		v1beta1conditions.MarkFalse(scope.Config, bootstrapv1.DataSecretAvailableV1Beta1Condition, bootstrapv1.DataSecretGenerationFailedV1Beta1Reason, clusterv1.ConditionSeverityWarning, "%s", err.Error())
+		conditions.Set(scope.Config, metav1.Condition{
+			Type:    bootstrapv1.KubeadmConfigDataSecretAvailableCondition,
 			Status:  metav1.ConditionFalse,
-			Reason:  bootstrapv1.KubeadmConfigDataSecretNotAvailableV1Beta2Reason,
-			Message: "Failed to read content from secrets for spec.files",
+			Reason:  bootstrapv1.KubeadmConfigDataSecretNotAvailableReason,
+			Message: fmt.Sprintf("Failed to prepare spec.files: %v", err),
 		})
 		return ctrl.Result{}, err
 	}
 
 	users, err := r.resolveUsers(ctx, scope.Config)
 	if err != nil {
-		conditions.MarkFalse(scope.Config, bootstrapv1.DataSecretAvailableCondition, bootstrapv1.DataSecretGenerationFailedReason, clusterv1.ConditionSeverityWarning, err.Error())
-		v1beta2conditions.Set(scope.Config, metav1.Condition{
-			Type:    bootstrapv1.KubeadmConfigDataSecretAvailableV1Beta2Condition,
+		v1beta1conditions.MarkFalse(scope.Config, bootstrapv1.DataSecretAvailableV1Beta1Condition, bootstrapv1.DataSecretGenerationFailedV1Beta1Reason, clusterv1.ConditionSeverityWarning, "%s", err.Error())
+		conditions.Set(scope.Config, metav1.Condition{
+			Type:    bootstrapv1.KubeadmConfigDataSecretAvailableCondition,
 			Status:  metav1.ConditionFalse,
-			Reason:  bootstrapv1.KubeadmConfigDataSecretNotAvailableV1Beta2Reason,
+			Reason:  bootstrapv1.KubeadmConfigDataSecretNotAvailableReason,
 			Message: "Failed to read password from secrets for spec.users",
 		})
 		return ctrl.Result{}, err
@@ -599,15 +598,26 @@ func (r *KubeadmConfigReconciler) handleClusterNotInitialized(ctx context.Contex
 
 	controlPlaneInput := &cloudinit.ControlPlaneInput{
 		BaseUserData: cloudinit.BaseUserData{
-			AdditionalFiles:     files,
-			NTP:                 scope.Config.Spec.NTP,
+			AdditionalFiles: files,
+			NTP: func() *bootstrapv1.NTP {
+				if scope.Config.Spec.NTP.IsDefined() {
+					return &scope.Config.Spec.NTP
+				}
+				return nil
+			}(),
+			BootCommands:        scope.Config.Spec.BootCommands,
 			PreKubeadmCommands:  scope.Config.Spec.PreKubeadmCommands,
 			PostKubeadmCommands: scope.Config.Spec.PostKubeadmCommands,
 			Users:               users,
 			Mounts:              scope.Config.Spec.Mounts,
-			DiskSetup:           scope.Config.Spec.DiskSetup,
-			KubeadmVerbosity:    verbosityFlag,
-			KubernetesVersion:   parsedVersion,
+			DiskSetup: func() *bootstrapv1.DiskSetup {
+				if scope.Config.Spec.DiskSetup.IsDefined() {
+					return &scope.Config.Spec.DiskSetup
+				}
+				return nil
+			}(),
+			KubeadmVerbosity:  verbosityFlag,
+			KubernetesVersion: parsedVersion,
 		},
 		InitConfiguration:    initdata,
 		ClusterConfiguration: clusterdata,
@@ -619,7 +629,7 @@ func (r *KubeadmConfigReconciler) handleClusterNotInitialized(ctx context.Contex
 	case bootstrapv1.Ignition:
 		bootstrapInitData, _, err = ignition.NewInitControlPlane(&ignition.ControlPlaneInput{
 			ControlPlaneInput: controlPlaneInput,
-			Ignition:          scope.Config.Spec.Ignition,
+			Ignition:          &scope.Config.Spec.Ignition,
 		})
 	default:
 		bootstrapInitData, err = cloudinit.NewInitControlPlane(controlPlaneInput)
@@ -649,30 +659,30 @@ func (r *KubeadmConfigReconciler) joinWorker(ctx context.Context, scope *Scope) 
 		util.ObjectKey(scope.Cluster),
 	)
 	if err != nil {
-		conditions.MarkFalse(scope.Config, bootstrapv1.CertificatesAvailableCondition, bootstrapv1.CertificatesCorruptedReason, clusterv1.ConditionSeverityError, err.Error())
-		v1beta2conditions.Set(scope.Config, metav1.Condition{
-			Type:    bootstrapv1.KubeadmConfigCertificatesAvailableV1Beta2Condition,
+		v1beta1conditions.MarkFalse(scope.Config, bootstrapv1.CertificatesAvailableV1Beta1Condition, bootstrapv1.CertificatesCorruptedV1Beta1Reason, clusterv1.ConditionSeverityError, "%s", err.Error())
+		conditions.Set(scope.Config, metav1.Condition{
+			Type:    bootstrapv1.KubeadmConfigCertificatesAvailableCondition,
 			Status:  metav1.ConditionUnknown,
-			Reason:  bootstrapv1.KubeadmConfigCertificatesAvailableInternalErrorV1Beta2Reason,
+			Reason:  bootstrapv1.KubeadmConfigCertificatesAvailableInternalErrorReason,
 			Message: "Please check controller logs for errors",
 		})
 		return ctrl.Result{}, err
 	}
 	if err := certificates.EnsureAllExist(); err != nil {
-		conditions.MarkFalse(scope.Config, bootstrapv1.CertificatesAvailableCondition, bootstrapv1.CertificatesCorruptedReason, clusterv1.ConditionSeverityError, err.Error())
-		v1beta2conditions.Set(scope.Config, metav1.Condition{
-			Type:    bootstrapv1.KubeadmConfigCertificatesAvailableV1Beta2Condition,
+		v1beta1conditions.MarkFalse(scope.Config, bootstrapv1.CertificatesAvailableV1Beta1Condition, bootstrapv1.CertificatesCorruptedV1Beta1Reason, clusterv1.ConditionSeverityError, "%s", err.Error())
+		conditions.Set(scope.Config, metav1.Condition{
+			Type:    bootstrapv1.KubeadmConfigCertificatesAvailableCondition,
 			Status:  metav1.ConditionUnknown,
-			Reason:  bootstrapv1.KubeadmConfigCertificatesAvailableInternalErrorV1Beta2Reason,
+			Reason:  bootstrapv1.KubeadmConfigCertificatesAvailableInternalErrorReason,
 			Message: "Please check controller logs for errors",
 		})
 		return ctrl.Result{}, err
 	}
-	conditions.MarkTrue(scope.Config, bootstrapv1.CertificatesAvailableCondition)
-	v1beta2conditions.Set(scope.Config, metav1.Condition{
-		Type:   bootstrapv1.KubeadmConfigCertificatesAvailableV1Beta2Condition,
+	v1beta1conditions.MarkTrue(scope.Config, bootstrapv1.CertificatesAvailableV1Beta1Condition)
+	conditions.Set(scope.Config, metav1.Condition{
+		Type:   bootstrapv1.KubeadmConfigCertificatesAvailableCondition,
 		Status: metav1.ConditionTrue,
-		Reason: bootstrapv1.KubeadmConfigCertificatesAvailableV1Beta2Reason,
+		Reason: bootstrapv1.KubeadmConfigCertificatesAvailableReason,
 	})
 
 	// Ensure that joinConfiguration.Discovery is properly set for joining node on the current cluster.
@@ -682,10 +692,14 @@ func (r *KubeadmConfigReconciler) joinWorker(ctx context.Context, scope *Scope) 
 		return res, nil
 	}
 
-	kubernetesVersion := scope.ConfigOwner.KubernetesVersion()
-	parsedVersion, err := semver.ParseTolerant(kubernetesVersion)
+	// The joining Machine's Kubernetes version selects the kubeadm JoinConfiguration API version (the YAML
+	// schema). The control plane version is intentionally NOT used here: a newer kubeadm binary can consume a
+	// JoinConfiguration written for an older (worst case n-3) kubeadm API version, and kubeadm rarely drops API
+	// versions. The control plane version is instead surfaced to operators via the .controlPlane.version
+	// template variable in spec.files (see resolveFiles / getControlPlaneVersion).
+	parsedVersion, err := semver.ParseTolerant(scope.ConfigOwner.KubernetesVersion())
 	if err != nil {
-		return ctrl.Result{}, errors.Wrapf(err, "failed to parse kubernetes version %q", kubernetesVersion)
+		return ctrl.Result{}, errors.Wrapf(err, "failed to parse kubernetes version %q", scope.ConfigOwner.KubernetesVersion())
 	}
 
 	// Add the node uninitialized taint to the list of taints.
@@ -693,13 +707,13 @@ func (r *KubeadmConfigReconciler) joinWorker(ctx context.Context, scope *Scope) 
 	// Do not modify the KubeadmConfig in etcd as this is a temporary taint that will be dropped after the node
 	// is initialized by ClusterAPI.
 	joinConfiguration := scope.Config.Spec.JoinConfiguration.DeepCopy()
-	if !taints.HasTaint(joinConfiguration.NodeRegistration.Taints, clusterv1.NodeUninitializedTaint) {
-		joinConfiguration.NodeRegistration.Taints = append(joinConfiguration.NodeRegistration.Taints, clusterv1.NodeUninitializedTaint)
+	if !taints.HasTaint(ptr.Deref(joinConfiguration.NodeRegistration.Taints, []corev1.Taint{}), clusterv1.NodeUninitializedTaint) {
+		joinConfiguration.NodeRegistration.Taints = ptr.To(append(ptr.Deref(joinConfiguration.NodeRegistration.Taints, []corev1.Taint{}), clusterv1.NodeUninitializedTaint))
 	}
 
 	// NOTE: It is not required to provide in input ClusterConfiguration because only clusterConfiguration.APIServer.TimeoutForControlPlane
 	// has been migrated to JoinConfiguration in the kubeadm v1beta4 API version, and this field does not apply to workers.
-	joinData, err := kubeadmtypes.MarshalJoinConfigurationForVersion(nil, joinConfiguration, parsedVersion)
+	joinData, err := kubeadmtypes.MarshalJoinConfigurationForVersion(joinConfiguration, parsedVersion)
 	if err != nil {
 		scope.Error(err, "Failed to marshal join configuration")
 		return ctrl.Result{}, err
@@ -714,38 +728,38 @@ func (r *KubeadmConfigReconciler) joinWorker(ctx context.Context, scope *Scope) 
 		verbosityFlag = fmt.Sprintf("--v %s", strconv.Itoa(int(*scope.Config.Spec.Verbosity)))
 	}
 
-	files, err := r.resolveFiles(ctx, scope.Config)
+	files, err := r.resolveFiles(ctx, scope.Config, scope.Cluster)
 	if err != nil {
-		conditions.MarkFalse(scope.Config, bootstrapv1.DataSecretAvailableCondition, bootstrapv1.DataSecretGenerationFailedReason, clusterv1.ConditionSeverityWarning, err.Error())
-		v1beta2conditions.Set(scope.Config, metav1.Condition{
-			Type:    bootstrapv1.KubeadmConfigDataSecretAvailableV1Beta2Condition,
+		v1beta1conditions.MarkFalse(scope.Config, bootstrapv1.DataSecretAvailableV1Beta1Condition, bootstrapv1.DataSecretGenerationFailedV1Beta1Reason, clusterv1.ConditionSeverityWarning, "%s", err.Error())
+		conditions.Set(scope.Config, metav1.Condition{
+			Type:    bootstrapv1.KubeadmConfigDataSecretAvailableCondition,
 			Status:  metav1.ConditionFalse,
-			Reason:  bootstrapv1.KubeadmConfigDataSecretNotAvailableV1Beta2Reason,
-			Message: "Failed to read content from secrets for spec.files",
+			Reason:  bootstrapv1.KubeadmConfigDataSecretNotAvailableReason,
+			Message: fmt.Sprintf("Failed to prepare spec.files: %v", err),
 		})
 		return ctrl.Result{}, err
 	}
 
 	users, err := r.resolveUsers(ctx, scope.Config)
 	if err != nil {
-		conditions.MarkFalse(scope.Config, bootstrapv1.DataSecretAvailableCondition, bootstrapv1.DataSecretGenerationFailedReason, clusterv1.ConditionSeverityWarning, err.Error())
-		v1beta2conditions.Set(scope.Config, metav1.Condition{
-			Type:    bootstrapv1.KubeadmConfigDataSecretAvailableV1Beta2Condition,
+		v1beta1conditions.MarkFalse(scope.Config, bootstrapv1.DataSecretAvailableV1Beta1Condition, bootstrapv1.DataSecretGenerationFailedV1Beta1Reason, clusterv1.ConditionSeverityWarning, "%s", err.Error())
+		conditions.Set(scope.Config, metav1.Condition{
+			Type:    bootstrapv1.KubeadmConfigDataSecretAvailableCondition,
 			Status:  metav1.ConditionFalse,
-			Reason:  bootstrapv1.KubeadmConfigDataSecretNotAvailableV1Beta2Reason,
+			Reason:  bootstrapv1.KubeadmConfigDataSecretNotAvailableReason,
 			Message: "Failed to read password from secrets for spec.users",
 		})
 		return ctrl.Result{}, err
 	}
 
-	if discoveryFile := scope.Config.Spec.JoinConfiguration.Discovery.File; discoveryFile != nil && discoveryFile.KubeConfig != nil {
+	if discoveryFile := scope.Config.Spec.JoinConfiguration.Discovery.File; discoveryFile.KubeConfig.IsDefined() {
 		kubeconfig, err := r.resolveDiscoveryKubeConfig(discoveryFile)
 		if err != nil {
-			conditions.MarkFalse(scope.Config, bootstrapv1.DataSecretAvailableCondition, bootstrapv1.DataSecretGenerationFailedReason, clusterv1.ConditionSeverityWarning, err.Error())
-			v1beta2conditions.Set(scope.Config, metav1.Condition{
-				Type:    bootstrapv1.KubeadmConfigDataSecretAvailableV1Beta2Condition,
+			v1beta1conditions.MarkFalse(scope.Config, bootstrapv1.DataSecretAvailableV1Beta1Condition, bootstrapv1.DataSecretGenerationFailedV1Beta1Reason, clusterv1.ConditionSeverityWarning, "%s", err.Error())
+			conditions.Set(scope.Config, metav1.Condition{
+				Type:    bootstrapv1.KubeadmConfigDataSecretAvailableCondition,
 				Status:  metav1.ConditionFalse,
-				Reason:  bootstrapv1.KubeadmConfigDataSecretNotAvailableV1Beta2Reason,
+				Reason:  bootstrapv1.KubeadmConfigDataSecretNotAvailableReason,
 				Message: "Failed to create kubeconfig for spec.joinConfiguration.discovery.file",
 			})
 			return ctrl.Result{}, err
@@ -755,16 +769,26 @@ func (r *KubeadmConfigReconciler) joinWorker(ctx context.Context, scope *Scope) 
 
 	nodeInput := &cloudinit.NodeInput{
 		BaseUserData: cloudinit.BaseUserData{
-			AdditionalFiles:      files,
-			NTP:                  scope.Config.Spec.NTP,
-			PreKubeadmCommands:   scope.Config.Spec.PreKubeadmCommands,
-			PostKubeadmCommands:  scope.Config.Spec.PostKubeadmCommands,
-			Users:                users,
-			Mounts:               scope.Config.Spec.Mounts,
-			DiskSetup:            scope.Config.Spec.DiskSetup,
-			KubeadmVerbosity:     verbosityFlag,
-			UseExperimentalRetry: scope.Config.Spec.UseExperimentalRetryJoin,
-			KubernetesVersion:    parsedVersion,
+			AdditionalFiles: files,
+			NTP: func() *bootstrapv1.NTP {
+				if scope.Config.Spec.NTP.IsDefined() {
+					return &scope.Config.Spec.NTP
+				}
+				return nil
+			}(),
+			BootCommands:        scope.Config.Spec.BootCommands,
+			PreKubeadmCommands:  scope.Config.Spec.PreKubeadmCommands,
+			PostKubeadmCommands: scope.Config.Spec.PostKubeadmCommands,
+			Users:               users,
+			Mounts:              scope.Config.Spec.Mounts,
+			DiskSetup: func() *bootstrapv1.DiskSetup {
+				if scope.Config.Spec.DiskSetup.IsDefined() {
+					return &scope.Config.Spec.DiskSetup
+				}
+				return nil
+			}(),
+			KubeadmVerbosity:  verbosityFlag,
+			KubernetesVersion: parsedVersion,
 		},
 		JoinConfiguration: joinData,
 	}
@@ -774,7 +798,7 @@ func (r *KubeadmConfigReconciler) joinWorker(ctx context.Context, scope *Scope) 
 	case bootstrapv1.Ignition:
 		bootstrapJoinData, _, err = ignition.NewNode(&ignition.NodeInput{
 			NodeInput: nodeInput,
-			Ignition:  scope.Config.Spec.Ignition,
+			Ignition:  &scope.Config.Spec.Ignition,
 		})
 	default:
 		bootstrapJoinData, err = cloudinit.NewNode(nodeInput)
@@ -794,6 +818,35 @@ func (r *KubeadmConfigReconciler) joinWorker(ctx context.Context, scope *Scope) 
 	return ctrl.Result{RequeueAfter: r.tokenCheckRefreshOrRotationInterval()}, nil
 }
 
+// getControlPlaneVersion returns the control plane version from the cluster's ControlPlaneRef,
+// e.g. KubeadmControlPlane.spec.version. Returns ("", nil) if the cluster has no ControlPlaneRef or the referenced
+// control plane does not expose spec.version (ErrFieldNotFound or unset). Returns an error if the control plane
+// object cannot be fetched or if the version field cannot be read for any other reason.
+//
+// This is the single source for the "controlPlane.version" template variable rendered into spec.files entries
+// with contentFormat "Template". It does not influence the kubeadm JoinConfiguration API version, which is
+// selected from the joining Machine's own Kubernetes version.
+func (r *KubeadmConfigReconciler) getControlPlaneVersion(ctx context.Context, cluster *clusterv1.Cluster) (string, error) {
+	if cluster == nil || !cluster.Spec.ControlPlaneRef.IsDefined() {
+		return "", nil
+	}
+	controlPlane, err := external.GetObjectFromContractVersionedRef(ctx, r.APIReader, cluster.Spec.ControlPlaneRef, cluster.Namespace)
+	if err != nil {
+		return "", errors.Wrap(err, "failed to read control plane version")
+	}
+	cpVersion, err := contract.ControlPlane().Version().Get(controlPlane)
+	if err != nil {
+		if errors.Is(err, contract.ErrFieldNotFound) {
+			return "", nil
+		}
+		return "", errors.Wrap(err, "failed to read control plane version")
+	}
+	if cpVersion == nil {
+		return "", nil
+	}
+	return *cpVersion, nil
+}
+
 func (r *KubeadmConfigReconciler) joinControlplane(ctx context.Context, scope *Scope) (ctrl.Result, error) {
 	scope.Info("Creating BootstrapData for the joining control plane")
 
@@ -805,7 +858,7 @@ func (r *KubeadmConfigReconciler) joinControlplane(ctx context.Context, scope *S
 		scope.Config.Spec.JoinConfiguration.ControlPlane = &bootstrapv1.JoinControlPlane{}
 	}
 
-	certificates := secret.NewControlPlaneJoinCerts(scope.Config.Spec.ClusterConfiguration)
+	certificates := secret.NewControlPlaneJoinCerts(&scope.Config.Spec.ClusterConfiguration)
 	err := certificates.LookupCached(
 		ctx,
 		r.SecretCachingClient,
@@ -813,31 +866,31 @@ func (r *KubeadmConfigReconciler) joinControlplane(ctx context.Context, scope *S
 		util.ObjectKey(scope.Cluster),
 	)
 	if err != nil {
-		conditions.MarkFalse(scope.Config, bootstrapv1.CertificatesAvailableCondition, bootstrapv1.CertificatesCorruptedReason, clusterv1.ConditionSeverityError, err.Error())
-		v1beta2conditions.Set(scope.Config, metav1.Condition{
-			Type:    bootstrapv1.KubeadmConfigCertificatesAvailableV1Beta2Condition,
+		v1beta1conditions.MarkFalse(scope.Config, bootstrapv1.CertificatesAvailableV1Beta1Condition, bootstrapv1.CertificatesCorruptedV1Beta1Reason, clusterv1.ConditionSeverityError, "%s", err.Error())
+		conditions.Set(scope.Config, metav1.Condition{
+			Type:    bootstrapv1.KubeadmConfigCertificatesAvailableCondition,
 			Status:  metav1.ConditionUnknown,
-			Reason:  bootstrapv1.KubeadmConfigCertificatesAvailableInternalErrorV1Beta2Reason,
+			Reason:  bootstrapv1.KubeadmConfigCertificatesAvailableInternalErrorReason,
 			Message: "Please check controller logs for errors",
 		})
 		return ctrl.Result{}, err
 	}
 	if err := certificates.EnsureAllExist(); err != nil {
-		conditions.MarkFalse(scope.Config, bootstrapv1.CertificatesAvailableCondition, bootstrapv1.CertificatesCorruptedReason, clusterv1.ConditionSeverityError, err.Error())
-		v1beta2conditions.Set(scope.Config, metav1.Condition{
-			Type:    bootstrapv1.KubeadmConfigCertificatesAvailableV1Beta2Condition,
+		v1beta1conditions.MarkFalse(scope.Config, bootstrapv1.CertificatesAvailableV1Beta1Condition, bootstrapv1.CertificatesCorruptedV1Beta1Reason, clusterv1.ConditionSeverityError, "%s", err.Error())
+		conditions.Set(scope.Config, metav1.Condition{
+			Type:    bootstrapv1.KubeadmConfigCertificatesAvailableCondition,
 			Status:  metav1.ConditionUnknown,
-			Reason:  bootstrapv1.KubeadmConfigCertificatesAvailableInternalErrorV1Beta2Reason,
+			Reason:  bootstrapv1.KubeadmConfigCertificatesAvailableInternalErrorReason,
 			Message: "Please check controller logs for errors",
 		})
 		return ctrl.Result{}, err
 	}
 
-	conditions.MarkTrue(scope.Config, bootstrapv1.CertificatesAvailableCondition)
-	v1beta2conditions.Set(scope.Config, metav1.Condition{
-		Type:   bootstrapv1.KubeadmConfigCertificatesAvailableV1Beta2Condition,
+	v1beta1conditions.MarkTrue(scope.Config, bootstrapv1.CertificatesAvailableV1Beta1Condition)
+	conditions.Set(scope.Config, metav1.Condition{
+		Type:   bootstrapv1.KubeadmConfigCertificatesAvailableCondition,
 		Status: metav1.ConditionTrue,
-		Reason: bootstrapv1.KubeadmConfigCertificatesAvailableV1Beta2Reason,
+		Reason: bootstrapv1.KubeadmConfigCertificatesAvailableReason,
 	})
 
 	// Ensure that joinConfiguration.Discovery is properly set for joining node on the current cluster.
@@ -853,9 +906,7 @@ func (r *KubeadmConfigReconciler) joinControlplane(ctx context.Context, scope *S
 		return ctrl.Result{}, errors.Wrapf(err, "failed to parse kubernetes version %q", kubernetesVersion)
 	}
 
-	// NOTE: It is required to provide in input the ClusterConfiguration because clusterConfiguration.APIServer.TimeoutForControlPlane
-	// has been migrated to JoinConfiguration in the kubeadm v1beta4 API version.
-	joinData, err := kubeadmtypes.MarshalJoinConfigurationForVersion(scope.Config.Spec.ClusterConfiguration, scope.Config.Spec.JoinConfiguration, parsedVersion)
+	joinData, err := kubeadmtypes.MarshalJoinConfigurationForVersion(&scope.Config.Spec.JoinConfiguration, parsedVersion)
 	if err != nil {
 		scope.Error(err, "Failed to marshal join configuration")
 		return ctrl.Result{}, err
@@ -866,38 +917,38 @@ func (r *KubeadmConfigReconciler) joinControlplane(ctx context.Context, scope *S
 		verbosityFlag = fmt.Sprintf("--v %s", strconv.Itoa(int(*scope.Config.Spec.Verbosity)))
 	}
 
-	files, err := r.resolveFiles(ctx, scope.Config)
+	files, err := r.resolveFiles(ctx, scope.Config, scope.Cluster)
 	if err != nil {
-		conditions.MarkFalse(scope.Config, bootstrapv1.DataSecretAvailableCondition, bootstrapv1.DataSecretGenerationFailedReason, clusterv1.ConditionSeverityWarning, err.Error())
-		v1beta2conditions.Set(scope.Config, metav1.Condition{
-			Type:    bootstrapv1.KubeadmConfigDataSecretAvailableV1Beta2Condition,
+		v1beta1conditions.MarkFalse(scope.Config, bootstrapv1.DataSecretAvailableV1Beta1Condition, bootstrapv1.DataSecretGenerationFailedV1Beta1Reason, clusterv1.ConditionSeverityWarning, "%s", err.Error())
+		conditions.Set(scope.Config, metav1.Condition{
+			Type:    bootstrapv1.KubeadmConfigDataSecretAvailableCondition,
 			Status:  metav1.ConditionFalse,
-			Reason:  bootstrapv1.KubeadmConfigDataSecretNotAvailableV1Beta2Reason,
-			Message: "Failed to read content from secrets for spec.files",
+			Reason:  bootstrapv1.KubeadmConfigDataSecretNotAvailableReason,
+			Message: fmt.Sprintf("Failed to prepare spec.files: %v", err),
 		})
 		return ctrl.Result{}, err
 	}
 
 	users, err := r.resolveUsers(ctx, scope.Config)
 	if err != nil {
-		conditions.MarkFalse(scope.Config, bootstrapv1.DataSecretAvailableCondition, bootstrapv1.DataSecretGenerationFailedReason, clusterv1.ConditionSeverityWarning, err.Error())
-		v1beta2conditions.Set(scope.Config, metav1.Condition{
-			Type:    bootstrapv1.KubeadmConfigDataSecretAvailableV1Beta2Condition,
+		v1beta1conditions.MarkFalse(scope.Config, bootstrapv1.DataSecretAvailableV1Beta1Condition, bootstrapv1.DataSecretGenerationFailedV1Beta1Reason, clusterv1.ConditionSeverityWarning, "%s", err.Error())
+		conditions.Set(scope.Config, metav1.Condition{
+			Type:    bootstrapv1.KubeadmConfigDataSecretAvailableCondition,
 			Status:  metav1.ConditionFalse,
-			Reason:  bootstrapv1.KubeadmConfigDataSecretNotAvailableV1Beta2Reason,
+			Reason:  bootstrapv1.KubeadmConfigDataSecretNotAvailableReason,
 			Message: "Failed to read password from secrets for spec.users",
 		})
 		return ctrl.Result{}, err
 	}
 
-	if discoveryFile := scope.Config.Spec.JoinConfiguration.Discovery.File; discoveryFile != nil && discoveryFile.KubeConfig != nil {
+	if discoveryFile := scope.Config.Spec.JoinConfiguration.Discovery.File; discoveryFile.KubeConfig.IsDefined() {
 		kubeconfig, err := r.resolveDiscoveryKubeConfig(discoveryFile)
 		if err != nil {
-			conditions.MarkFalse(scope.Config, bootstrapv1.DataSecretAvailableCondition, bootstrapv1.DataSecretGenerationFailedReason, clusterv1.ConditionSeverityWarning, err.Error())
-			v1beta2conditions.Set(scope.Config, metav1.Condition{
-				Type:    bootstrapv1.KubeadmConfigDataSecretAvailableV1Beta2Condition,
+			v1beta1conditions.MarkFalse(scope.Config, bootstrapv1.DataSecretAvailableV1Beta1Condition, bootstrapv1.DataSecretGenerationFailedV1Beta1Reason, clusterv1.ConditionSeverityWarning, "%s", err.Error())
+			conditions.Set(scope.Config, metav1.Condition{
+				Type:    bootstrapv1.KubeadmConfigDataSecretAvailableCondition,
 				Status:  metav1.ConditionFalse,
-				Reason:  bootstrapv1.KubeadmConfigDataSecretNotAvailableV1Beta2Reason,
+				Reason:  bootstrapv1.KubeadmConfigDataSecretNotAvailableReason,
 				Message: "Failed to create kubeconfig for spec.joinConfiguration.discovery.file",
 			})
 			return ctrl.Result{}, err
@@ -909,16 +960,26 @@ func (r *KubeadmConfigReconciler) joinControlplane(ctx context.Context, scope *S
 		JoinConfiguration: joinData,
 		Certificates:      certificates,
 		BaseUserData: cloudinit.BaseUserData{
-			AdditionalFiles:      files,
-			NTP:                  scope.Config.Spec.NTP,
-			PreKubeadmCommands:   scope.Config.Spec.PreKubeadmCommands,
-			PostKubeadmCommands:  scope.Config.Spec.PostKubeadmCommands,
-			Users:                users,
-			Mounts:               scope.Config.Spec.Mounts,
-			DiskSetup:            scope.Config.Spec.DiskSetup,
-			KubeadmVerbosity:     verbosityFlag,
-			UseExperimentalRetry: scope.Config.Spec.UseExperimentalRetryJoin,
-			KubernetesVersion:    parsedVersion,
+			AdditionalFiles: files,
+			NTP: func() *bootstrapv1.NTP {
+				if scope.Config.Spec.NTP.IsDefined() {
+					return &scope.Config.Spec.NTP
+				}
+				return nil
+			}(),
+			BootCommands:        scope.Config.Spec.BootCommands,
+			PreKubeadmCommands:  scope.Config.Spec.PreKubeadmCommands,
+			PostKubeadmCommands: scope.Config.Spec.PostKubeadmCommands,
+			Users:               users,
+			Mounts:              scope.Config.Spec.Mounts,
+			DiskSetup: func() *bootstrapv1.DiskSetup {
+				if scope.Config.Spec.DiskSetup.IsDefined() {
+					return &scope.Config.Spec.DiskSetup
+				}
+				return nil
+			}(),
+			KubeadmVerbosity:  verbosityFlag,
+			KubernetesVersion: parsedVersion,
 		},
 	}
 
@@ -927,7 +988,7 @@ func (r *KubeadmConfigReconciler) joinControlplane(ctx context.Context, scope *S
 	case bootstrapv1.Ignition:
 		bootstrapJoinData, _, err = ignition.NewJoinControlPlane(&ignition.ControlPlaneJoinInput{
 			ControlPlaneJoinInput: controlPlaneJoinInput,
-			Ignition:              scope.Config.Spec.Ignition,
+			Ignition:              &scope.Config.Spec.Ignition,
 		})
 	default:
 		bootstrapJoinData, err = cloudinit.NewJoinControlPlane(controlPlaneJoinInput)
@@ -947,25 +1008,49 @@ func (r *KubeadmConfigReconciler) joinControlplane(ctx context.Context, scope *S
 	return ctrl.Result{RequeueAfter: r.tokenCheckRefreshOrRotationInterval()}, nil
 }
 
-// resolveFiles maps .Spec.Files into cloudinit.Files, resolving any object references
-// along the way.
-func (r *KubeadmConfigReconciler) resolveFiles(ctx context.Context, cfg *bootstrapv1.KubeadmConfig) ([]bootstrapv1.File, error) {
-	collected := make([]bootstrapv1.File, 0, len(cfg.Spec.Files))
+// resolveFiles maps .Spec.Files into cloudinit.Files, resolving any object references and rendering
+// template content. The control plane version used by templates is read from the cluster's ControlPlaneRef
+// via getControlPlaneVersion, so callers do not need to compute it: there is one place where the
+// "controlPlane.version" template variable is sourced.
+//
+// The .controlPlane key is omitted from the template data when the cluster has no control plane reference
+// or the referenced object does not expose spec.version; authors of contentFormat "Template" files are
+// responsible for handling that case (e.g. with {{ if .controlPlane }}).
+func (r *KubeadmConfigReconciler) resolveFiles(ctx context.Context, cfg *bootstrapv1.KubeadmConfig, cluster *clusterv1.Cluster) ([]bootstrapv1.File, error) {
+	cpVersion, err := r.getControlPlaneVersion(ctx, cluster)
+	if err != nil {
+		return nil, err
+	}
+	if cpVersion != "" {
+		// Normalize to a fully qualified, "v"-prefixed semver (e.g. "1.35" -> "v1.35.0") so the
+		// .controlPlane.version template variable is consistent with the version field on the Cluster object
+		// and with CAPI builtin variables. This also validates that the control plane version is valid semver.
+		parsed, perr := semver.ParseTolerant(cpVersion)
+		if perr != nil {
+			return nil, errors.Wrapf(perr, "failed to parse control plane version %q for template data", cpVersion)
+		}
+		cpVersion = "v" + parsed.String()
+	}
 
+	collected := make([]bootstrapv1.File, 0, len(cfg.Spec.Files))
 	for i := range cfg.Spec.Files {
 		in := cfg.Spec.Files[i]
-		if in.ContentFrom != nil {
+		if in.ContentFrom.IsDefined() {
 			data, err := r.resolveSecretFileContent(ctx, cfg.Namespace, in)
 			if err != nil {
 				return nil, errors.Wrapf(err, "failed to resolve file source")
 			}
-			in.ContentFrom = nil
+			in.ContentFrom = bootstrapv1.FileSource{}
 			in.Content = string(data)
 		}
 		collected = append(collected, in)
 	}
 
-	return collected, nil
+	rendered, err := renderTemplates(collected, templateData(cpVersion))
+	if err != nil {
+		return nil, errors.Wrapf(err, "failed to render templates")
+	}
+	return rendered, nil
 }
 
 // resolveSecretFileContent returns file content fetched from a referenced secret object.
@@ -992,14 +1077,14 @@ func (r *KubeadmConfigReconciler) resolveUsers(ctx context.Context, cfg *bootstr
 
 	for i := range cfg.Spec.Users {
 		in := cfg.Spec.Users[i]
-		if in.PasswdFrom != nil {
+		if in.PasswdFrom.IsDefined() {
 			data, err := r.resolveSecretPasswordContent(ctx, cfg.Namespace, in)
 			if err != nil {
 				return nil, errors.Wrapf(err, "failed to resolve passwd source")
 			}
-			in.PasswdFrom = nil
+			in.PasswdFrom = bootstrapv1.PasswdSource{}
 			passwdContent := string(data)
-			in.Passwd = &passwdContent
+			in.Passwd = passwdContent
 		}
 		collected = append(collected, in)
 	}
@@ -1007,33 +1092,31 @@ func (r *KubeadmConfigReconciler) resolveUsers(ctx context.Context, cfg *bootstr
 	return collected, nil
 }
 
-func (r *KubeadmConfigReconciler) resolveDiscoveryKubeConfig(cfg *bootstrapv1.FileDiscovery) (*bootstrapv1.File, error) {
-	if cfg == nil || cfg.KubeConfig == nil {
-		return nil, errors.New("no discovery configuration file to resolve")
-	}
-	if cfg.KubeConfig.Cluster == nil {
-		return nil, errors.New("expected discovery kubeconfig cluster to not be empty")
-	}
+func (r *KubeadmConfigReconciler) resolveDiscoveryKubeConfig(cfg bootstrapv1.FileDiscovery) (*bootstrapv1.File, error) {
 	cluster := clientcmdv1.Cluster{
 		Server:                   cfg.KubeConfig.Cluster.Server,
 		TLSServerName:            cfg.KubeConfig.Cluster.TLSServerName,
-		InsecureSkipTLSVerify:    cfg.KubeConfig.Cluster.InsecureSkipTLSVerify,
+		InsecureSkipTLSVerify:    ptr.Deref(cfg.KubeConfig.Cluster.InsecureSkipTLSVerify, false),
 		CertificateAuthorityData: cfg.KubeConfig.Cluster.CertificateAuthorityData,
 		ProxyURL:                 cfg.KubeConfig.Cluster.ProxyURL,
 	}
 	user := clientcmdv1.AuthInfo{}
-	if cfg.KubeConfig.User.AuthProvider != nil {
+	if cfg.KubeConfig.User.AuthProvider.IsDefined() {
 		user.AuthProvider = &clientcmdv1.AuthProviderConfig{
 			Name:   cfg.KubeConfig.User.AuthProvider.Name,
 			Config: cfg.KubeConfig.User.AuthProvider.Config,
 		}
 	}
-	if cfg.KubeConfig.User.Exec != nil {
+	if cfg.KubeConfig.User.Exec.IsDefined() {
+		apiVersion := cfg.KubeConfig.User.Exec.APIVersion
+		if apiVersion == "" {
+			apiVersion = "client.authentication.k8s.io/v1"
+		}
 		user.Exec = &clientcmdv1.ExecConfig{
 			Command:            cfg.KubeConfig.User.Exec.Command,
 			Args:               cfg.KubeConfig.User.Exec.Args,
-			APIVersion:         cfg.KubeConfig.User.Exec.APIVersion,
-			ProvideClusterInfo: cfg.KubeConfig.User.Exec.ProvideClusterInfo,
+			APIVersion:         apiVersion,
+			ProvideClusterInfo: ptr.Deref(cfg.KubeConfig.User.Exec.ProvideClusterInfo, false),
 			InteractiveMode:    "Never",
 		}
 		for _, env := range cfg.KubeConfig.User.Exec.Env {
@@ -1128,22 +1211,22 @@ func (r *KubeadmConfigReconciler) ClusterToKubeadmConfigs(ctx context.Context, o
 	}
 
 	for _, m := range machineList.Items {
-		if m.Spec.Bootstrap.ConfigRef != nil &&
-			m.Spec.Bootstrap.ConfigRef.GroupVersionKind().GroupKind() == bootstrapv1.GroupVersion.WithKind("KubeadmConfig").GroupKind() {
+		if m.Spec.Bootstrap.ConfigRef.IsDefined() &&
+			m.Spec.Bootstrap.ConfigRef.GroupKind() == bootstrapv1.GroupVersion.WithKind("KubeadmConfig").GroupKind() {
 			name := client.ObjectKey{Namespace: m.Namespace, Name: m.Spec.Bootstrap.ConfigRef.Name}
 			result = append(result, ctrl.Request{NamespacedName: name})
 		}
 	}
 
 	if feature.Gates.Enabled(feature.MachinePool) {
-		machinePoolList := &expv1.MachinePoolList{}
+		machinePoolList := &clusterv1.MachinePoolList{}
 		if err := r.Client.List(ctx, machinePoolList, selectors...); err != nil {
 			return nil
 		}
 
 		for _, mp := range machinePoolList.Items {
-			if mp.Spec.Template.Spec.Bootstrap.ConfigRef != nil &&
-				mp.Spec.Template.Spec.Bootstrap.ConfigRef.GroupVersionKind().GroupKind() == bootstrapv1.GroupVersion.WithKind("KubeadmConfig").GroupKind() {
+			if mp.Spec.Template.Spec.Bootstrap.ConfigRef.IsDefined() &&
+				mp.Spec.Template.Spec.Bootstrap.ConfigRef.GroupKind() == bootstrapv1.GroupVersion.WithKind("KubeadmConfig").GroupKind() {
 				name := client.ObjectKey{Namespace: mp.Namespace, Name: mp.Spec.Template.Spec.Bootstrap.ConfigRef.Name}
 				result = append(result, ctrl.Request{NamespacedName: name})
 			}
@@ -1162,7 +1245,7 @@ func (r *KubeadmConfigReconciler) MachineToBootstrapMapFunc(_ context.Context, o
 	}
 
 	result := []ctrl.Request{}
-	if m.Spec.Bootstrap.ConfigRef != nil && m.Spec.Bootstrap.ConfigRef.GroupVersionKind() == bootstrapv1.GroupVersion.WithKind("KubeadmConfig") {
+	if m.Spec.Bootstrap.ConfigRef.IsDefined() && m.Spec.Bootstrap.ConfigRef.GroupKind() == bootstrapv1.GroupVersion.WithKind("KubeadmConfig").GroupKind() {
 		name := client.ObjectKey{Namespace: m.Namespace, Name: m.Spec.Bootstrap.ConfigRef.Name}
 		result = append(result, ctrl.Request{NamespacedName: name})
 	}
@@ -1172,14 +1255,14 @@ func (r *KubeadmConfigReconciler) MachineToBootstrapMapFunc(_ context.Context, o
 // MachinePoolToBootstrapMapFunc is a handler.ToRequestsFunc to be used to enqueue
 // request for reconciliation of KubeadmConfig.
 func (r *KubeadmConfigReconciler) MachinePoolToBootstrapMapFunc(_ context.Context, o client.Object) []ctrl.Request {
-	m, ok := o.(*expv1.MachinePool)
+	m, ok := o.(*clusterv1.MachinePool)
 	if !ok {
 		panic(fmt.Sprintf("Expected a MachinePool but got a %T", o))
 	}
 
 	result := []ctrl.Request{}
 	configRef := m.Spec.Template.Spec.Bootstrap.ConfigRef
-	if configRef != nil && configRef.GroupVersionKind().GroupKind() == bootstrapv1.GroupVersion.WithKind("KubeadmConfig").GroupKind() {
+	if configRef.IsDefined() && configRef.GroupKind() == bootstrapv1.GroupVersion.WithKind("KubeadmConfig").GroupKind() {
 		name := client.ObjectKey{Namespace: m.Namespace, Name: configRef.Name}
 		result = append(result, ctrl.Request{NamespacedName: name})
 	}
@@ -1194,14 +1277,11 @@ func (r *KubeadmConfigReconciler) reconcileDiscovery(ctx context.Context, cluste
 	log := ctrl.LoggerFrom(ctx)
 
 	// if config already contains a file discovery configuration, respect it without further validations
-	if config.Spec.JoinConfiguration.Discovery.File != nil {
+	if config.Spec.JoinConfiguration.Discovery.File.IsDefined() {
 		return r.reconcileDiscoveryFile(ctx, cluster, config, certificates)
 	}
 
 	// otherwise it is necessary to ensure token discovery is properly configured
-	if config.Spec.JoinConfiguration.Discovery.BootstrapToken == nil {
-		config.Spec.JoinConfiguration.Discovery.BootstrapToken = &bootstrapv1.BootstrapTokenDiscovery{}
-	}
 
 	// calculate the ca cert hashes if they are not already set
 	if len(config.Spec.JoinConfiguration.Discovery.BootstrapToken.CACertHashes) == 0 {
@@ -1245,7 +1325,7 @@ func (r *KubeadmConfigReconciler) reconcileDiscovery(ctx context.Context, cluste
 	// If the BootstrapToken does not contain any CACertHashes then force skip CA Verification
 	if len(config.Spec.JoinConfiguration.Discovery.BootstrapToken.CACertHashes) == 0 {
 		log.Info("No CAs were provided. Falling back to insecure discover method by skipping CA Cert validation")
-		config.Spec.JoinConfiguration.Discovery.BootstrapToken.UnsafeSkipCAVerification = true
+		config.Spec.JoinConfiguration.Discovery.BootstrapToken.UnsafeSkipCAVerification = ptr.To(true)
 	}
 
 	return ctrl.Result{}, nil
@@ -1253,14 +1333,10 @@ func (r *KubeadmConfigReconciler) reconcileDiscovery(ctx context.Context, cluste
 
 func (r *KubeadmConfigReconciler) reconcileDiscoveryFile(ctx context.Context, cluster *clusterv1.Cluster, config *bootstrapv1.KubeadmConfig, certificates secret.Certificates) (ctrl.Result, error) {
 	log := ctrl.LoggerFrom(ctx)
-	cfg := config.Spec.JoinConfiguration.Discovery.File.KubeConfig
-	if cfg == nil {
+	cfg := &config.Spec.JoinConfiguration.Discovery.File.KubeConfig
+	if !cfg.IsDefined() {
 		// Nothing else to do.
 		return ctrl.Result{}, nil
-	}
-
-	if cfg.Cluster == nil {
-		cfg.Cluster = &bootstrapv1.KubeConfigCluster{}
 	}
 
 	if cfg.Cluster.Server == "" {
@@ -1286,56 +1362,56 @@ func (r *KubeadmConfigReconciler) reconcileDiscoveryFile(ctx context.Context, cl
 	return ctrl.Result{}, nil
 }
 
-// reconcileTopLevelObjectSettings injects into config.ClusterConfiguration values from top level objects like cluster and machine.
-// The implementation func respect user provided config values, but in case some of them are missing, values from top level objects are used.
-func (r *KubeadmConfigReconciler) reconcileTopLevelObjectSettings(ctx context.Context, cluster *clusterv1.Cluster, machine *clusterv1.Machine, config *bootstrapv1.KubeadmConfig) {
-	log := ctrl.LoggerFrom(ctx)
+// computeClusterConfigurationAndAdditionalData computes additional data that must go in kubeadm's ClusterConfiguration, but exists
+// in different Cluster API objects, like e.g. the Cluster object.
+func (r *KubeadmConfigReconciler) computeClusterConfigurationAndAdditionalData(cluster *clusterv1.Cluster, machine *clusterv1.Machine, clusterConfiguration *bootstrapv1.ClusterConfiguration, initConfiguration *bootstrapv1.InitConfiguration) *upstream.AdditionalData {
+	data := &upstream.AdditionalData{}
 
 	// If there is no ControlPlaneEndpoint defined in ClusterConfiguration but
 	// there is a ControlPlaneEndpoint defined at Cluster level (e.g. the load balancer endpoint),
 	// then use Cluster's ControlPlaneEndpoint as a control plane endpoint for the Kubernetes cluster.
-	if config.Spec.ClusterConfiguration.ControlPlaneEndpoint == "" && cluster.Spec.ControlPlaneEndpoint.IsValid() {
-		config.Spec.ClusterConfiguration.ControlPlaneEndpoint = cluster.Spec.ControlPlaneEndpoint.String()
-		log.V(3).Info("Altering ClusterConfiguration.ControlPlaneEndpoint", "controlPlaneEndpoint", config.Spec.ClusterConfiguration.ControlPlaneEndpoint)
+	if clusterConfiguration.ControlPlaneEndpoint == "" && cluster.Spec.ControlPlaneEndpoint.IsValid() {
+		clusterConfiguration.ControlPlaneEndpoint = cluster.Spec.ControlPlaneEndpoint.String()
 	}
 
-	// If there are no ClusterName defined in ClusterConfiguration, use Cluster.Name
-	if config.Spec.ClusterConfiguration.ClusterName == "" {
-		config.Spec.ClusterConfiguration.ClusterName = cluster.Name
-		log.V(3).Info("Altering ClusterConfiguration.ClusterName", "clusterName", config.Spec.ClusterConfiguration.ClusterName)
+	// Use Cluster.Name
+	data.ClusterName = ptr.To(cluster.Name)
+
+	// Use ClusterNetwork settings, if defined
+	if cluster.Spec.ClusterNetwork.ServiceDomain != "" {
+		data.DNSDomain = ptr.To(cluster.Spec.ClusterNetwork.ServiceDomain)
+	}
+	if len(cluster.Spec.ClusterNetwork.Services.CIDRBlocks) > 0 {
+		data.ServiceSubnet = ptr.To(cluster.Spec.ClusterNetwork.Services.String())
+	}
+	if len(cluster.Spec.ClusterNetwork.Pods.CIDRBlocks) > 0 {
+		data.PodSubnet = ptr.To(cluster.Spec.ClusterNetwork.Pods.String())
 	}
 
-	// If there are no Network settings defined in ClusterConfiguration, use ClusterNetwork settings, if defined
-	if cluster.Spec.ClusterNetwork != nil {
-		if config.Spec.ClusterConfiguration.Networking.DNSDomain == "" && cluster.Spec.ClusterNetwork.ServiceDomain != "" {
-			config.Spec.ClusterConfiguration.Networking.DNSDomain = cluster.Spec.ClusterNetwork.ServiceDomain
-			log.V(3).Info("Altering ClusterConfiguration.Networking.DNSDomain", "dnsDomain", config.Spec.ClusterConfiguration.Networking.DNSDomain)
-		}
-		if config.Spec.ClusterConfiguration.Networking.ServiceSubnet == "" &&
-			cluster.Spec.ClusterNetwork.Services != nil &&
-			len(cluster.Spec.ClusterNetwork.Services.CIDRBlocks) > 0 {
-			config.Spec.ClusterConfiguration.Networking.ServiceSubnet = cluster.Spec.ClusterNetwork.Services.String()
-			log.V(3).Info("Altering ClusterConfiguration.Networking.ServiceSubnet", "serviceSubnet", config.Spec.ClusterConfiguration.Networking.ServiceSubnet)
-		}
-		if config.Spec.ClusterConfiguration.Networking.PodSubnet == "" &&
-			cluster.Spec.ClusterNetwork.Pods != nil &&
-			len(cluster.Spec.ClusterNetwork.Pods.CIDRBlocks) > 0 {
-			config.Spec.ClusterConfiguration.Networking.PodSubnet = cluster.Spec.ClusterNetwork.Pods.String()
-			log.V(3).Info("Altering ClusterConfiguration.Networking.PodSubnet", "podSubnet", config.Spec.ClusterConfiguration.Networking.PodSubnet)
-		}
+	// Use Version from machine, if defined
+	if machine.Spec.Version != "" {
+		data.KubernetesVersion = ptr.To(machine.Spec.Version)
 	}
 
-	// If there are no KubernetesVersion settings defined in ClusterConfiguration, use Version from machine, if defined
-	if config.Spec.ClusterConfiguration.KubernetesVersion == "" && machine.Spec.Version != nil {
-		config.Spec.ClusterConfiguration.KubernetesVersion = *machine.Spec.Version
-		log.V(3).Info("Altering ClusterConfiguration.KubernetesVersion", "kubernetesVersion", config.Spec.ClusterConfiguration.KubernetesVersion)
+	// Use ControlPlaneComponentHealthCheckSeconds from init configuration
+	// Note. initConfiguration.Timeouts.ControlPlaneComponentHealthCheckSeconds in v1beta3 kubeadm's API
+	// was part of ClusterConfiguration, so we have to bring it back as additional data.
+	if initConfiguration.Timeouts.ControlPlaneComponentHealthCheckSeconds != nil {
+		data.ControlPlaneComponentHealthCheckSeconds = initConfiguration.Timeouts.ControlPlaneComponentHealthCheckSeconds
 	}
+
+	return data
 }
 
 // storeBootstrapData creates a new secret with the data passed in as input,
 // sets the reference in the configuration status and ready to true.
 func (r *KubeadmConfigReconciler) storeBootstrapData(ctx context.Context, scope *Scope, data []byte) error {
 	log := ctrl.LoggerFrom(ctx)
+
+	format := scope.Config.Spec.Format
+	if format == "" {
+		format = bootstrapv1.CloudConfig
+	}
 
 	secret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
@@ -1356,7 +1432,7 @@ func (r *KubeadmConfigReconciler) storeBootstrapData(ctx context.Context, scope 
 		},
 		Data: map[string][]byte{
 			"value":  data,
-			"format": []byte(scope.Config.Spec.Format),
+			"format": []byte(format),
 		},
 		Type: clusterv1.ClusterSecretType,
 	}
@@ -1372,13 +1448,13 @@ func (r *KubeadmConfigReconciler) storeBootstrapData(ctx context.Context, scope 
 			return errors.Wrapf(err, "failed to update bootstrap data secret for KubeadmConfig %s/%s", scope.Config.Namespace, scope.Config.Name)
 		}
 	}
-	scope.Config.Status.DataSecretName = ptr.To(secret.Name)
-	scope.Config.Status.Ready = true
-	conditions.MarkTrue(scope.Config, bootstrapv1.DataSecretAvailableCondition)
-	v1beta2conditions.Set(scope.Config, metav1.Condition{
-		Type:   bootstrapv1.KubeadmConfigDataSecretAvailableV1Beta2Condition,
+	scope.Config.Status.DataSecretName = secret.Name
+	scope.Config.Status.Initialization.DataSecretCreated = ptr.To(true)
+	v1beta1conditions.MarkTrue(scope.Config, bootstrapv1.DataSecretAvailableV1Beta1Condition)
+	conditions.Set(scope.Config, metav1.Condition{
+		Type:   bootstrapv1.KubeadmConfigDataSecretAvailableCondition,
 		Status: metav1.ConditionTrue,
-		Reason: bootstrapv1.KubeadmConfigDataSecretAvailableV1Beta2Reason,
+		Reason: bootstrapv1.KubeadmConfigDataSecretAvailableReason,
 	})
 	return nil
 }
@@ -1394,22 +1470,28 @@ func (r *KubeadmConfigReconciler) ensureBootstrapSecretOwnersRef(ctx context.Con
 		}
 		return errors.Wrapf(err, "failed to add KubeadmConfig %s as ownerReference to bootstrap Secret %s", scope.ConfigOwner.GetName(), secret.GetName())
 	}
-	patchHelper, err := patch.NewHelper(secret, r.Client)
-	if err != nil {
-		return errors.Wrapf(err, "failed to add KubeadmConfig %s as ownerReference to bootstrap Secret %s", scope.ConfigOwner.GetName(), secret.GetName())
-	}
-	if c := metav1.GetControllerOf(secret); c != nil && c.Kind != "KubeadmConfig" {
-		secret.SetOwnerReferences(util.RemoveOwnerRef(secret.GetOwnerReferences(), *c))
-	}
-	secret.SetOwnerReferences(util.EnsureOwnerRef(secret.GetOwnerReferences(), metav1.OwnerReference{
+
+	configRef := metav1.OwnerReference{
 		APIVersion: bootstrapv1.GroupVersion.String(),
 		Kind:       "KubeadmConfig",
 		UID:        scope.Config.UID,
 		Name:       scope.Config.Name,
 		Controller: ptr.To(true),
-	}))
-	err = patchHelper.Patch(ctx, secret)
-	if err != nil {
+	}
+
+	// No op if ownership is already set and up to date.
+	if util.HasExactOwnerRef(secret.OwnerReferences, configRef) {
+		return nil
+	}
+
+	// Otherwise replace existing controller OwnerReferences with the configRef.
+	original := secret.DeepCopy()
+	if c := metav1.GetControllerOf(secret); c != nil && c.Kind != "KubeadmConfig" {
+		secret.SetOwnerReferences(util.RemoveOwnerRef(secret.GetOwnerReferences(), *c))
+	}
+
+	secret.SetOwnerReferences(util.EnsureOwnerRef(secret.GetOwnerReferences(), configRef))
+	if err := r.Client.Patch(ctx, secret, client.MergeFrom(original)); err != nil {
 		return errors.Wrapf(err, "could not add KubeadmConfig %s as ownerReference to bootstrap Secret %s", scope.ConfigOwner.GetName(), secret.GetName())
 	}
 	return nil

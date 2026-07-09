@@ -19,11 +19,13 @@ package builder
 import (
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+
+	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 )
 
 var (
 	// InfrastructureGroupVersion is group version used for infrastructure objects.
-	InfrastructureGroupVersion = schema.GroupVersion{Group: "infrastructure.cluster.x-k8s.io", Version: "v1beta1"}
+	InfrastructureGroupVersion = clusterv1.GroupVersionInfrastructure
 
 	// GenericInfrastructureMachineKind is the Kind for the GenericInfrastructureMachine.
 	GenericInfrastructureMachineKind = "GenericInfrastructureMachine"
@@ -122,12 +124,16 @@ func testInfrastructureClusterCRD(gvk schema.GroupVersionKind) *apiextensionsv1.
 			Type: "object",
 			Properties: map[string]apiextensionsv1.JSONSchemaProps{
 				// mandatory field from the Cluster API contract
-				"ready": {Type: "boolean"},
+				"initialization": {
+					Type: "object",
+					Properties: map[string]apiextensionsv1.JSONSchemaProps{
+						"provisioned": {Type: "boolean"},
+					},
+				},
 				// General purpose fields to be used in different test scenario.
 				"foo": {Type: "string"},
 				"bar": {Type: "string"},
 			},
-			Required: []string{"ready"},
 		},
 	})
 }
@@ -190,7 +196,12 @@ func testInfrastructureMachineCRD(gvk schema.GroupVersionKind) *apiextensionsv1.
 			Type: "object",
 			Properties: map[string]apiextensionsv1.JSONSchemaProps{
 				// mandatory field from the Cluster API contract
-				"ready": {Type: "boolean"},
+				"initialization": {
+					Type: "object",
+					Properties: map[string]apiextensionsv1.JSONSchemaProps{
+						"provisioned": {Type: "boolean"},
+					},
+				},
 				// General purpose fields to be used in different test scenario.
 				"foo": {Type: "string"},
 				"bar": {Type: "string"},

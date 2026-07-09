@@ -4,8 +4,7 @@ The Runtime SDK feature provides an extensibility mechanism that allows systems,
 
 <aside class="note warning">
 
-All currently implemented hooks require to also enable the [ClusterClass](../cluster-class/index.md) feature.
-Please note that hooks are only invoked for Clusters created using ClusterClass.
+All currently implemented hooks except for [In-Place Update Hooks](./implement-in-place-update-hooks.md) require to also enable the [ClusterClass](../cluster-class/index.md) feature, and are only invoked for Clusters created using ClusterClass.
 
 </aside>
 
@@ -29,7 +28,9 @@ Additional documentation:
     * [Runtime Hooks for Add-on Management CAEP](https://github.com/kubernetes-sigs/cluster-api/blob/main/docs/proposals/20220414-runtime-hooks.md)
 * For Runtime Extension developers:
     * [Implementing Runtime Extensions](./implement-extensions.md)
+    * [Implementing In-Place Update Hooks Extensions](./implement-in-place-update-hooks.md)
     * [Implementing Lifecycle Hook Extensions](./implement-lifecycle-hooks.md)
     * [Implementing Topology Mutation Hook Extensions](./implement-topology-mutation-hook.md)
+    * [Implementing Upgrade Plan Runtime Extensions](./implement-upgrade-plan-hooks.md)
 * For Cluster operators:
     * [Deploying Runtime Extensions](./deploy-runtime-extension.md)

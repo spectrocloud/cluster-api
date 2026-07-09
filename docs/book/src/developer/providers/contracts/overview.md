@@ -5,10 +5,12 @@ Those rules can be in the form of CustomResourceDefinition (CRD) fields and/or e
 
 Different rules apply to each provider type and for each different resource that is expected to interact with "core" Cluster API.
 
+See [Cluster API release vs contract versions](../../../reference/versions.md#cluster-api-release-vs-contract-versions) for info about current and supported contract versions.
+
 - Infrastructure provider
   - Contract rules for [InfraCluster](infra-cluster.md) resource
   - Contract rules for [InfraMachine](infra-machine.md) resource
-  - Contract rules for InfraMachinePool resource (TODO)
+  - Contract rules for [InfraMachinePool](infra-machinepool.md) resource
   
 - Bootstrap provider
   - Contract rules for [BootstrapConfig](bootstrap-config.md) resource

@@ -25,44 +25,11 @@ import (
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 
-	bootstrapv1 "sigs.k8s.io/cluster-api/bootstrap/kubeadm/api/v1beta1"
+	bootstrapv1 "sigs.k8s.io/cluster-api/api/bootstrap/kubeadm/v1beta2"
 	"sigs.k8s.io/cluster-api/feature"
-	"sigs.k8s.io/cluster-api/internal/webhooks/util"
 )
 
 var ctx = ctrl.SetupSignalHandler()
-
-func TestKubeadmConfigDefault(t *testing.T) {
-	utilfeature.SetFeatureGateDuringTest(t, feature.Gates, feature.ClusterTopology, true)
-
-	g := NewWithT(t)
-
-	kubeadmConfig := &bootstrapv1.KubeadmConfig{
-		ObjectMeta: metav1.ObjectMeta{
-			Namespace: "foo",
-		},
-		Spec: bootstrapv1.KubeadmConfigSpec{},
-	}
-	updateDefaultingKubeadmConfig := kubeadmConfig.DeepCopy()
-	updateDefaultingKubeadmConfig.Spec.Verbosity = ptr.To[int32](4)
-	webhook := &KubeadmConfig{}
-	t.Run("for KubeadmConfig", util.CustomDefaultValidateTest(ctx, updateDefaultingKubeadmConfig, webhook))
-
-	g.Expect(webhook.Default(ctx, kubeadmConfig)).To(Succeed())
-
-	g.Expect(kubeadmConfig.Spec.Format).To(Equal(bootstrapv1.CloudConfig))
-
-	ignitionKubeadmConfig := &bootstrapv1.KubeadmConfig{
-		ObjectMeta: metav1.ObjectMeta{
-			Namespace: "foo",
-		},
-		Spec: bootstrapv1.KubeadmConfigSpec{
-			Format: bootstrapv1.Ignition,
-		},
-	}
-	g.Expect(webhook.Default(ctx, ignitionKubeadmConfig)).To(Succeed())
-	g.Expect(ignitionKubeadmConfig.Spec.Format).To(Equal(bootstrapv1.Ignition))
-}
 
 func TestKubeadmConfigValidate(t *testing.T) {
 	cases := map[string]struct {
@@ -94,7 +61,7 @@ func TestKubeadmConfigValidate(t *testing.T) {
 				Spec: bootstrapv1.KubeadmConfigSpec{
 					Files: []bootstrapv1.File{
 						{
-							ContentFrom: &bootstrapv1.FileSource{
+							ContentFrom: bootstrapv1.FileSource{
 								Secret: bootstrapv1.SecretFileSource{
 									Name: "foo",
 									Key:  "bar",
@@ -114,8 +81,12 @@ func TestKubeadmConfigValidate(t *testing.T) {
 				Spec: bootstrapv1.KubeadmConfigSpec{
 					Files: []bootstrapv1.File{
 						{
-							ContentFrom: &bootstrapv1.FileSource{},
-							Content:     "foo",
+							ContentFrom: bootstrapv1.FileSource{
+								Secret: bootstrapv1.SecretFileSource{
+									Name: "secret",
+								},
+							},
+							Content: "foo",
 						},
 					},
 				},
@@ -131,7 +102,7 @@ func TestKubeadmConfigValidate(t *testing.T) {
 				Spec: bootstrapv1.KubeadmConfigSpec{
 					Files: []bootstrapv1.File{
 						{
-							ContentFrom: &bootstrapv1.FileSource{
+							ContentFrom: bootstrapv1.FileSource{
 								Secret: bootstrapv1.SecretFileSource{
 									Key: "bar",
 								},
@@ -152,7 +123,7 @@ func TestKubeadmConfigValidate(t *testing.T) {
 				Spec: bootstrapv1.KubeadmConfigSpec{
 					Files: []bootstrapv1.File{
 						{
-							ContentFrom: &bootstrapv1.FileSource{
+							ContentFrom: bootstrapv1.FileSource{
 								Secret: bootstrapv1.SecretFileSource{
 									Name: "foo",
 								},
@@ -183,6 +154,23 @@ func TestKubeadmConfigValidate(t *testing.T) {
 			},
 			expectErr: true,
 		},
+		"valid template contentFormat": {
+			in: &bootstrapv1.KubeadmConfig{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "baz",
+					Namespace: metav1.NamespaceDefault,
+				},
+				Spec: bootstrapv1.KubeadmConfigSpec{
+					Files: []bootstrapv1.File{
+						{
+							Path:          "/x",
+							Content:       "{{ .controlPlane.version }}",
+							ContentFormat: bootstrapv1.FileContentFormatTemplate,
+						},
+					},
+				},
+			},
+		},
 		"valid passwd": {
 			in: &bootstrapv1.KubeadmConfig{
 				ObjectMeta: metav1.ObjectMeta{
@@ -192,7 +180,7 @@ func TestKubeadmConfigValidate(t *testing.T) {
 				Spec: bootstrapv1.KubeadmConfigSpec{
 					Users: []bootstrapv1.User{
 						{
-							Passwd: ptr.To("foo"),
+							Passwd: "foo",
 						},
 					},
 				},
@@ -207,7 +195,7 @@ func TestKubeadmConfigValidate(t *testing.T) {
 				Spec: bootstrapv1.KubeadmConfigSpec{
 					Users: []bootstrapv1.User{
 						{
-							PasswdFrom: &bootstrapv1.PasswdSource{
+							PasswdFrom: bootstrapv1.PasswdSource{
 								Secret: bootstrapv1.SecretPasswdSource{
 									Name: "foo",
 									Key:  "bar",
@@ -227,8 +215,12 @@ func TestKubeadmConfigValidate(t *testing.T) {
 				Spec: bootstrapv1.KubeadmConfigSpec{
 					Users: []bootstrapv1.User{
 						{
-							PasswdFrom: &bootstrapv1.PasswdSource{},
-							Passwd:     ptr.To("foo"),
+							PasswdFrom: bootstrapv1.PasswdSource{
+								Secret: bootstrapv1.SecretPasswdSource{
+									Name: "secret",
+								},
+							},
+							Passwd: "foo",
 						},
 					},
 				},
@@ -244,12 +236,12 @@ func TestKubeadmConfigValidate(t *testing.T) {
 				Spec: bootstrapv1.KubeadmConfigSpec{
 					Users: []bootstrapv1.User{
 						{
-							PasswdFrom: &bootstrapv1.PasswdSource{
+							PasswdFrom: bootstrapv1.PasswdSource{
 								Secret: bootstrapv1.SecretPasswdSource{
 									Key: "bar",
 								},
 							},
-							Passwd: ptr.To("foo"),
+							Passwd: "foo",
 						},
 					},
 				},
@@ -265,12 +257,12 @@ func TestKubeadmConfigValidate(t *testing.T) {
 				Spec: bootstrapv1.KubeadmConfigSpec{
 					Users: []bootstrapv1.User{
 						{
-							PasswdFrom: &bootstrapv1.PasswdSource{
+							PasswdFrom: bootstrapv1.PasswdSource{
 								Secret: bootstrapv1.SecretPasswdSource{
 									Name: "foo",
 								},
 							},
-							Passwd: ptr.To("foo"),
+							Passwd: "foo",
 						},
 					},
 				},
@@ -285,7 +277,11 @@ func TestKubeadmConfigValidate(t *testing.T) {
 					Namespace: "default",
 				},
 				Spec: bootstrapv1.KubeadmConfigSpec{
-					Ignition: &bootstrapv1.IgnitionSpec{},
+					Ignition: bootstrapv1.IgnitionSpec{
+						ContainerLinuxConfig: bootstrapv1.ContainerLinuxConfig{
+							AdditionalConfig: "config",
+						},
+					},
 				},
 			},
 			expectErr: true,
@@ -329,27 +325,13 @@ func TestKubeadmConfigValidate(t *testing.T) {
 				},
 				Spec: bootstrapv1.KubeadmConfigSpec{
 					Format: bootstrapv1.Ignition,
-					DiskSetup: &bootstrapv1.DiskSetup{
+					DiskSetup: bootstrapv1.DiskSetup{
 						Partitions: []bootstrapv1.Partition{
 							{
-								TableType: ptr.To("MS-DOS"),
+								TableType: "MS-DOS",
 							},
 						},
 					},
-				},
-			},
-			expectErr: true,
-		},
-		"format is Ignition, experimental retry join is set": {
-			enableIgnitionFeature: true,
-			in: &bootstrapv1.KubeadmConfig{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "baz",
-					Namespace: "default",
-				},
-				Spec: bootstrapv1.KubeadmConfigSpec{
-					Format:                   bootstrapv1.Ignition,
-					UseExperimentalRetryJoin: true,
 				},
 			},
 			expectErr: true,
@@ -374,8 +356,10 @@ func TestKubeadmConfigValidate(t *testing.T) {
 				},
 				Spec: bootstrapv1.KubeadmConfigSpec{
 					Format: bootstrapv1.Ignition,
-					Ignition: &bootstrapv1.IgnitionSpec{
-						ContainerLinuxConfig: &bootstrapv1.ContainerLinuxConfig{},
+					Ignition: bootstrapv1.IgnitionSpec{
+						ContainerLinuxConfig: bootstrapv1.ContainerLinuxConfig{
+							AdditionalConfig: "config",
+						},
 					},
 				},
 			},
@@ -390,10 +374,10 @@ func TestKubeadmConfigValidate(t *testing.T) {
 				},
 				Spec: bootstrapv1.KubeadmConfigSpec{
 					Format: bootstrapv1.Ignition,
-					DiskSetup: &bootstrapv1.DiskSetup{
+					DiskSetup: bootstrapv1.DiskSetup{
 						Filesystems: []bootstrapv1.Filesystem{
 							{
-								ReplaceFS: ptr.To("ntfs"),
+								ReplaceFS: "ntfs",
 							},
 						},
 					},
@@ -410,10 +394,10 @@ func TestKubeadmConfigValidate(t *testing.T) {
 				},
 				Spec: bootstrapv1.KubeadmConfigSpec{
 					Format: bootstrapv1.Ignition,
-					DiskSetup: &bootstrapv1.DiskSetup{
+					DiskSetup: bootstrapv1.DiskSetup{
 						Filesystems: []bootstrapv1.Filesystem{
 							{
-								Partition: ptr.To("1"),
+								Partition: "1",
 							},
 						},
 					},
@@ -456,6 +440,148 @@ func TestKubeadmConfigValidate(t *testing.T) {
 				},
 			},
 			expectErr: true,
+		},
+		"bootCommands configured with Ignition format": {
+			enableIgnitionFeature: true,
+			in: &bootstrapv1.KubeadmConfig{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "baz",
+					Namespace: metav1.NamespaceDefault,
+				},
+				Spec: bootstrapv1.KubeadmConfigSpec{
+					Format:       bootstrapv1.Ignition,
+					BootCommands: []string{"echo $(date)", "echo 'hello BootCommands!'"},
+				},
+			},
+			expectErr: true,
+		},
+		"bootCommands configured with CloudConfig format": {
+			in: &bootstrapv1.KubeadmConfig{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "baz",
+					Namespace: metav1.NamespaceDefault,
+				},
+				Spec: bootstrapv1.KubeadmConfigSpec{
+					Format:       bootstrapv1.CloudConfig,
+					BootCommands: []string{"echo $(date)", "echo 'hello BootCommands!'"},
+				},
+			},
+		},
+		"valid ControlPlaneComponentHealthCheckSeconds (JoinConfiguration not defined)": {
+			in: &bootstrapv1.KubeadmConfig{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "baz",
+					Namespace: metav1.NamespaceDefault,
+				},
+				Spec: bootstrapv1.KubeadmConfigSpec{
+					InitConfiguration: bootstrapv1.InitConfiguration{
+						Timeouts: bootstrapv1.Timeouts{
+							ControlPlaneComponentHealthCheckSeconds: ptr.To[int32](10),
+						},
+					},
+				},
+			},
+			expectErr: false,
+		},
+		"valid ControlPlaneComponentHealthCheckSeconds (InitConfiguration not defined)": {
+			in: &bootstrapv1.KubeadmConfig{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "baz",
+					Namespace: metav1.NamespaceDefault,
+				},
+				Spec: bootstrapv1.KubeadmConfigSpec{
+					JoinConfiguration: bootstrapv1.JoinConfiguration{
+						Timeouts: bootstrapv1.Timeouts{
+							ControlPlaneComponentHealthCheckSeconds: ptr.To[int32](10),
+						},
+					},
+				},
+			},
+			expectErr: false,
+		},
+		"valid ControlPlaneComponentHealthCheckSeconds": {
+			in: &bootstrapv1.KubeadmConfig{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "baz",
+					Namespace: metav1.NamespaceDefault,
+				},
+				Spec: bootstrapv1.KubeadmConfigSpec{
+					InitConfiguration: bootstrapv1.InitConfiguration{
+						Timeouts: bootstrapv1.Timeouts{
+							ControlPlaneComponentHealthCheckSeconds: ptr.To[int32](10),
+						},
+					},
+					JoinConfiguration: bootstrapv1.JoinConfiguration{
+						Timeouts: bootstrapv1.Timeouts{
+							ControlPlaneComponentHealthCheckSeconds: ptr.To[int32](10),
+						},
+					},
+				},
+			},
+		},
+		"valid DiskLayout percentages": {
+			in: &bootstrapv1.KubeadmConfig{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "baz",
+					Namespace: metav1.NamespaceDefault,
+				},
+				Spec: bootstrapv1.KubeadmConfigSpec{
+					DiskSetup: bootstrapv1.DiskSetup{
+						Partitions: []bootstrapv1.Partition{
+							{
+								Device: "test-device",
+								DiskLayout: []bootstrapv1.PartitionSpec{
+									{Percentage: 30},
+									{Percentage: 70},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		"invalid DiskLayout percentages > 100": {
+			in: &bootstrapv1.KubeadmConfig{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "baz",
+					Namespace: metav1.NamespaceDefault,
+				},
+				Spec: bootstrapv1.KubeadmConfigSpec{
+					DiskSetup: bootstrapv1.DiskSetup{
+						Partitions: []bootstrapv1.Partition{
+							{
+								Device: "test-device",
+								DiskLayout: []bootstrapv1.PartitionSpec{
+									{Percentage: 60},
+									{Percentage: 50},
+								},
+							},
+						},
+					},
+				},
+			},
+			expectErr: true,
+		},
+		"valid DiskLayout percentages < 100": {
+			in: &bootstrapv1.KubeadmConfig{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "baz",
+					Namespace: metav1.NamespaceDefault,
+				},
+				Spec: bootstrapv1.KubeadmConfigSpec{
+					DiskSetup: bootstrapv1.DiskSetup{
+						Partitions: []bootstrapv1.Partition{
+							{
+								Device: "test-device",
+								DiskLayout: []bootstrapv1.PartitionSpec{
+									{Percentage: 30},
+									{Percentage: 20},
+								},
+							},
+						},
+					},
+				},
+			},
 		},
 	}
 

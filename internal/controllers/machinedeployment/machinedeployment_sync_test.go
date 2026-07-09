@@ -21,28 +21,21 @@ import (
 	"fmt"
 	"strings"
 	"testing"
-	"time"
 
 	. "github.com/onsi/gomega"
 	"github.com/pkg/errors"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/types"
-	apirand "k8s.io/apimachinery/pkg/util/rand"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
-	capierrors "sigs.k8s.io/cluster-api/errors"
-	"sigs.k8s.io/cluster-api/internal/controllers/machinedeployment/mdutil"
-	"sigs.k8s.io/cluster-api/util/conditions"
+	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
+	v1beta1conditions "sigs.k8s.io/cluster-api/util/conditions/deprecated/v1beta1"
 )
 
-func TestCalculateStatus(t *testing.T) {
-	msStatusError := capierrors.MachineSetStatusError("some failure")
-
+func TestCalculateV1Beta1Status(t *testing.T) {
 	var tests = map[string]struct {
 		machineSets    []*clusterv1.MachineSet
 		newMachineSet  *clusterv1.MachineSet
@@ -55,10 +48,14 @@ func TestCalculateStatus(t *testing.T) {
 					Replicas: ptr.To[int32](2),
 				},
 				Status: clusterv1.MachineSetStatus{
-					Selector:           "",
-					AvailableReplicas:  2,
-					ReadyReplicas:      2,
-					Replicas:           2,
+					Selector: "",
+					Replicas: ptr.To[int32](2),
+					Deprecated: &clusterv1.MachineSetDeprecatedStatus{
+						V1Beta1: &clusterv1.MachineSetV1Beta1DeprecatedStatus{
+							AvailableReplicas: 2,
+							ReadyReplicas:     2,
+						},
+					},
 					ObservedGeneration: 1,
 				},
 			}},
@@ -67,10 +64,14 @@ func TestCalculateStatus(t *testing.T) {
 					Replicas: ptr.To[int32](2),
 				},
 				Status: clusterv1.MachineSetStatus{
-					Selector:           "",
-					AvailableReplicas:  2,
-					ReadyReplicas:      2,
-					Replicas:           2,
+					Selector: "",
+					Replicas: ptr.To[int32](2),
+					Deprecated: &clusterv1.MachineSetDeprecatedStatus{
+						V1Beta1: &clusterv1.MachineSetV1Beta1DeprecatedStatus{
+							AvailableReplicas: 2,
+							ReadyReplicas:     2,
+						},
+					},
 					ObservedGeneration: 1,
 				},
 			},
@@ -83,13 +84,14 @@ func TestCalculateStatus(t *testing.T) {
 				},
 			},
 			expectedStatus: clusterv1.MachineDeploymentStatus{
-				ObservedGeneration:  2,
-				Replicas:            2,
-				UpdatedReplicas:     2,
-				ReadyReplicas:       2,
-				AvailableReplicas:   2,
-				UnavailableReplicas: 0,
-				Phase:               "Running",
+				Deprecated: &clusterv1.MachineDeploymentDeprecatedStatus{
+					V1Beta1: &clusterv1.MachineDeploymentV1Beta1DeprecatedStatus{
+						UpdatedReplicas:     2,
+						ReadyReplicas:       2,
+						AvailableReplicas:   2,
+						UnavailableReplicas: 0,
+					},
+				},
 			},
 		},
 		"scaling up": {
@@ -98,10 +100,14 @@ func TestCalculateStatus(t *testing.T) {
 					Replicas: ptr.To[int32](2),
 				},
 				Status: clusterv1.MachineSetStatus{
-					Selector:           "",
-					AvailableReplicas:  1,
-					ReadyReplicas:      1,
-					Replicas:           2,
+					Selector: "",
+					Replicas: ptr.To[int32](2),
+					Deprecated: &clusterv1.MachineSetDeprecatedStatus{
+						V1Beta1: &clusterv1.MachineSetV1Beta1DeprecatedStatus{
+							AvailableReplicas: 1,
+							ReadyReplicas:     1,
+						},
+					},
 					ObservedGeneration: 1,
 				},
 			}},
@@ -110,10 +116,14 @@ func TestCalculateStatus(t *testing.T) {
 					Replicas: ptr.To[int32](2),
 				},
 				Status: clusterv1.MachineSetStatus{
-					Selector:           "",
-					AvailableReplicas:  1,
-					ReadyReplicas:      1,
-					Replicas:           2,
+					Selector: "",
+					Replicas: ptr.To[int32](2),
+					Deprecated: &clusterv1.MachineSetDeprecatedStatus{
+						V1Beta1: &clusterv1.MachineSetV1Beta1DeprecatedStatus{
+							AvailableReplicas: 1,
+							ReadyReplicas:     1,
+						},
+					},
 					ObservedGeneration: 1,
 				},
 			},
@@ -126,13 +136,14 @@ func TestCalculateStatus(t *testing.T) {
 				},
 			},
 			expectedStatus: clusterv1.MachineDeploymentStatus{
-				ObservedGeneration:  2,
-				Replicas:            2,
-				UpdatedReplicas:     2,
-				ReadyReplicas:       1,
-				AvailableReplicas:   1,
-				UnavailableReplicas: 1,
-				Phase:               "ScalingUp",
+				Deprecated: &clusterv1.MachineDeploymentDeprecatedStatus{
+					V1Beta1: &clusterv1.MachineDeploymentV1Beta1DeprecatedStatus{
+						UpdatedReplicas:     2,
+						ReadyReplicas:       1,
+						AvailableReplicas:   1,
+						UnavailableReplicas: 1,
+					},
+				},
 			},
 		},
 		"scaling down": {
@@ -141,10 +152,14 @@ func TestCalculateStatus(t *testing.T) {
 					Replicas: ptr.To[int32](2),
 				},
 				Status: clusterv1.MachineSetStatus{
-					Selector:           "",
-					AvailableReplicas:  3,
-					ReadyReplicas:      2,
-					Replicas:           2,
+					Selector: "",
+					Replicas: ptr.To[int32](2),
+					Deprecated: &clusterv1.MachineSetDeprecatedStatus{
+						V1Beta1: &clusterv1.MachineSetV1Beta1DeprecatedStatus{
+							AvailableReplicas: 3,
+							ReadyReplicas:     2,
+						},
+					},
 					ObservedGeneration: 1,
 				},
 			}},
@@ -153,10 +168,14 @@ func TestCalculateStatus(t *testing.T) {
 					Replicas: ptr.To[int32](2),
 				},
 				Status: clusterv1.MachineSetStatus{
-					Selector:           "",
-					AvailableReplicas:  3,
-					ReadyReplicas:      2,
-					Replicas:           2,
+					Selector: "",
+					Replicas: ptr.To[int32](2),
+					Deprecated: &clusterv1.MachineSetDeprecatedStatus{
+						V1Beta1: &clusterv1.MachineSetV1Beta1DeprecatedStatus{
+							AvailableReplicas: 3,
+							ReadyReplicas:     2,
+						},
+					},
 					ObservedGeneration: 1,
 				},
 			},
@@ -169,57 +188,14 @@ func TestCalculateStatus(t *testing.T) {
 				},
 			},
 			expectedStatus: clusterv1.MachineDeploymentStatus{
-				ObservedGeneration:  2,
-				Replicas:            2,
-				UpdatedReplicas:     2,
-				ReadyReplicas:       2,
-				AvailableReplicas:   3,
-				UnavailableReplicas: 0,
-				Phase:               "ScalingDown",
-			},
-		},
-		"MachineSet failed": {
-			machineSets: []*clusterv1.MachineSet{{
-				Spec: clusterv1.MachineSetSpec{
-					Replicas: ptr.To[int32](2),
+				Deprecated: &clusterv1.MachineDeploymentDeprecatedStatus{
+					V1Beta1: &clusterv1.MachineDeploymentV1Beta1DeprecatedStatus{
+						UpdatedReplicas:     2,
+						ReadyReplicas:       2,
+						AvailableReplicas:   3,
+						UnavailableReplicas: 0,
+					},
 				},
-				Status: clusterv1.MachineSetStatus{
-					Selector:           "",
-					AvailableReplicas:  0,
-					ReadyReplicas:      0,
-					Replicas:           2,
-					ObservedGeneration: 1,
-					FailureReason:      &msStatusError,
-				},
-			}},
-			newMachineSet: &clusterv1.MachineSet{
-				Spec: clusterv1.MachineSetSpec{
-					Replicas: ptr.To[int32](2),
-				},
-				Status: clusterv1.MachineSetStatus{
-					Selector:           "",
-					AvailableReplicas:  0,
-					ReadyReplicas:      0,
-					Replicas:           2,
-					ObservedGeneration: 1,
-				},
-			},
-			deployment: &clusterv1.MachineDeployment{
-				ObjectMeta: metav1.ObjectMeta{
-					Generation: 2,
-				},
-				Spec: clusterv1.MachineDeploymentSpec{
-					Replicas: ptr.To[int32](2),
-				},
-			},
-			expectedStatus: clusterv1.MachineDeploymentStatus{
-				ObservedGeneration:  2,
-				Replicas:            2,
-				UpdatedReplicas:     2,
-				ReadyReplicas:       0,
-				AvailableReplicas:   0,
-				UnavailableReplicas: 2,
-				Phase:               "Failed",
 			},
 		},
 	}
@@ -228,8 +204,8 @@ func TestCalculateStatus(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			g := NewWithT(t)
 
-			actualStatus := calculateStatus(test.machineSets, test.newMachineSet, test.deployment)
-			g.Expect(actualStatus).To(BeComparableTo(test.expectedStatus))
+			calculateV1Beta1Status(test.machineSets, test.newMachineSet, test.deployment)
+			g.Expect(test.deployment.Status).To(BeComparableTo(test.expectedStatus))
 		})
 	}
 }
@@ -285,11 +261,13 @@ func TestScaleMachineSet(t *testing.T) {
 					Name:      "bar",
 				},
 				Spec: clusterv1.MachineDeploymentSpec{
-					Strategy: &clusterv1.MachineDeploymentStrategy{
-						Type: clusterv1.RollingUpdateMachineDeploymentStrategyType,
-						RollingUpdate: &clusterv1.MachineRollingUpdateDeployment{
-							MaxUnavailable: intOrStrPtr(0),
-							MaxSurge:       intOrStrPtr(2),
+					Rollout: clusterv1.MachineDeploymentRolloutSpec{
+						Strategy: clusterv1.MachineDeploymentRolloutStrategy{
+							Type: clusterv1.RollingUpdateMachineDeploymentStrategyType,
+							RollingUpdate: clusterv1.MachineDeploymentRolloutStrategyRollingUpdate{
+								MaxUnavailable: intOrStrPtr(0),
+								MaxSurge:       intOrStrPtr(2),
+							},
 						},
 					},
 					Replicas: ptr.To[int32](2),
@@ -314,11 +292,13 @@ func TestScaleMachineSet(t *testing.T) {
 					Name:      "bar",
 				},
 				Spec: clusterv1.MachineDeploymentSpec{
-					Strategy: &clusterv1.MachineDeploymentStrategy{
-						Type: clusterv1.RollingUpdateMachineDeploymentStrategyType,
-						RollingUpdate: &clusterv1.MachineRollingUpdateDeployment{
-							MaxUnavailable: intOrStrPtr(0),
-							MaxSurge:       intOrStrPtr(2),
+					Rollout: clusterv1.MachineDeploymentRolloutSpec{
+						Strategy: clusterv1.MachineDeploymentRolloutStrategy{
+							Type: clusterv1.RollingUpdateMachineDeploymentStrategyType,
+							RollingUpdate: clusterv1.MachineDeploymentRolloutStrategyRollingUpdate{
+								MaxUnavailable: intOrStrPtr(0),
+								MaxSurge:       intOrStrPtr(2),
+							},
 						},
 					},
 					Replicas: ptr.To[int32](2),
@@ -343,11 +323,13 @@ func TestScaleMachineSet(t *testing.T) {
 					Name:      "bar",
 				},
 				Spec: clusterv1.MachineDeploymentSpec{
-					Strategy: &clusterv1.MachineDeploymentStrategy{
-						Type: clusterv1.RollingUpdateMachineDeploymentStrategyType,
-						RollingUpdate: &clusterv1.MachineRollingUpdateDeployment{
-							MaxUnavailable: intOrStrPtr(0),
-							MaxSurge:       intOrStrPtr(2),
+					Rollout: clusterv1.MachineDeploymentRolloutSpec{
+						Strategy: clusterv1.MachineDeploymentRolloutStrategy{
+							Type: clusterv1.RollingUpdateMachineDeploymentStrategyType,
+							RollingUpdate: clusterv1.MachineDeploymentRolloutStrategyRollingUpdate{
+								MaxUnavailable: intOrStrPtr(0),
+								MaxSurge:       intOrStrPtr(2),
+							},
 						},
 					},
 					Replicas: ptr.To[int32](2),
@@ -392,45 +374,41 @@ func TestScaleMachineSet(t *testing.T) {
 			g.Expect(err).ToNot(HaveOccurred())
 
 			g.Expect(*freshMachineSet.Spec.Replicas).To(BeEquivalentTo(tc.newScale))
-
-			expectedMachineSetAnnotations := map[string]string{
-				clusterv1.DesiredReplicasAnnotation: fmt.Sprintf("%d", *tc.machineDeployment.Spec.Replicas),
-				clusterv1.MaxReplicasAnnotation:     fmt.Sprintf("%d", (*tc.machineDeployment.Spec.Replicas)+mdutil.MaxSurge(*tc.machineDeployment)),
-			}
-			g.Expect(freshMachineSet.GetAnnotations()).To(BeEquivalentTo(expectedMachineSetAnnotations))
 		})
 	}
 }
 
-func newTestMachineDeployment(pds *int32, replicas, statusReplicas, updatedReplicas, availableReplicas int32, conditions clusterv1.Conditions) *clusterv1.MachineDeployment {
+func newTestMachineDeployment(replicas, statusReplicas, upToDateReplicas, availableReplicas int32) *clusterv1.MachineDeployment {
 	d := &clusterv1.MachineDeployment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "progress-test",
 		},
 		Spec: clusterv1.MachineDeploymentSpec{
-			ProgressDeadlineSeconds: pds,
-			Replicas:                &replicas,
-			Strategy: &clusterv1.MachineDeploymentStrategy{
-				Type: clusterv1.RollingUpdateMachineDeploymentStrategyType,
-				RollingUpdate: &clusterv1.MachineRollingUpdateDeployment{
-					MaxUnavailable: intOrStrPtr(0),
-					MaxSurge:       intOrStrPtr(1),
-					DeletePolicy:   ptr.To("Oldest"),
+			Replicas: &replicas,
+			Rollout: clusterv1.MachineDeploymentRolloutSpec{
+				Strategy: clusterv1.MachineDeploymentRolloutStrategy{
+					Type: clusterv1.RollingUpdateMachineDeploymentStrategyType,
+					RollingUpdate: clusterv1.MachineDeploymentRolloutStrategyRollingUpdate{
+						MaxUnavailable: intOrStrPtr(0),
+						MaxSurge:       intOrStrPtr(1),
+					},
 				},
+			},
+			Deletion: clusterv1.MachineDeploymentDeletionSpec{
+				Order: clusterv1.OldestMachineSetDeletionOrder,
 			},
 		},
 		Status: clusterv1.MachineDeploymentStatus{
-			Replicas:          statusReplicas,
-			UpdatedReplicas:   updatedReplicas,
-			AvailableReplicas: availableReplicas,
-			Conditions:        conditions,
+			Replicas:          ptr.To[int32](statusReplicas),
+			UpToDateReplicas:  ptr.To[int32](upToDateReplicas),
+			AvailableReplicas: ptr.To[int32](availableReplicas),
 		},
 	}
 	return d
 }
 
 // helper to create MS with given availableReplicas.
-func newTestMachinesetWithReplicas(name string, specReplicas, statusReplicas, availableReplicas int32, conditions clusterv1.Conditions) *clusterv1.MachineSet {
+func newTestMachinesetWithReplicas(name string, specReplicas, statusReplicas, availableReplicas int32, v1Beta1Conditions clusterv1.Conditions) *clusterv1.MachineSet {
 	return &clusterv1.MachineSet{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:              name,
@@ -441,15 +419,18 @@ func newTestMachinesetWithReplicas(name string, specReplicas, statusReplicas, av
 			Replicas: ptr.To[int32](specReplicas),
 		},
 		Status: clusterv1.MachineSetStatus{
-			AvailableReplicas: availableReplicas,
-			Replicas:          statusReplicas,
-			Conditions:        conditions,
+			Replicas:          ptr.To(statusReplicas),
+			AvailableReplicas: ptr.To[int32](availableReplicas),
+			Deprecated: &clusterv1.MachineSetDeprecatedStatus{
+				V1Beta1: &clusterv1.MachineSetV1Beta1DeprecatedStatus{
+					Conditions: v1Beta1Conditions,
+				},
+			},
 		},
 	}
 }
 
 func TestSyncDeploymentStatus(t *testing.T) {
-	pds := int32(60)
 	tests := []struct {
 		name               string
 		d                  *clusterv1.MachineDeployment
@@ -459,37 +440,37 @@ func TestSyncDeploymentStatus(t *testing.T) {
 	}{
 		{
 			name:           "Deployment not available: MachineDeploymentAvailableCondition should exist and be false",
-			d:              newTestMachineDeployment(&pds, 3, 2, 2, 2, clusterv1.Conditions{}),
+			d:              newTestMachineDeployment(3, 2, 2, 2),
 			oldMachineSets: []*clusterv1.MachineSet{},
-			newMachineSet:  newTestMachinesetWithReplicas("foo", 3, 2, 2, clusterv1.Conditions{}),
+			newMachineSet:  newTestMachinesetWithReplicas("foo", 3, 2, 2, nil),
 			expectedConditions: []*clusterv1.Condition{
 				{
-					Type:     clusterv1.MachineDeploymentAvailableCondition,
+					Type:     clusterv1.MachineDeploymentAvailableV1Beta1Condition,
 					Status:   corev1.ConditionFalse,
 					Severity: clusterv1.ConditionSeverityWarning,
-					Reason:   clusterv1.WaitingForAvailableMachinesReason,
+					Reason:   clusterv1.WaitingForAvailableMachinesV1Beta1Reason,
 				},
 			},
 		},
 		{
 			name:           "Deployment Available: MachineDeploymentAvailableCondition should exist and be true",
-			d:              newTestMachineDeployment(&pds, 3, 3, 3, 3, clusterv1.Conditions{}),
+			d:              newTestMachineDeployment(3, 3, 3, 3),
 			oldMachineSets: []*clusterv1.MachineSet{},
-			newMachineSet:  newTestMachinesetWithReplicas("foo", 3, 3, 3, clusterv1.Conditions{}),
+			newMachineSet:  newTestMachinesetWithReplicas("foo", 3, 3, 3, nil),
 			expectedConditions: []*clusterv1.Condition{
 				{
-					Type:   clusterv1.MachineDeploymentAvailableCondition,
+					Type:   clusterv1.MachineDeploymentAvailableV1Beta1Condition,
 					Status: corev1.ConditionTrue,
 				},
 			},
 		},
 		{
 			name:           "MachineSet exist: MachineSetReadyCondition should exist and mirror MachineSet Ready condition",
-			d:              newTestMachineDeployment(&pds, 3, 3, 3, 3, clusterv1.Conditions{}),
+			d:              newTestMachineDeployment(3, 3, 3, 3),
 			oldMachineSets: []*clusterv1.MachineSet{},
 			newMachineSet: newTestMachinesetWithReplicas("foo", 3, 3, 3, clusterv1.Conditions{
 				{
-					Type:    clusterv1.ReadyCondition,
+					Type:    clusterv1.ReadyV1Beta1Condition,
 					Status:  corev1.ConditionFalse,
 					Reason:  "TestErrorResaon",
 					Message: "test error messsage",
@@ -497,7 +478,7 @@ func TestSyncDeploymentStatus(t *testing.T) {
 			}),
 			expectedConditions: []*clusterv1.Condition{
 				{
-					Type:    clusterv1.MachineSetReadyCondition,
+					Type:    clusterv1.MachineSetReadyV1Beta1Condition,
 					Status:  corev1.ConditionFalse,
 					Reason:  "TestErrorResaon",
 					Message: "test error messsage",
@@ -506,15 +487,15 @@ func TestSyncDeploymentStatus(t *testing.T) {
 		},
 		{
 			name:           "MachineSet doesn't exist: MachineSetReadyCondition should exist and be false",
-			d:              newTestMachineDeployment(&pds, 3, 3, 3, 3, clusterv1.Conditions{}),
+			d:              newTestMachineDeployment(3, 3, 3, 3),
 			oldMachineSets: []*clusterv1.MachineSet{},
 			newMachineSet:  nil,
 			expectedConditions: []*clusterv1.Condition{
 				{
-					Type:     clusterv1.MachineSetReadyCondition,
+					Type:     clusterv1.MachineSetReadyV1Beta1Condition,
 					Status:   corev1.ConditionFalse,
 					Severity: clusterv1.ConditionSeverityInfo,
-					Reason:   clusterv1.WaitingForMachineSetFallbackReason,
+					Reason:   clusterv1.WaitingForMachineSetFallbackV1Beta1Reason,
 				},
 			},
 		},
@@ -535,302 +516,9 @@ func TestSyncDeploymentStatus(t *testing.T) {
 	}
 }
 
-func TestComputeDesiredMachineSet(t *testing.T) {
-	duration5s := &metav1.Duration{Duration: 5 * time.Second}
-	duration10s := &metav1.Duration{Duration: 10 * time.Second}
-	namingTemplateKey := "test"
-
-	infraRef := corev1.ObjectReference{
-		Kind:       "GenericInfrastructureMachineTemplate",
-		Name:       "infra-template-1",
-		APIVersion: "infrastructure.cluster.x-k8s.io/v1beta1",
-	}
-	bootstrapRef := corev1.ObjectReference{
-		Kind:       "GenericBootstrapConfigTemplate",
-		Name:       "bootstrap-template-1",
-		APIVersion: "bootstrap.cluster.x-k8s.io/v1beta1",
-	}
-
-	deployment := &clusterv1.MachineDeployment{
-		ObjectMeta: metav1.ObjectMeta{
-			Namespace:   "default",
-			Name:        "md1",
-			Annotations: map[string]string{"top-level-annotation": "top-level-annotation-value"},
-		},
-		Spec: clusterv1.MachineDeploymentSpec{
-			ClusterName:     "test-cluster",
-			Replicas:        ptr.To[int32](3),
-			MinReadySeconds: ptr.To[int32](10),
-			Strategy: &clusterv1.MachineDeploymentStrategy{
-				Type: clusterv1.RollingUpdateMachineDeploymentStrategyType,
-				RollingUpdate: &clusterv1.MachineRollingUpdateDeployment{
-					MaxSurge:       intOrStrPtr(1),
-					DeletePolicy:   ptr.To("Random"),
-					MaxUnavailable: intOrStrPtr(0),
-				},
-			},
-			MachineNamingStrategy: &clusterv1.MachineNamingStrategy{
-				Template: "{{ .machineSet.name }}" + namingTemplateKey + "-{{ .random }}",
-			},
-			Selector: metav1.LabelSelector{
-				MatchLabels: map[string]string{"k1": "v1"},
-			},
-			Template: clusterv1.MachineTemplateSpec{
-				ObjectMeta: clusterv1.ObjectMeta{
-					Labels:      map[string]string{"machine-label1": "machine-value1"},
-					Annotations: map[string]string{"machine-annotation1": "machine-value1"},
-				},
-				Spec: clusterv1.MachineSpec{
-					Version:           ptr.To("v1.25.3"),
-					InfrastructureRef: infraRef,
-					Bootstrap: clusterv1.Bootstrap{
-						ConfigRef: &bootstrapRef,
-					},
-					ReadinessGates:          []clusterv1.MachineReadinessGate{{ConditionType: "foo"}},
-					NodeDrainTimeout:        duration10s,
-					NodeVolumeDetachTimeout: duration10s,
-					NodeDeletionTimeout:     duration10s,
-				},
-			},
-		},
-	}
-
-	skeletonMSBasedOnMD := &clusterv1.MachineSet{
-		ObjectMeta: metav1.ObjectMeta{
-			Namespace:   "default",
-			Labels:      map[string]string{"machine-label1": "machine-value1"},
-			Annotations: map[string]string{"top-level-annotation": "top-level-annotation-value"},
-		},
-		Spec: clusterv1.MachineSetSpec{
-			ClusterName:     "test-cluster",
-			Replicas:        ptr.To[int32](3),
-			MinReadySeconds: 10,
-			DeletePolicy:    string(clusterv1.RandomMachineSetDeletePolicy),
-			Selector:        metav1.LabelSelector{MatchLabels: map[string]string{"k1": "v1"}},
-			Template:        *deployment.Spec.Template.DeepCopy(),
-			MachineNamingStrategy: &clusterv1.MachineNamingStrategy{
-				Template: "{{ .machineSet.name }}" + namingTemplateKey + "-{{ .random }}",
-			},
-		},
-	}
-
-	t.Run("should compute a new MachineSet when no old MachineSets exist", func(t *testing.T) {
-		expectedMS := skeletonMSBasedOnMD.DeepCopy()
-
-		g := NewWithT(t)
-		actualMS, err := (&Reconciler{}).computeDesiredMachineSet(ctx, deployment, nil, nil)
-		g.Expect(err).ToNot(HaveOccurred())
-		assertMachineSet(g, actualMS, expectedMS)
-	})
-
-	t.Run("should compute a new MachineSet when old MachineSets exist", func(t *testing.T) {
-		oldMS := skeletonMSBasedOnMD.DeepCopy()
-		oldMS.Spec.Replicas = ptr.To[int32](2)
-
-		expectedMS := skeletonMSBasedOnMD.DeepCopy()
-		expectedMS.Spec.Replicas = ptr.To[int32](2) // 4 (maxsurge+replicas) - 2 (replicas of old ms) = 2
-
-		g := NewWithT(t)
-		actualMS, err := (&Reconciler{}).computeDesiredMachineSet(ctx, deployment, nil, []*clusterv1.MachineSet{oldMS})
-		g.Expect(err).ToNot(HaveOccurred())
-		assertMachineSet(g, actualMS, expectedMS)
-	})
-
-	t.Run("should compute the updated MachineSet when no old MachineSets exists", func(t *testing.T) {
-		uniqueID := apirand.String(5)
-		existingMS := skeletonMSBasedOnMD.DeepCopy()
-		// computeDesiredMachineSet should retain the UID, name and the "machine-template-hash" label value
-		// of the existing machine.
-		// Other fields like labels, annotations, node timeout, etc are expected to change.
-		existingMSUID := types.UID("abc-123-uid")
-		existingMS.UID = existingMSUID
-		existingMS.Name = deployment.Name + "-" + uniqueID
-		existingMS.Labels = map[string]string{
-			clusterv1.MachineDeploymentUniqueLabel: uniqueID,
-			"ms-label-1":                           "ms-value-1",
-		}
-		existingMS.Annotations = nil
-		// Pre-existing finalizer should be preserved.
-		existingMS.Finalizers = []string{"pre-existing-finalizer"}
-		existingMS.Spec.Template.Labels = map[string]string{
-			clusterv1.MachineDeploymentUniqueLabel: uniqueID,
-			"ms-label-2":                           "ms-value-2",
-		}
-		existingMS.Spec.Template.Annotations = nil
-		existingMS.Spec.Template.Spec.ReadinessGates = []clusterv1.MachineReadinessGate{{ConditionType: "bar"}}
-		existingMS.Spec.Template.Spec.NodeDrainTimeout = duration5s
-		existingMS.Spec.Template.Spec.NodeDeletionTimeout = duration5s
-		existingMS.Spec.Template.Spec.NodeVolumeDetachTimeout = duration5s
-		existingMS.Spec.DeletePolicy = string(clusterv1.NewestMachineSetDeletePolicy)
-		existingMS.Spec.MinReadySeconds = 0
-
-		expectedMS := skeletonMSBasedOnMD.DeepCopy()
-		expectedMS.UID = existingMSUID
-		expectedMS.Name = deployment.Name + "-" + uniqueID
-		expectedMS.Labels[clusterv1.MachineDeploymentUniqueLabel] = uniqueID
-		// Pre-existing finalizer should be preserved.
-		expectedMS.Finalizers = []string{"pre-existing-finalizer"}
-
-		expectedMS.Spec.Template.Labels[clusterv1.MachineDeploymentUniqueLabel] = uniqueID
-
-		g := NewWithT(t)
-		actualMS, err := (&Reconciler{}).computeDesiredMachineSet(ctx, deployment, existingMS, nil)
-		g.Expect(err).ToNot(HaveOccurred())
-		assertMachineSet(g, actualMS, expectedMS)
-	})
-
-	t.Run("should compute the updated MachineSet when old MachineSets exist", func(t *testing.T) {
-		uniqueID := apirand.String(5)
-		existingMS := skeletonMSBasedOnMD.DeepCopy()
-		existingMSUID := types.UID("abc-123-uid")
-		existingMS.UID = existingMSUID
-		existingMS.Name = deployment.Name + "-" + uniqueID
-		existingMS.Labels = map[string]string{
-			clusterv1.MachineDeploymentUniqueLabel: uniqueID,
-			"ms-label-1":                           "ms-value-1",
-		}
-		existingMS.Annotations = nil
-		// Pre-existing finalizer should be preserved.
-		existingMS.Finalizers = []string{"pre-existing-finalizer"}
-		existingMS.Spec.Template.Labels = map[string]string{
-			clusterv1.MachineDeploymentUniqueLabel: uniqueID,
-			"ms-label-2":                           "ms-value-2",
-		}
-		existingMS.Spec.Template.Annotations = nil
-		existingMS.Spec.Template.Spec.ReadinessGates = []clusterv1.MachineReadinessGate{{ConditionType: "bar"}}
-		existingMS.Spec.Template.Spec.NodeDrainTimeout = duration5s
-		existingMS.Spec.Template.Spec.NodeDeletionTimeout = duration5s
-		existingMS.Spec.Template.Spec.NodeVolumeDetachTimeout = duration5s
-		existingMS.Spec.DeletePolicy = string(clusterv1.NewestMachineSetDeletePolicy)
-		existingMS.Spec.MinReadySeconds = 0
-
-		oldMS := skeletonMSBasedOnMD.DeepCopy()
-		oldMS.Spec.Replicas = ptr.To[int32](2)
-
-		// Note: computeDesiredMachineSet does not modify the replicas on the updated MachineSet.
-		// Therefore, even though we have the old machineset with replicas 2 the updatedMS does not
-		// get modified replicas (2 = 4(maxsuge+spec.replica) - 2(oldMS replicas)).
-		// Nb. The final replicas of the MachineSet are calculated elsewhere.
-		expectedMS := skeletonMSBasedOnMD.DeepCopy()
-		expectedMS.UID = existingMSUID
-		expectedMS.Name = deployment.Name + "-" + uniqueID
-		expectedMS.Labels[clusterv1.MachineDeploymentUniqueLabel] = uniqueID
-		// Pre-existing finalizer should be preserved.
-		expectedMS.Finalizers = []string{"pre-existing-finalizer"}
-		expectedMS.Spec.Template.Labels[clusterv1.MachineDeploymentUniqueLabel] = uniqueID
-
-		g := NewWithT(t)
-		actualMS, err := (&Reconciler{}).computeDesiredMachineSet(ctx, deployment, existingMS, []*clusterv1.MachineSet{oldMS})
-		g.Expect(err).ToNot(HaveOccurred())
-		assertMachineSet(g, actualMS, expectedMS)
-	})
-
-	t.Run("should compute the updated MachineSet when no old MachineSets exists (", func(t *testing.T) {
-		// Set rollout strategy to "OnDelete".
-		deployment := deployment.DeepCopy()
-		deployment.Spec.Strategy = &clusterv1.MachineDeploymentStrategy{
-			Type:          clusterv1.OnDeleteMachineDeploymentStrategyType,
-			RollingUpdate: nil,
-		}
-
-		uniqueID := apirand.String(5)
-		existingMS := skeletonMSBasedOnMD.DeepCopy()
-		// computeDesiredMachineSet should retain the UID, name and the "machine-template-hash" label value
-		// of the existing machine.
-		// Other fields like labels, annotations, node timeout, etc are expected to change.
-		existingMSUID := types.UID("abc-123-uid")
-		existingMS.UID = existingMSUID
-		existingMS.Name = deployment.Name + "-" + uniqueID
-		existingMS.Labels = map[string]string{
-			clusterv1.MachineDeploymentUniqueLabel: uniqueID,
-			"ms-label-1":                           "ms-value-1",
-		}
-		existingMS.Annotations = nil
-		existingMS.Spec.Template.Labels = map[string]string{
-			clusterv1.MachineDeploymentUniqueLabel: uniqueID,
-			"ms-label-2":                           "ms-value-2",
-		}
-		existingMS.Spec.Template.Annotations = nil
-		existingMS.Spec.Template.Spec.ReadinessGates = []clusterv1.MachineReadinessGate{{ConditionType: "bar"}}
-		existingMS.Spec.Template.Spec.NodeDrainTimeout = duration5s
-		existingMS.Spec.Template.Spec.NodeDeletionTimeout = duration5s
-		existingMS.Spec.Template.Spec.NodeVolumeDetachTimeout = duration5s
-		existingMS.Spec.DeletePolicy = string(clusterv1.NewestMachineSetDeletePolicy)
-		existingMS.Spec.MinReadySeconds = 0
-
-		expectedMS := skeletonMSBasedOnMD.DeepCopy()
-		expectedMS.UID = existingMSUID
-		expectedMS.Name = deployment.Name + "-" + uniqueID
-		expectedMS.Labels[clusterv1.MachineDeploymentUniqueLabel] = uniqueID
-		expectedMS.Spec.Template.Labels[clusterv1.MachineDeploymentUniqueLabel] = uniqueID
-		// DeletePolicy should be empty with rollout strategy "OnDelete".
-		expectedMS.Spec.DeletePolicy = ""
-
-		g := NewWithT(t)
-		actualMS, err := (&Reconciler{}).computeDesiredMachineSet(ctx, deployment, existingMS, nil)
-		g.Expect(err).ToNot(HaveOccurred())
-		assertMachineSet(g, actualMS, expectedMS)
-	})
-}
-
-func assertMachineSet(g *WithT, actualMS *clusterv1.MachineSet, expectedMS *clusterv1.MachineSet) {
-	// check UID
-	if expectedMS.UID != "" {
-		g.Expect(actualMS.UID).Should(Equal(expectedMS.UID))
-	}
-	// Check Name
-	if expectedMS.Name != "" {
-		g.Expect(actualMS.Name).Should(Equal(expectedMS.Name))
-	}
-	// Check Namespace
-	g.Expect(actualMS.Namespace).Should(Equal(expectedMS.Namespace))
-
-	// Check finalizers
-	g.Expect(actualMS.Finalizers).Should(Equal(expectedMS.Finalizers))
-
-	// Check Replicas
-	g.Expect(actualMS.Spec.Replicas).ShouldNot(BeNil())
-	g.Expect(actualMS.Spec.Replicas).Should(HaveValue(Equal(*expectedMS.Spec.Replicas)))
-
-	// Check ClusterName
-	g.Expect(actualMS.Spec.ClusterName).Should(Equal(expectedMS.Spec.ClusterName))
-
-	// Check Labels
-	for k, v := range expectedMS.Labels {
-		g.Expect(actualMS.Labels).Should(HaveKeyWithValue(k, v))
-	}
-	for k, v := range expectedMS.Spec.Template.Labels {
-		g.Expect(actualMS.Spec.Template.Labels).Should(HaveKeyWithValue(k, v))
-	}
-	// Verify that the labels also has the unique identifier key.
-	g.Expect(actualMS.Labels).Should(HaveKey(clusterv1.MachineDeploymentUniqueLabel))
-	g.Expect(actualMS.Spec.Template.Labels).Should(HaveKey(clusterv1.MachineDeploymentUniqueLabel))
-
-	// Check Annotations
-	// Note: More nuanced validation of the Revision annotation calculations are done when testing `ComputeMachineSetAnnotations`.
-	for k, v := range expectedMS.Annotations {
-		g.Expect(actualMS.Annotations).Should(HaveKeyWithValue(k, v))
-	}
-	for k, v := range expectedMS.Spec.Template.Annotations {
-		g.Expect(actualMS.Spec.Template.Annotations).Should(HaveKeyWithValue(k, v))
-	}
-
-	// Check MinReadySeconds
-	g.Expect(actualMS.Spec.MinReadySeconds).Should(Equal(expectedMS.Spec.MinReadySeconds))
-
-	// Check DeletePolicy
-	g.Expect(actualMS.Spec.DeletePolicy).Should(Equal(expectedMS.Spec.DeletePolicy))
-
-	// Check MachineTemplateSpec
-	g.Expect(actualMS.Spec.Template.Spec).Should(BeComparableTo(expectedMS.Spec.Template.Spec))
-
-	// Check MachineNamingStrategy
-	g.Expect(actualMS.Spec.MachineNamingStrategy.Template).Should(BeComparableTo(expectedMS.Spec.MachineNamingStrategy.Template))
-}
-
 // asserts the conditions set on the Getter object.
 // TODO: replace this with util.condition.MatchConditions (or a new matcher in controller runtime komega).
-func assertConditions(t *testing.T, from conditions.Getter, conditions ...*clusterv1.Condition) {
+func assertConditions(t *testing.T, from v1beta1conditions.Getter, conditions ...*clusterv1.Condition) {
 	t.Helper()
 
 	for _, condition := range conditions {
@@ -841,16 +529,16 @@ func assertConditions(t *testing.T, from conditions.Getter, conditions ...*clust
 // asserts whether a condition of type is set on the Getter object
 // when the condition is true, asserting the reason/severity/message
 // for the condition are avoided.
-func assertCondition(t *testing.T, from conditions.Getter, condition *clusterv1.Condition) {
+func assertCondition(t *testing.T, from v1beta1conditions.Getter, condition *clusterv1.Condition) {
 	t.Helper()
 
 	g := NewWithT(t)
-	g.Expect(conditions.Has(from, condition.Type)).To(BeTrue())
+	g.Expect(v1beta1conditions.Has(from, condition.Type)).To(BeTrue())
 
 	if condition.Status == corev1.ConditionTrue {
-		conditions.IsTrue(from, condition.Type)
+		v1beta1conditions.IsTrue(from, condition.Type)
 	} else {
-		conditionToBeAsserted := conditions.Get(from, condition.Type)
+		conditionToBeAsserted := v1beta1conditions.Get(from, condition.Type)
 		g.Expect(conditionToBeAsserted.Status).To(Equal(condition.Status))
 		g.Expect(conditionToBeAsserted.Severity).To(Equal(condition.Severity))
 		g.Expect(conditionToBeAsserted.Reason).To(Equal(condition.Reason))
@@ -858,6 +546,43 @@ func assertCondition(t *testing.T, from conditions.Getter, condition *clusterv1.
 			g.Expect(conditionToBeAsserted.Message).To(Equal(condition.Message))
 		}
 	}
+}
+
+// TestCreateOrUpdateMachineSetsNilNewMS verifies that createOrUpdateMachineSetsAndSyncMachineDeploymentRevision
+// does not panic when the rolloutPlanner's newMS is nil (paused MachineDeployment with no matching MachineSet yet).
+func TestCreateOrUpdateMachineSetsNilNewMS(t *testing.T) {
+	g := NewWithT(t)
+
+	md := &clusterv1.MachineDeployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        "test-md",
+			Namespace:   metav1.NamespaceDefault,
+			Annotations: map[string]string{},
+		},
+		Spec: clusterv1.MachineDeploymentSpec{
+			Paused: ptr.To(true),
+		},
+	}
+
+	// Simulate the planner state after init() with createNewMSIfNotExist=false and no matching MachineSet:
+	// newMS is nil, oldMSs is empty.
+	planner := &rolloutPlanner{
+		md:           md,
+		newMS:        nil,
+		oldMSs:       nil,
+		scaleIntents: make(map[string]int32),
+		originalMSs:  make(map[string]*clusterv1.MachineSet),
+		notes:        make(map[string][]string),
+	}
+
+	r := &Reconciler{
+		Client:   fake.NewClientBuilder().Build(),
+		recorder: record.NewFakeRecorder(32),
+	}
+
+	// Before the fix this panicked: allMSs contained a nil element and ms.Name dereferenced it.
+	err := r.createOrUpdateMachineSetsAndSyncMachineDeploymentRevision(ctx, planner)
+	g.Expect(err).ToNot(HaveOccurred())
 }
 
 func Test_computeNewMachineSetName(t *testing.T) {

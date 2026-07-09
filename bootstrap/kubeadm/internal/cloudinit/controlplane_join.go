@@ -34,6 +34,7 @@ const (
     owner: root:root
     permissions: '0640'
     content: "This placeholder file is used to create the /run/cluster-api sub directory in a way that is compatible with both Linux and Windows (mkdir -p /run/cluster-api does not work with Windows)"
+{{- template "boot_commands" .BootCommands }}
 runcmd:
 {{- template "commands" .PreKubeadmCommands }}
   - {{ .KubeadmCommand }} && {{ .SentinelFileCommand }}
@@ -57,11 +58,10 @@ type ControlPlaneJoinInput struct {
 // NewJoinControlPlane returns the user data string to be used on a new control plane instance.
 func NewJoinControlPlane(input *ControlPlaneJoinInput) ([]byte, error) {
 	// TODO: Consider validating that the correct certificates exist. It is different for external/stacked etcd
-	input.WriteFiles = input.Certificates.AsFiles()
+	input.WriteFiles = input.AsFiles()
 	input.ControlPlane = true
-	if err := input.prepare(); err != nil {
-		return nil, err
-	}
+	input.prepare()
+
 	userData, err := generate("JoinControlplane", controlPlaneJoinCloudInit, input)
 	if err != nil {
 		return nil, errors.Wrapf(err, "failed to generate user data for machine joining control plane")

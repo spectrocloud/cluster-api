@@ -1,4 +1,4 @@
-# clusterctl Provider Contract
+# clusterctl Provider Contract (contract version v1beta2)
 
 The `clusterctl` command is designed to work with all the providers compliant with the following rules.
 
@@ -57,7 +57,7 @@ This is the process to add a new provider to the pre-defined list of providers s
 - As soon as possible, create an issue to the [Cluster API repository](https://sigs.k8s.io/cluster-api) declaring the intent to add a new provider;
   each provider must have a unique name & type in the pre-defined list of providers shipped with `clusterctl`; the provider's name
   must be declared in the issue above and abide to the following naming convention:
-  - The name must consist of lower case alphanumeric characters or '-', and must start and end with an alphanumeric character.
+  - The name must consist of lower case alphanumeric characters or '-', and must start and end with an alphanumeric character. If the name includes upper case alphanumeric characters, clusterctl enforces it lower case it.
   - The name length should not exceed 63 characters.
   - For providers not in the kubernetes-sigs org, in order to prevent conflicts the `clusterctl` name must be prefixed with
     the provider's GitHub org name followed by `-` (see note below).
@@ -133,6 +133,8 @@ A provider url should be in the form
 See the [GitLab docs](https://docs.gitlab.com/ee/user/packages/generic_packages/) for more information
 about how to create a generic package.
 
+If you are hosting a private Gitlab repository, you can use a [personal access token](https://docs.gitlab.com/ee/user/profile/personal_access_tokens.html) or [project access token](https://docs.gitlab.com/user/project/settings/project_access_tokens.html) to access the provider artifacts by adding the `gitlab-access-token` variable to the `clusterctl` configuration in order to authenticate against the GitLab API.
+
 This can be used in conjunction with [GitLabracadabra](https://gitlab.com/gitlabracadabra/gitlabracadabra/)
 to avoid direct internet access from `clusterctl`, and use GitLab as artifacts repository. For example,
 for the core provider:
@@ -168,6 +170,8 @@ for the core provider:
 Limitation: Provider artifacts hosted on GitLab don't support getting all versions.
 As a consequence, you need to set version explicitly for upgrades.
 
+
+
 #### Creating a local provider repository
 
 clusterctl supports reading from a repository defined on the local file system.
@@ -201,19 +205,34 @@ releaseSeries:
   contract: v1alpha2
 ```
 
-<aside class="note">
+<aside  class="note warning">
 
-<h1> Note on user experience</h1>
+<h1>Important</h1>
 
-For clusterctl versions pre-v1alpha4, if provider implementers only update the clusterctl's built-in metadata and don't provide a `metadata.yaml` in a new release, users are forced to update `clusterctl`
-to the latest released version in order to properly install the provider.
+The contract version for a specific release series must match the contract version that is declared in the CRD for different provider's objects.
 
-As a related example, see the details in [issue 3418].
+More specifically, you can consider the contract version in `metadata.yaml` as a “preview” of the contract version supported by the provider, 
+but this value is used only during `clusterctl init` or `clusterctl upgrade`, not at runtime.
 
-To address the above explained issue, the embedded metadata within clusterctl has been removed (as of v1alpha4) to prevent the reliance on using the latest version of clusterctl in order to pull newer provider releases.
+At runtime, the system will use the contract version that is defined in the provider's CRD that are installed in the cluster.
+See contract rules for different providers for more details.
 
-For more information see the details in [issue 3515].
 </aside>
+
+#### Validation Rules
+
+Starting from clusterctl v1.11, the metadata YAML file is subject to strict validation to ensure consistency and prevent configuration errors. The following validation rules are enforced:
+
+1. **apiVersion**: Must be set to `clusterctl.cluster.x-k8s.io/v1alpha3`
+   * This ensures compatibility with the current clusterctl metadata format
+
+2. **kind**: Must be set to `Metadata`
+   * This identifies the resource type correctly
+
+3. **releaseSeries**: Must contain at least one entry
+   * This ensures providers properly document their version compatibility
+
+These validation rules help catch configuration issues early and provide clear error messages to assist in troubleshooting.
 
 ### Components YAML
 
@@ -276,8 +295,7 @@ recommended to prefix the variable name with the provider name e.g. `${AWS_CREDE
 <h1>Warning</h1>
 
 `clusterctl` currently supports variables with leading/trailing spaces such
-as: `${ VAR }`, `${ VAR}`,`${VAR }`. However, these formats will be deprecated
-in the near future. e.g. v1alpha4.
+as: `${ VAR }`, `${ VAR}`,`${VAR }`.
 
 Formats such as `${VAR$FOO}` are not supported.
 </aside>
@@ -306,46 +324,50 @@ easier transition from `kubectl apply` to `clusterctl`.
 As a reference you can consider the labels applied to the following
 providers.
 
-| Provider Name | Label                                                 |
-|---------------|-------------------------------------------------------|
-| CAPI          | cluster.x-k8s.io/provider=cluster-api                 |
-| CABPK         | cluster.x-k8s.io/provider=bootstrap-kubeadm           |
-| CABPM         | cluster.x-k8s.io/provider=bootstrap-microk8s          |
-| CABPKK3S      | cluster.x-k8s.io/provider=bootstrap-kubekey-k3s       |
-| CABPK0S       | cluster.x-k8s.io/provider=bootstrap-k0smotron         |
-| CACPK         | cluster.x-k8s.io/provider=control-plane-kubeadm       |
-| CACPM         | cluster.x-k8s.io/provider=control-plane-microk8s      |
-| CACPN         | cluster.x-k8s.io/provider=control-plane-nested        |
-| CACPKK3S      | cluster.x-k8s.io/provider=control-plane-kubekey-k3s   |
-| CACPK0S       | cluster.x-k8s.io/provider=control-plane-k0smotron     |
-| CAPA          | cluster.x-k8s.io/provider=infrastructure-aws          |
-| CAPB          | cluster.x-k8s.io/provider=infrastructure-byoh         |
-| CAPC          | cluster.x-k8s.io/provider=infrastructure-cloudstack   |
-| CAPD          | cluster.x-k8s.io/provider=infrastructure-docker       |
-| CAPIM         | cluster.x-k8s.io/provider=infrastructure-in-memory    |
-| CAPDO         | cluster.x-k8s.io/provider=infrastructure-digitalocean |
-| CAPG          | cluster.x-k8s.io/provider=infrastructure-gcp          |
-| CAPH          | cluster.x-k8s.io/provider=infrastructure-hetzner      |
-| CAPHV         | cluster.x-k8s.io/provider=infrastructure-hivelocity   |
-| CAPIBM        | cluster.x-k8s.io/provider=infrastructure-ibmcloud     |
-| CAPKK         | cluster.x-k8s.io/provider=infrastructure-kubekey      |
-| CAPK          | cluster.x-k8s.io/provider=infrastructure-kubevirt     |
-| CAPM3         | cluster.x-k8s.io/provider=infrastructure-metal3       |
-| CAPN          | cluster.x-k8s.io/provider=infrastructure-nested       |
-| CAPO          | cluster.x-k8s.io/provider=infrastructure-openstack    |
-| CAPOCI        | cluster.x-k8s.io/provider=infrastructure-oci          |
-| CAPP          | cluster.x-k8s.io/provider=infrastructure-packet       |
-| CAPT          | cluster.x-k8s.io/provider=infrastructure-tinkerbell   |
-| CAPV          | cluster.x-k8s.io/provider=infrastructure-vsphere      |
-| CAPVC         | cluster.x-k8s.io/provider=infrastructure-vcluster     |
-| CAPVCD        | cluster.x-k8s.io/provider=infrastructure-vcd          |
-| CAPX          | cluster.x-k8s.io/provider=infrastructure-nutanix      |
-| CAPZ          | cluster.x-k8s.io/provider=infrastructure-azure        |
-| CAPOSC        | cluster.x-k8s.io/provider=infrastructure-outscale     |
-| CAPK0S        | cluster.x-k8s.io/provider=infrastructure-k0smotron    |
-| CAIPAMIC      | cluster.x-k8s.io/provider=ipam-in-cluster             |
-| CAIPAMX       | cluster.x-k8s.io/provider=ipam-nutanix                |
-| CAREX         | cluster.x-k8s.io/provider=runtime-extensions-nutanix  |
+| Provider Name | Label                                                             |
+|---------------|-------------------------------------------------------------------|
+| CAPI          | cluster.x-k8s.io/provider=cluster-api                             |
+| CABPK         | cluster.x-k8s.io/provider=bootstrap-kubeadm                       |
+| CABPM         | cluster.x-k8s.io/provider=bootstrap-microk8s                      |
+| CABPKK3S      | cluster.x-k8s.io/provider=bootstrap-kubekey-k3s                   |
+| CABPK0S       | cluster.x-k8s.io/provider=bootstrap-k0smotron                     |
+| CACPK         | cluster.x-k8s.io/provider=control-plane-kubeadm                   |
+| CACPM         | cluster.x-k8s.io/provider=control-plane-microk8s                  |
+| CACPN         | cluster.x-k8s.io/provider=control-plane-nested                    |
+| CACPKK3S      | cluster.x-k8s.io/provider=control-plane-kubekey-k3s               |
+| CACPK0S       | cluster.x-k8s.io/provider=control-plane-k0smotron                 |
+| CAPA          | cluster.x-k8s.io/provider=infrastructure-aws                      |
+| CAPB          | cluster.x-k8s.io/provider=infrastructure-byoh                     |
+| CAPC          | cluster.x-k8s.io/provider=infrastructure-cloudstack               |
+| CAPCS         | cluster.x-k8s.io/provider=infrastructure-cloudscale-ch-cloudscale |
+| CAPD          | cluster.x-k8s.io/provider=infrastructure-docker                   |
+| CAPDO         | cluster.x-k8s.io/provider=infrastructure-digitalocean             |
+| CAPG          | cluster.x-k8s.io/provider=infrastructure-gcp                      |
+| CAPH          | cluster.x-k8s.io/provider=infrastructure-hetzner                  |
+| CAPHV         | cluster.x-k8s.io/provider=infrastructure-hivelocity               |
+| CAPHW         | cluster.x-k8s.io/provider=infrastructure-huawei                   |
+| CAPIBM        | cluster.x-k8s.io/provider=infrastructure-ibmcloud                 |
+| CAPKK         | cluster.x-k8s.io/provider=infrastructure-kubekey                  |
+| CAPK          | cluster.x-k8s.io/provider=infrastructure-kubevirt                 |
+| CAPM3         | cluster.x-k8s.io/provider=infrastructure-metal3                   |
+| CAPMS         | cluster.x-k8s.io/provider=infrastructure-metal-stack              |
+| CAPN          | cluster.x-k8s.io/provider=infrastructure-nested                   |
+| CAPONE        | cluster.x-k8s.io/provider=infrastructure-opennebula               |
+| CAPO          | cluster.x-k8s.io/provider=infrastructure-openstack                |
+| CAPOCI        | cluster.x-k8s.io/provider=infrastructure-oci                      |
+| CAPS          | cluster.x-k8s.io/provider=infrastructure-scaleway                 |
+| CAPT          | cluster.x-k8s.io/provider=infrastructure-tinkerbell               |
+| CAPV          | cluster.x-k8s.io/provider=infrastructure-vsphere                  |
+| CAPVC         | cluster.x-k8s.io/provider=infrastructure-vcluster                 |
+| CAPVCD        | cluster.x-k8s.io/provider=infrastructure-vcd                      |
+| CAPX          | cluster.x-k8s.io/provider=infrastructure-nutanix                  |
+| CAPZ          | cluster.x-k8s.io/provider=infrastructure-azure                    |
+| CAPOSC        | cluster.x-k8s.io/provider=infrastructure-outscale                 |
+| CAPK0S        | cluster.x-k8s.io/provider=infrastructure-k0smotron                |
+| CAIPAMIC      | cluster.x-k8s.io/provider=ipam-in-cluster                         |
+| CAIPAMX       | cluster.x-k8s.io/provider=ipam-nutanix                            |
+| CAIPAM3       | cluster.x-k8s.io/provider=ipam-metal3                             |
+| CAREX         | cluster.x-k8s.io/provider=runtime-extensions-nutanix              |
 
 ### Workload cluster templates
 
@@ -542,7 +564,7 @@ If moving some of excluded object is required, the provider authors should creat
 exact move sequence to be executed by the user.
 
 Additionally, provider authors should be aware that `clusterctl move` assumes all the provider's Controllers respect the
-`Cluster.Spec.Paused` field introduced in the v1alpha3 Cluster API specification. If a provider needs to perform extra work in response to a
+`Cluster.spec.paused` field. If a provider needs to perform extra work in response to a
 cluster being paused, `clusterctl move` can be blocked from creating any resources on the destination
 management cluster by annotating any resource to be moved with `clusterctl.cluster.x-k8s.io/block-move`.
 

@@ -8,25 +8,83 @@ workflow that offers easy deployments and rapid iterative builds.
 ## Prerequisites
 
 1. [Docker](https://docs.docker.com/install/): v19.03 or newer (on MacOS e.g. via [Lima](https://github.com/lima-vm/lima))
-2. [kind](https://kind.sigs.k8s.io): v0.25.0 or newer
-3. [Tilt](https://docs.tilt.dev/install.html): v0.30.8 or newer
+2. [kind](https://kind.sigs.k8s.io): v0.32.0 or newer
+3. [Tilt](https://docs.tilt.dev/install.html): v0.33.18 or newer
 4. [kustomize](https://github.com/kubernetes-sigs/kustomize): provided via `make kustomize`
-5. [envsubst](https://github.com/drone/envsubst): provided via `make envsubst`
-6. [helm](https://github.com/helm/helm): v3.7.1 or newer
-7. Clone the [Cluster API](https://github.com/kubernetes-sigs/cluster-api) repository
+5. [helm](https://github.com/helm/helm): v3.7.1 or newer
+6. Clone the [Cluster API](https://github.com/kubernetes-sigs/cluster-api) repository
    locally
-8. Clone the provider(s) you want to deploy locally as well
+7. Clone the provider(s) you want to deploy locally as well
 
 ## Getting started
 
 ### Create a kind cluster
-A script to create a KIND cluster along with a local Docker registry and the correct mounts to run CAPD is included in the hack/ folder.
 
-To create a pre-configured cluster run:
+This guide offers instructions for using the following CAPI infrastructure providers for running a
+development environment without using real machines or cloud resources:
+
+- [CAPD](https://github.com/kubernetes-sigs/cluster-api/blob/main/test/infrastructure/docker/README.md) - uses Docker containers as workload cluster nodes
+- [CAPK](https://github.com/kubernetes-sigs/cluster-api-provider-kubevirt) - uses KubeVirt VMs as workload cluster nodes
+
+CAPD is the default as it's more lightweight and requires less setup. KubeVirt is useful when
+Docker isn't suitable for whatever reason. Other infrastructure providers may be enabled as well
+(see [below](#create-a-tilt-settings-file)).
+
+{{#tabs name:"tab-management-cluster-creation" tabs:"Docker,KubeVirt"}}
+{{#tab Docker}}
+
+To create a kind cluster along with a local Docker registry and the correct mounts to run CAPD, run
+the following:
 
 ```bash
-./hack/kind-install-for-capd.sh
+make kind-cluster
 ```
+
+{{#/tab }}
+{{#tab KubeVirt}}
+
+To create a kind cluster with CAPK, run the following:
+
+```bash
+make kind-cluster-kubevirt
+```
+
+<aside class="note">
+
+KubeVirt uses *container disks* to create VMs inside pods. These are special container images which
+need to be pulled from a registry. To support pulling container disks from private registries as
+well as avoid getting rate-limited by Docker Hub (if used), the CAPK script mounts your Docker
+config file inside the kind cluster to let the Kubelet access your credentials.
+
+The script looks for the Docker config file at `$HOME/.docker/config.json` by default. To specify
+a different path, set the following variable before running Make above:
+
+```bash
+export DOCKER_CONFIG_FILE="/foo/config.json"
+```
+
+</aside>
+
+<aside class="note">
+
+The CAPK script uses [MetalLB](https://metallb.org/) to expose the API servers of workload clusters
+on the local machine. The API servers are exposed as LoadBalancer services handled by MetalLB. For
+this to work, MetalLB needs to figure out your container runtime IP prefix. The script assumes
+Docker is used and figures the IP prefix out automatically. In case a different runtime is used,
+specify your container runtime's IP prefix manually (the first two octets only):
+
+```bash
+export CAPI_METALLB_IP_PREFIX="172.20"
+```
+
+The script uses 255.200-255.250 in the last two octets to set the range MetalLB should use to
+allocate IPs to LoadBalancer services. For example, for `172.20` the resulting IP range is
+`172.20.255.200-172.20.255.250`.
+
+</aside>
+
+{{#/tab }}
+{{#/tabs }}
 
 You can see the status of the cluster with:
 
@@ -36,7 +94,12 @@ kubectl cluster-info --context kind-capi-test
 
 ### Create a tilt-settings file
 
-Next, create a `tilt-settings.yaml` file and place it in your local copy of `cluster-api`. Here is an example that uses the components from the CAPI repo:
+Next, create a `tilt-settings.yaml` file and place it in your local copy of `cluster-api`.
+
+Here are some examples:
+
+{{#tabs name:"tab-tilt-settings" tabs:"Docker,KubeVirt"}}
+{{#tab Docker}}
 
 ```yaml
 default_registry: gcr.io/your-project-name-here
@@ -46,7 +109,33 @@ enable_providers:
 - kubeadm-control-plane
 ```
 
-To use tilt to launch a provider with its own repo, using Cluster API Provider AWS here, `tilt-settings.yaml` should look like:
+{{#/tab }}
+{{#tab KubeVirt}}
+
+```yaml
+enable_providers:
+- kubevirt
+- kubeadm-bootstrap
+- kubeadm-control-plane
+provider_repos:
+# Path to a local clone of CAPK (replace with actual path)
+- ../cluster-api-provider-kubevirt
+kustomize_substitutions:
+  # CAPK needs access to the containerd socket (replace with actual path)
+  CRI_PATH: "/var/run/containerd/containerd.sock"
+  KUBERNETES_VERSION: "v1.30.1"
+  # An example - replace with an appropriate container disk image for the desired k8s version
+  NODE_VM_IMAGE_TEMPLATE: "quay.io/capk/ubuntu-2204-container-disk:v1.30.1"
+# Allow deploying CAPK workload clusters from the Tilt UI (optional)
+template_dirs:
+  kubevirt:
+  - ../cluster-api-provider-kubevirt/templates
+```
+
+{{#/tab }}
+{{#/tabs }}
+
+Other infrastructure providers may be added to the cluster using local clones and a configuration similar to the following:
 
 ```yaml
 default_registry: gcr.io/your-project-name-here
@@ -84,6 +173,10 @@ NB: the default is dynamic and will be "podman" if the string "Podman Engine" is
 
 **enable_providers** (Array[]String, default=['docker']): A list of the providers to enable. See [available providers](#available-providers)
 for more details.
+
+**enable_core_provider** (bool, default=true): By default, the `core` provider is enabled. This allows to disable it.
+
+**preload_images** (bool, default=true): By default, images are preloaded into the kind cluster. This works on most platforms but can fail on Apple Silicon or Docker v29+. Set this to false to skip preloading and let the kubelet pull images on demand.
 
 **template_dirs** (Map{String: Array[]String}, default={"docker": [
 "./test/infrastructure/docker/templates"]}): A map of providers to directories containing cluster templates. An example of the field is given below. See [Deploying a workload cluster](#deploying-a-workload-cluster) for how this is used.
@@ -205,10 +298,11 @@ Supported values are:
 * `loki`: To receive and store logs.
 * `metrics-server`: To enable `kubectl top node/pod`.
 * `prometheus`*: For collecting metrics from Kubernetes.
-* `promtail`: For providing pod logs to `loki`.
+* `alloy`: For providing pod logs to `loki`.
 * `parca`*: For visualizing profiling data.
 * `tempo`: To store traces.
 * `visualizer`*: Visualize Cluster API resources for each cluster, provide quick access to the specs and status of any resource.
+* `headlamp`*: A Kubernetes web UI with the [Cluster API plugin](https://artifacthub.io/packages/headlamp/headlamp-plugins/headlamp_cluster-api) for browsing and managing CAPI resources.
 
 \*: Note: the UI will be accessible via a link in the tilt console
 
@@ -335,7 +429,7 @@ Custom values for variable substitutions can be set using `kustomize_substitutio
 ```yaml
 kustomize_substitutions:
   NAMESPACE: "default"
-  KUBERNETES_VERSION: "v1.32.0"
+  KUBERNETES_VERSION: "v1.36.1"
   CONTROL_PLANE_MACHINE_COUNT: "1"
   WORKER_MACHINE_COUNT: "3"
 # Note: kustomize substitutions expects the values to be strings. This can be achieved by wrapping the values in quotation marks.
@@ -444,6 +538,10 @@ provider abbreviation should be used (CAPD, KCP etc.).
 
 **additional_resources** ([]string, default=[]): A list of paths to yaml file to be loaded into the tilt cluster;
 e.g. use this to deploy an ExtensionConfig object for a RuntimeExtension provider.
+
+**additional_uncategorized_resources** ([]string, default=[]): A list of paths to yaml file to be loaded into the tilt cluster;
+e.g. use this to deploy CustomResourceDefinitions. The difference compared to additional_resources is that it is deployed
+as part of uncategorized and accordingly not re-created together with providers.
 
 **resource_deps** ([]string, default=[]): A list of tilt resource names to be installed before the current provider;
 e.g. set this to ["capi_controller"] to ensure that this provider gets installed after Cluster API.

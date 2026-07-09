@@ -21,13 +21,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"testing"
+	"time"
 
 	. "github.com/onsi/gomega"
 	"github.com/pkg/errors"
-	corev1 "k8s.io/api/core/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -46,16 +47,18 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/yaml"
 
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
+	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
+	runtimecatalog "sigs.k8s.io/cluster-api/api/runtime/catalog"
+	runtimehooksv1 "sigs.k8s.io/cluster-api/api/runtime/hooks/v1alpha1"
+	runtimev1 "sigs.k8s.io/cluster-api/api/runtime/v1beta2"
 	"sigs.k8s.io/cluster-api/controllers"
-	runtimev1 "sigs.k8s.io/cluster-api/exp/runtime/api/v1alpha1"
-	runtimecatalog "sigs.k8s.io/cluster-api/exp/runtime/catalog"
+	"sigs.k8s.io/cluster-api/controllers/clustercache"
 	runtimeclient "sigs.k8s.io/cluster-api/exp/runtime/client"
-	runtimehooksv1 "sigs.k8s.io/cluster-api/exp/runtime/hooks/api/v1alpha1"
 	"sigs.k8s.io/cluster-api/exp/topology/desiredstate"
 	"sigs.k8s.io/cluster-api/exp/topology/scope"
 	"sigs.k8s.io/cluster-api/feature"
-	v1beta2conditions "sigs.k8s.io/cluster-api/util/conditions/v1beta2"
+	"sigs.k8s.io/cluster-api/util/cache"
+	"sigs.k8s.io/cluster-api/util/conditions"
 	"sigs.k8s.io/cluster-api/util/contract"
 	"sigs.k8s.io/cluster-api/webhooks"
 )
@@ -85,7 +88,7 @@ func TestHandler(t *testing.T) {
 
 	// Create a RuntimeClient that is backed by our Runtime Extension.
 	runtimeClient := &injectRuntimeClient{
-		runtimeExtension: NewExtensionHandlers(testScheme),
+		runtimeExtension: NewExtensionHandlers(),
 	}
 
 	// Create a ClusterClassReconciler.
@@ -98,8 +101,30 @@ func TestHandler(t *testing.T) {
 	err = clusterClassReconciler.SetupWithManager(ctx, mgr, controller.Options{})
 	g.Expect(err).ToNot(HaveOccurred())
 
+	// computeControlPlane has to get the contract version to set timeout fields correctly
+	scheme := runtime.NewScheme()
+	_ = apiextensionsv1.AddToScheme(scheme)
+	crd := &apiextensionsv1.CustomResourceDefinition{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "kubeadmcontrolplanes.controlplane.cluster.x-k8s.io",
+			Labels: map[string]string{
+				// Set contract label for tt.contract.
+				fmt.Sprintf("%s/%s", clusterv1.GroupVersion.Group, "v1beta1"): "v1beta1",
+				fmt.Sprintf("%s/%s", clusterv1.GroupVersion.Group, "v1beta2"): "v1beta2",
+			},
+		},
+	}
+	clientWithV1Beta2ContractCRD := fake.NewClientBuilder().WithScheme(scheme).WithObjects(crd).Build()
+
 	// Create a desired state generator.
-	desiredStateGenerator := desiredstate.NewGenerator(nil, nil, runtimeClient)
+	desiredStateGenerator, err := desiredstate.NewGenerator(
+		clientWithV1Beta2ContractCRD,
+		clustercache.NewFakeEmptyClusterCache(),
+		runtimeClient,
+		cache.New[cache.HookEntry](ctx, cache.HookCacheDefaultTTL),
+		cache.New[desiredstate.GenerateUpgradePlanCacheEntry](ctx, 10*time.Minute),
+	)
+	g.Expect(err).ToNot(HaveOccurred())
 
 	// Note: as of today we don't have to set any fields and also don't have to call
 	// SetupWebhookWithManager because DefaultAndValidateVariables doesn't need any of that.
@@ -125,10 +150,10 @@ func TestHandler(t *testing.T) {
 	desiredState, err := desiredStateGenerator.Generate(ctx, s)
 	g.Expect(err).ToNot(HaveOccurred())
 
-	dockerClusterImageRepository, found, err := unstructured.NestedString(desiredState.InfrastructureCluster.Object, "spec", "loadBalancer", "imageRepository")
+	devClusterImageRepository, found, err := unstructured.NestedString(desiredState.InfrastructureCluster.Object, "spec", "backend", "docker", "loadBalancer", "imageRepository")
 	g.Expect(err).ToNot(HaveOccurred())
 	g.Expect(found).To(BeTrue())
-	g.Expect(dockerClusterImageRepository).To(Equal(clusterVariableImageRepository))
+	g.Expect(devClusterImageRepository).To(Equal(clusterVariableImageRepository))
 }
 
 func getCluster() *clusterv1.Cluster {
@@ -138,19 +163,21 @@ func getCluster() *clusterv1.Cluster {
 			Namespace: "namespace-name-test",
 		},
 		Spec: clusterv1.ClusterSpec{
-			ClusterNetwork: &clusterv1.ClusterNetwork{
-				Pods: &clusterv1.NetworkRanges{
+			ClusterNetwork: clusterv1.ClusterNetwork{
+				Pods: clusterv1.NetworkRanges{
 					CIDRBlocks: []string{"192.168.0.0/16"},
 				},
 			},
-			Topology: &clusterv1.Topology{
+			Topology: clusterv1.Topology{
 				Version: "v1.29.0",
 				// NOTE: Class name must match the ClusterClass name.
-				Class: "quick-start-runtimesdk",
+				ClassRef: clusterv1.ClusterClassRef{
+					Name: "quick-start-runtimesdk",
+				},
 				ControlPlane: clusterv1.ControlPlaneTopology{
 					Replicas: ptr.To[int32](1),
 				},
-				Workers: &clusterv1.WorkersTopology{
+				Workers: clusterv1.WorkersTopology{
 					MachineDeployments: []clusterv1.MachineDeploymentTopology{
 						{
 							Name: "md-test1",
@@ -246,67 +273,59 @@ func getScope(cluster *clusterv1.Cluster, clusterClassFile string) (*scope.Scope
 
 	// Get ClusterClass and referenced templates.
 	// ClusterClass
-	s.Blueprint.ClusterClass = mustFind(findObject[*clusterv1.ClusterClass](parsedObjects, groupVersionKindName{
+	s.Blueprint.ClusterClass = mustFind(findObject[*clusterv1.ClusterClass](parsedObjects, clusterv1.ClusterClassTemplateReference{
 		Kind: "ClusterClass",
 	}))
 	// Set paused condition for ClusterClass
-	v1beta2conditions.Set(s.Blueprint.ClusterClass, metav1.Condition{
-		Type:               clusterv1.PausedV1Beta2Condition,
+	conditions.Set(s.Blueprint.ClusterClass, metav1.Condition{
+		Type:               clusterv1.PausedCondition,
 		Status:             metav1.ConditionFalse,
-		Reason:             clusterv1.NotPausedV1Beta2Reason,
+		Reason:             clusterv1.NotPausedReason,
 		ObservedGeneration: s.Blueprint.ClusterClass.GetGeneration(),
 	})
 	// InfrastructureClusterTemplate
-	s.Blueprint.InfrastructureClusterTemplate = mustFind(findObject[*unstructured.Unstructured](parsedObjects, refToGroupVersionKindName(s.Blueprint.ClusterClass.Spec.Infrastructure.Ref)))
+	s.Blueprint.InfrastructureClusterTemplate = mustFind(findObject[*unstructured.Unstructured](parsedObjects, s.Blueprint.ClusterClass.Spec.Infrastructure.TemplateRef))
 
 	// ControlPlane
-	s.Blueprint.ControlPlane.Template = mustFind(findObject[*unstructured.Unstructured](parsedObjects, refToGroupVersionKindName(s.Blueprint.ClusterClass.Spec.ControlPlane.Ref)))
+	s.Blueprint.ControlPlane.Template = mustFind(findObject[*unstructured.Unstructured](parsedObjects, s.Blueprint.ClusterClass.Spec.ControlPlane.TemplateRef))
 	if s.Blueprint.HasControlPlaneInfrastructureMachine() {
-		s.Blueprint.ControlPlane.InfrastructureMachineTemplate = mustFind(findObject[*unstructured.Unstructured](parsedObjects, refToGroupVersionKindName(s.Blueprint.ClusterClass.Spec.ControlPlane.MachineInfrastructure.Ref)))
+		s.Blueprint.ControlPlane.InfrastructureMachineTemplate = mustFind(findObject[*unstructured.Unstructured](parsedObjects, s.Blueprint.ClusterClass.Spec.ControlPlane.MachineInfrastructure.TemplateRef))
 	}
 	if s.Blueprint.HasControlPlaneMachineHealthCheck() {
-		s.Blueprint.ControlPlane.MachineHealthCheck = s.Blueprint.ClusterClass.Spec.ControlPlane.MachineHealthCheck
+		s.Blueprint.ControlPlane.HealthCheck = s.Blueprint.ClusterClass.Spec.ControlPlane.HealthCheck
 	}
 
 	// MachineDeployments.
 	for _, machineDeploymentClass := range s.Blueprint.ClusterClass.Spec.Workers.MachineDeployments {
 		machineDeploymentBlueprint := &scope.MachineDeploymentBlueprint{}
-		machineDeploymentClass.Template.Metadata.DeepCopyInto(&machineDeploymentBlueprint.Metadata)
-		machineDeploymentBlueprint.InfrastructureMachineTemplate = mustFind(findObject[*unstructured.Unstructured](parsedObjects, refToGroupVersionKindName(machineDeploymentClass.Template.Infrastructure.Ref)))
-		machineDeploymentBlueprint.BootstrapTemplate = mustFind(findObject[*unstructured.Unstructured](parsedObjects, refToGroupVersionKindName(machineDeploymentClass.Template.Bootstrap.Ref)))
-		if machineDeploymentClass.MachineHealthCheck != nil {
-			machineDeploymentBlueprint.MachineHealthCheck = machineDeploymentClass.MachineHealthCheck
-		}
+		machineDeploymentClass.Metadata.DeepCopyInto(&machineDeploymentBlueprint.Metadata)
+		machineDeploymentBlueprint.InfrastructureMachineTemplate = mustFind(findObject[*unstructured.Unstructured](parsedObjects, machineDeploymentClass.Infrastructure.TemplateRef))
+		machineDeploymentBlueprint.BootstrapTemplate = mustFind(findObject[*unstructured.Unstructured](parsedObjects, machineDeploymentClass.Bootstrap.TemplateRef))
+		machineDeploymentBlueprint.HealthCheck = machineDeploymentClass.HealthCheck
 		s.Blueprint.MachineDeployments[machineDeploymentClass.Class] = machineDeploymentBlueprint
 	}
 
 	// MachinePools.
 	for _, machinePoolClass := range s.Blueprint.ClusterClass.Spec.Workers.MachinePools {
 		machinePoolBlueprint := &scope.MachinePoolBlueprint{}
-		machinePoolClass.Template.Metadata.DeepCopyInto(&machinePoolBlueprint.Metadata)
-		machinePoolBlueprint.InfrastructureMachinePoolTemplate = mustFind(findObject[*unstructured.Unstructured](parsedObjects, refToGroupVersionKindName(machinePoolClass.Template.Infrastructure.Ref)))
-		machinePoolBlueprint.BootstrapTemplate = mustFind(findObject[*unstructured.Unstructured](parsedObjects, refToGroupVersionKindName(machinePoolClass.Template.Bootstrap.Ref)))
+		machinePoolClass.Metadata.DeepCopyInto(&machinePoolBlueprint.Metadata)
+		machinePoolBlueprint.InfrastructureMachinePoolTemplate = mustFind(findObject[*unstructured.Unstructured](parsedObjects, machinePoolClass.Infrastructure.TemplateRef))
+		machinePoolBlueprint.BootstrapTemplate = mustFind(findObject[*unstructured.Unstructured](parsedObjects, machinePoolClass.Bootstrap.TemplateRef))
 		s.Blueprint.MachinePools[machinePoolClass.Class] = machinePoolBlueprint
 	}
 
 	return s, nil
 }
 
-type groupVersionKindName struct {
-	Name       string
-	APIVersion string
-	Kind       string
-}
-
 // parseObjects parses objects in clusterClassYAML and returns them by groupVersionKindName.
-func parseObjects(clusterClassYAML []byte) (map[groupVersionKindName]runtime.Object, error) {
+func parseObjects(clusterClassYAML []byte) (map[clusterv1.ClusterClassTemplateReference]runtime.Object, error) {
 	// Only adding clusterv1 as we want to parse everything else as Unstructured,
 	// because everything else is stored as Unstructured in Scope.
 	scheme := runtime.NewScheme()
 	_ = clusterv1.AddToScheme(scheme)
 	universalDeserializer := serializer.NewCodecFactory(scheme).UniversalDeserializer()
 
-	parsedObjects := map[groupVersionKindName]runtime.Object{}
+	parsedObjects := map[clusterv1.ClusterClassTemplateReference]runtime.Object{}
 	// Inspired by cluster-api/util/yaml.ToUnstructured
 	reader := apiyaml.NewYAMLReader(bufio.NewReader(bytes.NewReader(clusterClassYAML)))
 	for {
@@ -329,7 +348,7 @@ func parseObjects(clusterClassYAML []byte) (map[groupVersionKindName]runtime.Obj
 			if err := yaml.Unmarshal(objectBytes, u); err != nil {
 				return nil, err
 			}
-			parsedObjects[groupVersionKindName{
+			parsedObjects[clusterv1.ClusterClassTemplateReference{
 				Name:       u.GetName(),
 				APIVersion: u.GroupVersionKind().GroupVersion().String(),
 				Kind:       u.GroupVersionKind().Kind,
@@ -346,7 +365,7 @@ func parseObjects(clusterClassYAML []byte) (map[groupVersionKindName]runtime.Obj
 		if !ok {
 			return nil, errors.Errorf("found an object which is not a metav1.Object")
 		}
-		parsedObjects[groupVersionKindName{
+		parsedObjects[clusterv1.ClusterClassTemplateReference{
 			Name:       metaObj.GetName(),
 			APIVersion: gvk.GroupVersion().String(),
 			Kind:       gvk.Kind,
@@ -363,7 +382,7 @@ func mustFind[K runtime.Object](obj K, err error) K {
 }
 
 // findObject looks up an object with the given groupVersionKindName in the given objects map.
-func findObject[K runtime.Object](objects map[groupVersionKindName]runtime.Object, groupVersionKindName groupVersionKindName) (K, error) {
+func findObject[K runtime.Object](objects map[clusterv1.ClusterClassTemplateReference]runtime.Object, groupVersionKindName clusterv1.ClusterClassTemplateReference) (K, error) {
 	var res K
 	var alreadyFound bool
 	for gvkn, obj := range objects {
@@ -392,14 +411,6 @@ func findObject[K runtime.Object](objects map[groupVersionKindName]runtime.Objec
 	return res, nil
 }
 
-func refToGroupVersionKindName(ref *corev1.ObjectReference) groupVersionKindName {
-	return groupVersionKindName{
-		APIVersion: ref.APIVersion,
-		Kind:       ref.Kind,
-		Name:       ref.Name,
-	}
-}
-
 type TopologyMutationHook interface {
 	DiscoverVariables(ctx context.Context, req *runtimehooksv1.DiscoverVariablesRequest, resp *runtimehooksv1.DiscoverVariablesResponse)
 	GeneratePatches(ctx context.Context, req *runtimehooksv1.GeneratePatchesRequest, resp *runtimehooksv1.GeneratePatchesResponse)
@@ -414,7 +425,11 @@ type injectRuntimeClient struct {
 	runtimeExtension TopologyMutationHook
 }
 
-func (i injectRuntimeClient) CallExtension(ctx context.Context, hook runtimecatalog.Hook, _ metav1.Object, _ string, req runtimehooksv1.RequestObject, resp runtimehooksv1.ResponseObject, _ ...runtimeclient.CallExtensionOption) error {
+func (i *injectRuntimeClient) GetAllExtensions(_ context.Context, _ runtimecatalog.Hook, _ client.Object) ([]string, error) {
+	panic("implement me")
+}
+
+func (i injectRuntimeClient) CallExtension(ctx context.Context, hook runtimecatalog.Hook, _ client.Object, _ string, req runtimehooksv1.RequestObject, resp runtimehooksv1.ResponseObject, _ ...runtimeclient.CallExtensionOption) error {
 	// Note: We have to copy the requests. Otherwise we could get side effect by Runtime Extensions
 	// modifying the request instead of properly returning a response. Also after Unmarshal,
 	// only the Raw fields in runtime.RawExtension fields should be filled out and Object should be nil.
@@ -426,8 +441,11 @@ func (i injectRuntimeClient) CallExtension(ctx context.Context, hook runtimecata
 			return err
 		}
 		i.runtimeExtension.DiscoverVariables(ctx, reqCopy, resp.(*runtimehooksv1.DiscoverVariablesResponse))
-		if resp.GetStatus() == runtimehooksv1.ResponseStatusFailure {
-			return errors.Errorf("failed to call extension handler: got failure response: %v", resp.GetMessage())
+		if resp.GetStatus() != runtimehooksv1.ResponseStatusSuccess {
+			if resp.GetStatus() == runtimehooksv1.ResponseStatusFailure {
+				return errors.Errorf("failed to call extension handler: got failure response: %v", resp.GetMessage())
+			}
+			return errors.Errorf("failed to call extension handler: got unknown response status %q", resp.GetStatus())
 		}
 		return nil
 	case runtimecatalog.HookName(runtimehooksv1.GeneratePatches):
@@ -436,8 +454,11 @@ func (i injectRuntimeClient) CallExtension(ctx context.Context, hook runtimecata
 			return err
 		}
 		i.runtimeExtension.GeneratePatches(ctx, reqCopy, resp.(*runtimehooksv1.GeneratePatchesResponse))
-		if resp.GetStatus() == runtimehooksv1.ResponseStatusFailure {
-			return errors.Errorf("failed to call extension handler: got failure response: %v", resp.GetMessage())
+		if resp.GetStatus() != runtimehooksv1.ResponseStatusSuccess {
+			if resp.GetStatus() == runtimehooksv1.ResponseStatusFailure {
+				return errors.Errorf("failed to call extension handler: got failure response: %v", resp.GetMessage())
+			}
+			return errors.Errorf("failed to call extension handler: got unknown response status %q", resp.GetStatus())
 		}
 		return nil
 	case runtimecatalog.HookName(runtimehooksv1.ValidateTopology):
@@ -446,8 +467,11 @@ func (i injectRuntimeClient) CallExtension(ctx context.Context, hook runtimecata
 			return err
 		}
 		i.runtimeExtension.ValidateTopology(ctx, reqCopy, resp.(*runtimehooksv1.ValidateTopologyResponse))
-		if resp.GetStatus() == runtimehooksv1.ResponseStatusFailure {
-			return errors.Errorf("failed to call extension handler: got failure response: %v", resp.GetMessage())
+		if resp.GetStatus() != runtimehooksv1.ResponseStatusSuccess {
+			if resp.GetStatus() == runtimehooksv1.ResponseStatusFailure {
+				return errors.Errorf("failed to call extension handler: got failure response: %v", resp.GetMessage())
+			}
+			return errors.Errorf("failed to call extension handler: got unknown response status %q", resp.GetStatus())
 		}
 		return nil
 	}
@@ -489,6 +513,6 @@ func (i injectRuntimeClient) Unregister(_ *runtimev1.ExtensionConfig) error {
 	panic("implement me")
 }
 
-func (i injectRuntimeClient) CallAllExtensions(_ context.Context, _ runtimecatalog.Hook, _ metav1.Object, _ runtimehooksv1.RequestObject, _ runtimehooksv1.ResponseObject) error {
+func (i injectRuntimeClient) CallAllExtensions(_ context.Context, _ runtimecatalog.Hook, _ client.Object, _ runtimehooksv1.RequestObject, _ runtimehooksv1.ResponseObject) error {
 	panic("implement me")
 }

@@ -38,7 +38,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
+	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	clusterctlcluster "sigs.k8s.io/cluster-api/cmd/clusterctl/client/cluster"
 	"sigs.k8s.io/cluster-api/test/e2e/internal/log"
 	"sigs.k8s.io/cluster-api/test/framework"
@@ -198,6 +198,20 @@ func ClusterDeletionSpec(ctx context.Context, inputGetter func() ClusterDeletion
 			},
 		}, clusterResources)
 
+		Byf("Verify Cluster Available condition is true")
+		framework.VerifyClusterAvailable(ctx, framework.VerifyClusterAvailableInput{
+			Getter:    input.BootstrapClusterProxy.GetClient(),
+			Name:      clusterResources.Cluster.Name,
+			Namespace: clusterResources.Cluster.Namespace,
+		})
+
+		Byf("Verify Machines Ready condition is true")
+		framework.VerifyMachinesReady(ctx, framework.VerifyMachinesReadyInput{
+			Lister:    input.BootstrapClusterProxy.GetClient(),
+			Name:      clusterResources.Cluster.Name,
+			Namespace: clusterResources.Cluster.Namespace,
+		})
+
 		// Get all objects per deletion phase and the list of blocking objects.
 		var objectsPerPhase [][]client.Object
 		objectsPerPhase, blockingObjects = getDeletionPhaseObjects(ctx, input.BootstrapClusterProxy, clusterResources.Cluster, input.ClusterDeletionPhases)
@@ -254,9 +268,10 @@ func ClusterDeletionSpec(ctx context.Context, inputGetter func() ClusterDeletion
 
 		log.Logf("Waiting for the Cluster %s to be deleted", klog.KObj(clusterResources.Cluster))
 		framework.WaitForClusterDeleted(ctx, framework.WaitForClusterDeletedInput{
-			Client:         input.BootstrapClusterProxy.GetClient(),
-			Cluster:        clusterResources.Cluster,
-			ArtifactFolder: input.ArtifactFolder,
+			ClusterProxy:         input.BootstrapClusterProxy,
+			ClusterctlConfigPath: input.ClusterctlConfigPath,
+			Cluster:              clusterResources.Cluster,
+			ArtifactFolder:       input.ArtifactFolder,
 		}, input.E2EConfig.GetIntervals(specName, "wait-delete-cluster")...)
 
 		By("PASSED!")
@@ -264,7 +279,7 @@ func ClusterDeletionSpec(ctx context.Context, inputGetter func() ClusterDeletion
 
 	AfterEach(func() {
 		// Dump all the resources in the spec namespace and the workload cluster.
-		framework.DumpAllResourcesAndLogs(ctx, input.BootstrapClusterProxy, input.ArtifactFolder, namespace, clusterResources.Cluster)
+		framework.DumpAllResourcesAndLogs(ctx, input.BootstrapClusterProxy, input.ClusterctlConfigPath, input.ArtifactFolder, namespace, clusterResources.Cluster)
 
 		if !input.SkipCleanup {
 			// Remove finalizers we added to block normal deletion.
@@ -275,9 +290,10 @@ func ClusterDeletionSpec(ctx context.Context, inputGetter func() ClusterDeletion
 			// that cluster variable is not set even if the cluster exists, so we are calling DeleteAllClustersAndWait
 			// instead of DeleteClusterAndWait
 			framework.DeleteAllClustersAndWait(ctx, framework.DeleteAllClustersAndWaitInput{
-				Client:         input.BootstrapClusterProxy.GetClient(),
-				Namespace:      namespace.Name,
-				ArtifactFolder: input.ArtifactFolder,
+				ClusterProxy:         input.BootstrapClusterProxy,
+				ClusterctlConfigPath: input.ClusterctlConfigPath,
+				Namespace:            namespace.Name,
+				ArtifactFolder:       input.ArtifactFolder,
 			}, input.E2EConfig.GetIntervals(specName, "wait-delete-cluster")...)
 
 			By(fmt.Sprintf("Deleting namespace used for hosting the %q test spec", specName))

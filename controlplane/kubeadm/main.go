@@ -27,13 +27,11 @@ import (
 
 	"github.com/pkg/errors"
 	"github.com/spf13/pflag"
-	appsv1 "k8s.io/api/apps/v1"
-	corev1 "k8s.io/api/core/v1"
+	"go.etcd.io/etcd/client/pkg/v3/logutil"
+	"go.uber.org/zap/zapcore"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/selection"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/leaderelection/resourcelock"
 	cliflag "k8s.io/component-base/cli/flag"
@@ -43,30 +41,40 @@ import (
 	"k8s.io/klog/v2"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/cache"
+	"sigs.k8s.io/controller-runtime/pkg/certwatcher"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/config"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
-	bootstrapv1 "sigs.k8s.io/cluster-api/bootstrap/kubeadm/api/v1beta1"
+	bootstrapv1 "sigs.k8s.io/cluster-api/api/bootstrap/kubeadm/v1beta2"
+	controlplanev1beta1 "sigs.k8s.io/cluster-api/api/controlplane/kubeadm/v1beta1"
+	controlplanev1 "sigs.k8s.io/cluster-api/api/controlplane/kubeadm/v1beta2"
+	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
+	runtimecatalog "sigs.k8s.io/cluster-api/api/runtime/catalog"
+	runtimehooksv1 "sigs.k8s.io/cluster-api/api/runtime/hooks/v1alpha1"
+	runtimev1 "sigs.k8s.io/cluster-api/api/runtime/v1beta2"
+	"sigs.k8s.io/cluster-api/controllers"
 	"sigs.k8s.io/cluster-api/controllers/clustercache"
+	"sigs.k8s.io/cluster-api/controllers/crdmigrator"
 	"sigs.k8s.io/cluster-api/controllers/remote"
-	controlplanev1 "sigs.k8s.io/cluster-api/controlplane/kubeadm/api/v1beta1"
 	kubeadmcontrolplanecontrollers "sigs.k8s.io/cluster-api/controlplane/kubeadm/controllers"
 	"sigs.k8s.io/cluster-api/controlplane/kubeadm/internal/etcd"
+	"sigs.k8s.io/cluster-api/controlplane/kubeadm/internal/setup"
 	kcpwebhooks "sigs.k8s.io/cluster-api/controlplane/kubeadm/webhooks"
-	expv1 "sigs.k8s.io/cluster-api/exp/api/v1beta1"
+	"sigs.k8s.io/cluster-api/controlplane/kubeadm/webhooks/conversion"
+	runtimeclient "sigs.k8s.io/cluster-api/exp/runtime/client"
 	"sigs.k8s.io/cluster-api/feature"
-	controlplanev1alpha3 "sigs.k8s.io/cluster-api/internal/apis/controlplane/kubeadm/v1alpha3"
-	controlplanev1alpha4 "sigs.k8s.io/cluster-api/internal/apis/controlplane/kubeadm/v1alpha4"
+	"sigs.k8s.io/cluster-api/internal/contract"
+	internalruntimeclient "sigs.k8s.io/cluster-api/internal/runtime/client"
+	runtimeregistry "sigs.k8s.io/cluster-api/internal/runtime/registry"
 	"sigs.k8s.io/cluster-api/util/apiwarnings"
 	"sigs.k8s.io/cluster-api/util/flags"
 	"sigs.k8s.io/cluster-api/version"
 )
 
 var (
+	catalog        = runtimecatalog.New()
 	scheme         = runtime.NewScheme()
 	setupLog       = ctrl.Log.WithName("setup")
 	controllerName = "cluster-api-kubeadm-control-plane-manager"
@@ -89,6 +97,8 @@ var (
 	webhookCertDir              string
 	webhookCertName             string
 	webhookKeyName              string
+	runtimeExtensionCertFile    string
+	runtimeExtensionKeyFile     string
 	healthAddr                  string
 	managerOptions              = flags.ManagerOptions{}
 	logOptions                  = logs.NewOptions()
@@ -96,19 +106,23 @@ var (
 	remoteConditionsGracePeriod    time.Duration
 	kubeadmControlPlaneConcurrency int
 	clusterCacheConcurrency        int
+	skipCRDMigrationPhases         []string
 	etcdDialTimeout                time.Duration
 	etcdCallTimeout                time.Duration
+	etcdLogLevel                   string
 )
 
 func init() {
 	_ = clientgoscheme.AddToScheme(scheme)
 	_ = clusterv1.AddToScheme(scheme)
-	_ = expv1.AddToScheme(scheme)
-	_ = controlplanev1alpha3.AddToScheme(scheme)
-	_ = controlplanev1alpha4.AddToScheme(scheme)
+	_ = controlplanev1beta1.AddToScheme(scheme)
 	_ = controlplanev1.AddToScheme(scheme)
 	_ = bootstrapv1.AddToScheme(scheme)
 	_ = apiextensionsv1.AddToScheme(scheme)
+	_ = runtimev1.AddToScheme(scheme)
+
+	// Register the RuntimeHook types into the catalog.
+	_ = runtimehooksv1.AddToCatalog(catalog)
 }
 
 // InitFlags initializes the flags.
@@ -143,8 +157,11 @@ func InitFlags(fs *pflag.FlagSet) {
 		"Grace period after which remote conditions (e.g. `APIServerPodHealthy`) are set to `Unknown`, "+
 			"the grace period starts from the last successful health probe to the workload cluster")
 
-	fs.IntVar(&kubeadmControlPlaneConcurrency, "kubeadmcontrolplane-concurrency", 10,
+	fs.IntVar(&kubeadmControlPlaneConcurrency, "kubeadmcontrolplane-concurrency", 100,
 		"Number of kubeadm control planes to process simultaneously")
+
+	fs.StringSliceVar(&skipCRDMigrationPhases, "skip-crd-migration-phases", []string{},
+		"List of CRD migration phases to skip. Valid values are: StorageVersionMigration, CleanupManagedFields.")
 
 	fs.IntVar(&clusterCacheConcurrency, "clustercache-concurrency", 100,
 		"Number of clusters to process simultaneously")
@@ -152,10 +169,10 @@ func InitFlags(fs *pflag.FlagSet) {
 	fs.DurationVar(&syncPeriod, "sync-period", 10*time.Minute,
 		"The minimum interval at which watched resources are reconciled (e.g. 15m)")
 
-	fs.Float32Var(&restConfigQPS, "kube-api-qps", 20,
+	fs.Float32Var(&restConfigQPS, "kube-api-qps", 100,
 		"Maximum queries per second from the controller client to the Kubernetes API server.")
 
-	fs.IntVar(&restConfigBurst, "kube-api-burst", 30,
+	fs.IntVar(&restConfigBurst, "kube-api-burst", 200,
 		"Maximum number of queries that should be allowed in one burst from the controller client to the Kubernetes API server.")
 
 	fs.Float32Var(&clusterCacheClientQPS, "clustercache-client-qps", 20,
@@ -176,6 +193,12 @@ func InitFlags(fs *pflag.FlagSet) {
 	fs.StringVar(&webhookKeyName, "webhook-key-name", "tls.key",
 		"Webhook key name.")
 
+	fs.StringVar(&runtimeExtensionCertFile, "runtime-extension-client-cert-file", "",
+		"Path of the PEM-encoded client certificate to be used when calling runtime extensions.")
+
+	fs.StringVar(&runtimeExtensionKeyFile, "runtime-extension-client-key-file", "",
+		"Path of the PEM-encoded client key to be used when calling runtime extensions.")
+
 	fs.StringVar(&healthAddr, "health-addr", ":9440",
 		"The address the health endpoint binds to.")
 
@@ -185,6 +208,9 @@ func InitFlags(fs *pflag.FlagSet) {
 	fs.DurationVar(&etcdCallTimeout, "etcd-call-timeout-duration", etcd.DefaultCallTimeout,
 		"Duration that the etcd client waits at most for read and write operations to etcd.")
 
+	fs.StringVar(&etcdLogLevel, "etcd-client-log-level", zapcore.InfoLevel.String(),
+		"Logging level for etcd client. Possible values are: debug, info, warn, error, dpanic, panic, fatal.")
+
 	flags.AddManagerOptions(fs, &managerOptions)
 
 	feature.MutableGates.AddFlag(fs)
@@ -193,6 +219,12 @@ func InitFlags(fs *pflag.FlagSet) {
 // Add RBAC for the authorized diagnostics endpoint.
 // +kubebuilder:rbac:groups=authentication.k8s.io,resources=tokenreviews,verbs=create
 // +kubebuilder:rbac:groups=authorization.k8s.io,resources=subjectaccessreviews,verbs=create
+// ADD CRD RBAC for CRD Migrator.
+// +kubebuilder:rbac:groups=apiextensions.k8s.io,resources=customresourcedefinitions,verbs=get;list;watch
+// +kubebuilder:rbac:groups=apiextensions.k8s.io,resources=customresourcedefinitions;customresourcedefinitions/status,verbs=update;patch,resourceNames=kubeadmcontrolplanes.controlplane.cluster.x-k8s.io;kubeadmcontrolplanetemplates.controlplane.cluster.x-k8s.io
+// Add RBAC for ExtensionConfig controller and runtime client (intentionally does not include write permissions)
+// +kubebuilder:rbac:groups=runtime.cluster.x-k8s.io,resources=extensionconfigs,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch
 
 func main() {
 	InitFlags(pflag.CommandLine)
@@ -200,18 +232,25 @@ func main() {
 	pflag.CommandLine.AddGoFlagSet(flag.CommandLine)
 	// Set log level 2 as default.
 	if err := pflag.CommandLine.Set("v", "2"); err != nil {
-		setupLog.Error(err, "failed to set default log level")
+		fmt.Printf("Failed to set default log level: %v\n", err)
 		os.Exit(1)
 	}
 	pflag.Parse()
 
 	if err := logsv1.ValidateAndApply(logOptions, nil); err != nil {
-		setupLog.Error(err, "unable to start manager")
+		fmt.Printf("Unable to start manager: %v\n", err)
 		os.Exit(1)
 	}
 
+	pflag.CommandLine.VisitAll(func(flag *pflag.Flag) {
+		klog.V(1).Infof("FLAG: --%s=%q", flag.Name, flag.Value)
+	})
+
 	// klog.Background will automatically use the right logger.
 	ctrl.SetLogger(klog.Background())
+
+	// Note: setupLog can only be used after ctrl.SetLogger was called
+	setupLog.Info(fmt.Sprintf("Version: %s (git commit: %s)", version.Get().String(), version.Get().GitCommit))
 
 	restConfig := ctrl.GetConfigOrDie()
 	restConfig.QPS = restConfigQPS
@@ -234,23 +273,16 @@ func main() {
 		os.Exit(1)
 	}
 
-	var watchNamespaces map[string]cache.Config
-	if watchNamespace != "" {
-		watchNamespaces = map[string]cache.Config{
-			watchNamespace: {},
-		}
-	}
-
 	if enableContentionProfiling {
 		goruntime.SetBlockProfileRate(1)
 	}
 
-	req, _ := labels.NewRequirement(clusterv1.ClusterNameLabel, selection.Exists, nil)
-	clusterSecretCacheSelector := labels.NewSelector().Add(*req)
-
 	ctrlOptions := ctrl.Options{
 		Controller: config.Controller{
 			UsePriorityQueue: ptr.To[bool](feature.Gates.Enabled(feature.PriorityQueue)),
+			// Give the manager more time to sync the caches during startup. This is required
+			// in high scale environments when they are more objects in the system (default is 3m).
+			CacheSyncTimeout: 5 * time.Minute,
 		},
 		Scheme:                     scheme,
 		LeaderElection:             enableLeaderElection,
@@ -262,31 +294,8 @@ func main() {
 		HealthProbeBindAddress:     healthAddr,
 		PprofBindAddress:           profilerAddress,
 		Metrics:                    *metricsOptions,
-		Cache: cache.Options{
-			DefaultNamespaces: watchNamespaces,
-			SyncPeriod:        &syncPeriod,
-			ByObject: map[client.Object]cache.ByObject{
-				// Note: Only Secrets with the cluster name label are cached.
-				// The default client of the manager won't use the cache for secrets at all (see Client.Cache.DisableFor).
-				// The cached secrets will only be used by the secretCachingClient we create below.
-				&corev1.Secret{}: {
-					Label: clusterSecretCacheSelector,
-				},
-			},
-		},
-		Client: client.Options{
-			Cache: &client.CacheOptions{
-				DisableFor: []client.Object{
-					&corev1.ConfigMap{},
-					&corev1.Secret{},
-				},
-				// This config ensures that the default client uses the cache for all Unstructured get/list calls.
-				// KCP is only using Unstructured to retrieve InfraMachines and InfraMachineTemplates.
-				// As the cache should be used in those cases, caching is configured globally instead of
-				// creating a separate client that caches Unstructured.
-				Unstructured: true,
-			},
-		},
+		Cache:                      setup.ManagerCacheOptions(scheme, controllerName, watchNamespace, syncPeriod),
+		Client:                     setup.ManagerClientOptions(),
 		WebhookServer: webhook.NewServer(
 			webhook.Options{
 				Port:     webhookPort,
@@ -309,7 +318,7 @@ func main() {
 
 	setupChecks(mgr)
 	setupReconcilers(ctx, mgr)
-	setupWebhooks(mgr)
+	setupWebhooks(ctx, mgr)
 
 	setupLog.Info("Starting manager", "version", version.Get().String())
 	if err := mgr.Start(ctx); err != nil {
@@ -331,55 +340,16 @@ func setupChecks(mgr ctrl.Manager) {
 }
 
 func setupReconcilers(ctx context.Context, mgr ctrl.Manager) {
-	secretCachingClient, err := client.New(mgr.GetConfig(), client.Options{
-		HTTPClient: mgr.GetHTTPClient(),
-		Cache: &client.CacheOptions{
-			Reader: mgr.GetCache(),
-		},
-	})
+	secretCachingClient, err := setup.CreateSecretCachingClient(mgr)
 	if err != nil {
 		setupLog.Error(err, "unable to create secret caching client")
 		os.Exit(1)
 	}
 
-	must := func(r *labels.Requirement, err error) labels.Requirement {
-		if err != nil {
-			panic(err)
-		}
-		return *r
-	}
-	podSelector := labels.NewSelector().Add(
-		must(labels.NewRequirement("tier", selection.Equals, []string{"control-plane"})),
-		must(labels.NewRequirement("component", selection.In, []string{"kube-apiserver", "kube-controller-manager", "kube-scheduler", "etcd"})),
-	)
-
 	clusterCache, err := clustercache.SetupWithManager(ctx, mgr, clustercache.Options{
-		SecretClient: secretCachingClient,
-		Cache: clustercache.CacheOptions{
-			// Only cache kubeadm static pods
-			ByObject: map[client.Object]cache.ByObject{
-				&corev1.Pod{}: {
-					Namespaces: map[string]cache.Config{
-						metav1.NamespaceSystem: {
-							LabelSelector: podSelector,
-						},
-					},
-				},
-			},
-		},
-		Client: clustercache.ClientOptions{
-			QPS:       clusterCacheClientQPS,
-			Burst:     clusterCacheClientBurst,
-			UserAgent: remote.DefaultClusterAPIUserAgent(controllerName),
-			Cache: clustercache.ClientCacheOptions{
-				DisableFor: []client.Object{
-					&corev1.ConfigMap{},
-					&corev1.Secret{},
-					&appsv1.Deployment{},
-					&appsv1.DaemonSet{},
-				},
-			},
-		},
+		SecretClient:     secretCachingClient,
+		Cache:            setup.ClusterCacheCacheOptions(),
+		Client:           setup.ClusterCacheClientOptions(controllerName, clusterCacheClientQPS, clusterCacheClientBurst),
 		WatchFilterValue: watchFilterValue,
 	}, concurrency(clusterCacheConcurrency))
 	if err != nil {
@@ -387,21 +357,99 @@ func setupReconcilers(ctx context.Context, mgr ctrl.Manager) {
 		os.Exit(1)
 	}
 
+	crdMigratorSkipPhases := make([]crdmigrator.Phase, 0, len(skipCRDMigrationPhases))
+	for _, p := range skipCRDMigrationPhases {
+		crdMigratorSkipPhases = append(crdMigratorSkipPhases, crdmigrator.Phase(p))
+	}
+	if err := (&crdmigrator.CRDMigrator{
+		Client:                 mgr.GetClient(),
+		APIReader:              mgr.GetAPIReader(),
+		SkipCRDMigrationPhases: crdMigratorSkipPhases,
+		// Note: The kubebuilder RBAC markers above has to be kept in sync
+		// with the CRDs that should be migrated by this provider.
+		Config: map[client.Object]crdmigrator.ByObjectConfig{
+			&controlplanev1.KubeadmControlPlane{}:         {UseCache: true, UseStatusForStorageVersionMigration: true},
+			&controlplanev1.KubeadmControlPlaneTemplate{}: {UseCache: false},
+		},
+		// The CRDMigrator is run with only concurrency 1 to ensure we don't overwhelm the apiserver by patching a
+		// lot of CRs concurrently.
+	}).SetupWithManager(ctx, mgr, concurrency(1)); err != nil {
+		setupLog.Error(err, "Unable to create controller", "controller", "CRDMigrator")
+		os.Exit(1)
+	}
+
+	zapLogLevel, err := zapcore.ParseLevel(etcdLogLevel)
+	if err != nil {
+		setupLog.Error(err, "Unable to parse etcd log level")
+		os.Exit(1)
+	}
+	etcdLogger, err := logutil.CreateDefaultZapLogger(zapLogLevel)
+	if err != nil {
+		setupLog.Error(err, "unable to create etcd logger")
+		os.Exit(1)
+	}
+
+	var runtimeClient runtimeclient.Client
+	if feature.Gates.Enabled(feature.InPlaceUpdates) {
+		// This is the creation of the runtimeClient for the controllers, embedding a shared catalog and registry instance.
+		var certWatcher *certwatcher.CertWatcher
+		runtimeClient, certWatcher, err = internalruntimeclient.New(ctx, internalruntimeclient.Options{
+			CertFile: runtimeExtensionCertFile,
+			KeyFile:  runtimeExtensionKeyFile,
+			Catalog:  catalog,
+			Registry: runtimeregistry.New(),
+			Client:   mgr.GetClient(),
+		})
+		if err != nil {
+			setupLog.Error(err, "Unable to create RuntimeSDK client")
+			os.Exit(1)
+		}
+		if certWatcher != nil {
+			// Note: certWatcher is managed by the manager to ensure that a certWatcher failure leads to a binary restart.
+			if err := mgr.Add(certWatcher); err != nil {
+				setupLog.Error(err, "Unable to add RuntimeSDK client cert-watcher to the manager")
+				os.Exit(1)
+			}
+		}
+
+		if err = (&controllers.ExtensionConfigReconciler{
+			Client:           mgr.GetClient(),
+			APIReader:        mgr.GetAPIReader(),
+			RuntimeClient:    runtimeClient,
+			ReadOnly:         true,
+			WatchFilterValue: watchFilterValue,
+		}).SetupWithManager(ctx, mgr, concurrency(10)); err != nil {
+			setupLog.Error(err, "Unable to create controller", "controller", "ExtensionConfig")
+			os.Exit(1)
+		}
+	}
+
 	if err := (&kubeadmcontrolplanecontrollers.KubeadmControlPlaneReconciler{
 		Client:                      mgr.GetClient(),
+		APIReader:                   mgr.GetAPIReader(),
 		SecretCachingClient:         secretCachingClient,
 		ClusterCache:                clusterCache,
 		WatchFilterValue:            watchFilterValue,
 		EtcdDialTimeout:             etcdDialTimeout,
 		EtcdCallTimeout:             etcdCallTimeout,
+		EtcdLogger:                  etcdLogger,
 		RemoteConditionsGracePeriod: remoteConditionsGracePeriod,
-	}).SetupWithManager(ctx, mgr, concurrency(kubeadmControlPlaneConcurrency)); err != nil {
+		RuntimeClient:               runtimeClient,
+	}).SetupWithManager(ctx, mgr, controller.Options{
+		MaxConcurrentReconciles: kubeadmControlPlaneConcurrency,
+		ReconciliationTimeout:   3 * time.Minute, // increase reconciliation timeout because the KubeadmControlPlaneReconciler tries to connect with all the etcd member, and times out if those operations might sum up.
+	}); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "KubeadmControlPlane")
 		os.Exit(1)
 	}
 }
 
-func setupWebhooks(mgr ctrl.Manager) {
+func setupWebhooks(_ context.Context, mgr ctrl.Manager) {
+	// Setup the func to retrieve apiVersion for a GroupKind for conversion webhooks.
+	conversion.SetAPIVersionGetter(func(ctx context.Context, gk schema.GroupKind) (string, error) {
+		return contract.GetAPIVersion(ctx, mgr.GetClient(), gk)
+	})
+
 	if err := (&kcpwebhooks.KubeadmControlPlane{}).SetupWebhookWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create webhook", "webhook", "KubeadmControlPlane")
 		os.Exit(1)

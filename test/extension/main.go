@@ -23,6 +23,7 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"os"
 	goruntime "runtime"
 	"time"
@@ -44,17 +45,15 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/config"
 
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
-	bootstrapv1 "sigs.k8s.io/cluster-api/bootstrap/kubeadm/api/v1beta1"
+	runtimecatalog "sigs.k8s.io/cluster-api/api/runtime/catalog"
+	runtimehooksv1 "sigs.k8s.io/cluster-api/api/runtime/hooks/v1alpha1"
 	"sigs.k8s.io/cluster-api/controllers/remote"
-	controlplanev1 "sigs.k8s.io/cluster-api/controlplane/kubeadm/api/v1beta1"
-	runtimecatalog "sigs.k8s.io/cluster-api/exp/runtime/catalog"
-	runtimehooksv1 "sigs.k8s.io/cluster-api/exp/runtime/hooks/api/v1alpha1"
 	"sigs.k8s.io/cluster-api/exp/runtime/server"
 	"sigs.k8s.io/cluster-api/feature"
+	"sigs.k8s.io/cluster-api/test/extension/handlers/inplaceupdate"
 	"sigs.k8s.io/cluster-api/test/extension/handlers/lifecycle"
 	"sigs.k8s.io/cluster-api/test/extension/handlers/topologymutation"
-	infrav1 "sigs.k8s.io/cluster-api/test/infrastructure/docker/api/v1beta1"
+	"sigs.k8s.io/cluster-api/test/extension/handlers/upgradeplan"
 	"sigs.k8s.io/cluster-api/util/flags"
 	"sigs.k8s.io/cluster-api/version"
 )
@@ -97,11 +96,6 @@ func init() {
 	_ = clientgoscheme.AddToScheme(scheme)
 	_ = apiextensionsv1.AddToScheme(scheme)
 
-	_ = clusterv1.AddToScheme(scheme)
-	_ = bootstrapv1.AddToScheme(scheme)
-	_ = controlplanev1.AddToScheme(scheme)
-	_ = infrav1.AddToScheme(scheme)
-
 	// Register the RuntimeHook types into the catalog.
 	_ = runtimehooksv1.AddToCatalog(catalog)
 }
@@ -134,10 +128,10 @@ func InitFlags(fs *pflag.FlagSet) {
 	fs.DurationVar(&syncPeriod, "sync-period", 10*time.Minute,
 		"The minimum interval at which watched resources are reconciled (e.g. 15m)")
 
-	fs.Float32Var(&restConfigQPS, "kube-api-qps", 20,
+	fs.Float32Var(&restConfigQPS, "kube-api-qps", 100,
 		"Maximum queries per second from the controller client to the Kubernetes API server.")
 
-	fs.IntVar(&restConfigBurst, "kube-api-burst", 30,
+	fs.IntVar(&restConfigBurst, "kube-api-burst", 200,
 		"Maximum number of queries that should be allowed in one burst from the controller client to the Kubernetes API server.")
 
 	fs.IntVar(&webhookPort, "webhook-port", 9443,
@@ -170,13 +164,12 @@ func InitFlags(fs *pflag.FlagSet) {
 // +kubebuilder:rbac:groups=authorization.k8s.io,resources=subjectaccessreviews,verbs=create
 
 func main() {
-	// Initialize and parse command line flags.
 	InitFlags(pflag.CommandLine)
 	pflag.CommandLine.SetNormalizeFunc(cliflag.WordSepNormalizeFunc)
 	pflag.CommandLine.AddGoFlagSet(flag.CommandLine)
 	// Set log level 2 as default.
 	if err := pflag.CommandLine.Set("v", "2"); err != nil {
-		setupLog.Error(err, "Failed to set default log level")
+		fmt.Printf("Failed to set default log level: %v\n", err)
 		os.Exit(1)
 	}
 	pflag.Parse()
@@ -185,15 +178,22 @@ func main() {
 	// so klog will automatically use the right logger.
 	// NOTE: klog is the log of choice of component-base machinery.
 	if err := logsv1.ValidateAndApply(logOptions, nil); err != nil {
-		setupLog.Error(err, "Unable to start extension")
+		fmt.Printf("Unable to start manager: %v\n", err)
 		os.Exit(1)
 	}
+
+	pflag.CommandLine.VisitAll(func(flag *pflag.Flag) {
+		klog.V(1).Infof("FLAG: --%s=%q", flag.Name, flag.Value)
+	})
 
 	// Add the klog logger in the context.
 	// NOTE: it is not mandatory to use contextual logging in custom RuntimeExtension, but it is recommended
 	// because it allows to use a log stored in the context across the entire chain of calls (without
 	// requiring an addition log parameter in all the functions).
 	ctrl.SetLogger(klog.Background())
+
+	// Note: setupLog can only be used after ctrl.SetLogger was called
+	setupLog.Info(fmt.Sprintf("Version: %s (git commit: %s)", version.Get().String(), version.Get().GitCommit))
 
 	restConfig := ctrl.GetConfigOrDie()
 	restConfig.QPS = restConfigQPS
@@ -267,6 +267,8 @@ func main() {
 	// Setup Runtime Extensions.
 	setupTopologyMutationHookHandlers(runtimeExtensionWebhookServer)
 	setupLifecycleHookHandlers(mgr, runtimeExtensionWebhookServer)
+	setupInPlaceUpdateHookHandlers(mgr, runtimeExtensionWebhookServer)
+	setupUpgradePlanHookHandlers(mgr, runtimeExtensionWebhookServer)
 
 	// Setup checks, indexes, reconcilers and webhooks.
 	setupChecks(mgr)
@@ -285,8 +287,8 @@ func main() {
 func setupTopologyMutationHookHandlers(runtimeExtensionWebhookServer *server.Server) {
 	// Create the ExtensionHandlers for the Topology Mutation Hooks.
 	// NOTE: it is not mandatory to group all the ExtensionHandlers using a struct, what is important
-	// is to have HandlerFunc with the signature defined in sigs.k8s.io/cluster-api/exp/runtime/hooks/api/v1alpha1.
-	topologyMutationExtensionHandlers := topologymutation.NewExtensionHandlers(scheme)
+	// is to have HandlerFunc with the signature defined in sigs.k8s.io/cluster-api/api/runtime/hooks/v1alpha1.
+	topologyMutationExtensionHandlers := topologymutation.NewExtensionHandlers()
 
 	if err := runtimeExtensionWebhookServer.AddExtensionHandler(server.ExtensionHandler{
 		Hook:        runtimehooksv1.GeneratePatches,
@@ -320,7 +322,7 @@ func setupTopologyMutationHookHandlers(runtimeExtensionWebhookServer *server.Ser
 func setupLifecycleHookHandlers(mgr ctrl.Manager, runtimeExtensionWebhookServer *server.Server) {
 	// Create the ExtensionHandlers for the lifecycle hooks
 	// NOTE: it is not mandatory to group all the ExtensionHandlers using a struct, what is important
-	// is to have HandlerFunc with the signature defined in sigs.k8s.io/cluster-api/exp/runtime/hooks/api/v1alpha1.
+	// is to have HandlerFunc with the signature defined in sigs.k8s.io/cluster-api/api/runtime/hooks/v1alpha1.
 	lifecycleExtensionHandlers := lifecycle.NewExtensionHandlers(mgr.GetClient())
 
 	if err := runtimeExtensionWebhookServer.AddExtensionHandler(server.ExtensionHandler{
@@ -351,9 +353,36 @@ func setupLifecycleHookHandlers(mgr ctrl.Manager, runtimeExtensionWebhookServer 
 	}
 
 	if err := runtimeExtensionWebhookServer.AddExtensionHandler(server.ExtensionHandler{
+		Hook:        runtimehooksv1.BeforeControlPlaneUpgrade,
+		Name:        "before-control-plane-upgrade",
+		HandlerFunc: lifecycleExtensionHandlers.DoBeforeControlPlaneUpgrade,
+	}); err != nil {
+		setupLog.Error(err, "Error adding handler")
+		os.Exit(1)
+	}
+
+	if err := runtimeExtensionWebhookServer.AddExtensionHandler(server.ExtensionHandler{
 		Hook:        runtimehooksv1.AfterControlPlaneUpgrade,
 		Name:        "after-control-plane-upgrade",
 		HandlerFunc: lifecycleExtensionHandlers.DoAfterControlPlaneUpgrade,
+	}); err != nil {
+		setupLog.Error(err, "Error adding handler")
+		os.Exit(1)
+	}
+
+	if err := runtimeExtensionWebhookServer.AddExtensionHandler(server.ExtensionHandler{
+		Hook:        runtimehooksv1.BeforeWorkersUpgrade,
+		Name:        "before-workers-upgrade",
+		HandlerFunc: lifecycleExtensionHandlers.DoBeforeWorkersUpgrade,
+	}); err != nil {
+		setupLog.Error(err, "Error adding handler")
+		os.Exit(1)
+	}
+
+	if err := runtimeExtensionWebhookServer.AddExtensionHandler(server.ExtensionHandler{
+		Hook:        runtimehooksv1.AfterWorkersUpgrade,
+		Name:        "after-workers-upgrade",
+		HandlerFunc: lifecycleExtensionHandlers.DoAfterWorkersUpgrade,
 	}); err != nil {
 		setupLog.Error(err, "Error adding handler")
 		os.Exit(1)
@@ -372,6 +401,58 @@ func setupLifecycleHookHandlers(mgr ctrl.Manager, runtimeExtensionWebhookServer 
 		Hook:        runtimehooksv1.BeforeClusterDelete,
 		Name:        "before-cluster-delete",
 		HandlerFunc: lifecycleExtensionHandlers.DoBeforeClusterDelete,
+	}); err != nil {
+		setupLog.Error(err, "Error adding handler")
+		os.Exit(1)
+	}
+}
+
+// setupInPlaceUpdateHookHandlers sets up In-Place Update Hooks.
+func setupInPlaceUpdateHookHandlers(mgr ctrl.Manager, runtimeExtensionWebhookServer *server.Server) {
+	// Create the ExtensionHandlers for the in-place update hooks
+	// NOTE: it is not mandatory to group all the ExtensionHandlers using a struct, what is important
+	// is to have HandlerFunc with the signature defined in sigs.k8s.io/cluster-api/api/runtime/hooks/v1alpha1.
+	inPlaceUpdateExtensionHandlers := inplaceupdate.NewExtensionHandlers(mgr.GetClient())
+
+	if err := runtimeExtensionWebhookServer.AddExtensionHandler(server.ExtensionHandler{
+		Hook:        runtimehooksv1.CanUpdateMachine,
+		Name:        "can-update-machine",
+		HandlerFunc: inPlaceUpdateExtensionHandlers.DoCanUpdateMachine,
+	}); err != nil {
+		setupLog.Error(err, "Error adding CanUpdateMachine handler")
+		os.Exit(1)
+	}
+
+	if err := runtimeExtensionWebhookServer.AddExtensionHandler(server.ExtensionHandler{
+		Hook:        runtimehooksv1.CanUpdateMachineSet,
+		Name:        "can-update-machineset",
+		HandlerFunc: inPlaceUpdateExtensionHandlers.DoCanUpdateMachineSet,
+	}); err != nil {
+		setupLog.Error(err, "Error adding CanUpdateMachineSet handler")
+		os.Exit(1)
+	}
+
+	if err := runtimeExtensionWebhookServer.AddExtensionHandler(server.ExtensionHandler{
+		Hook:        runtimehooksv1.UpdateMachine,
+		Name:        "update-machine",
+		HandlerFunc: inPlaceUpdateExtensionHandlers.DoUpdateMachine,
+	}); err != nil {
+		setupLog.Error(err, "Error adding UpdateMachine handler")
+		os.Exit(1)
+	}
+}
+
+// setupUpgradePlanHookHandlers sets up Upgrade Plan Hooks.
+func setupUpgradePlanHookHandlers(mgr ctrl.Manager, runtimeExtensionWebhookServer *server.Server) {
+	// Create the ExtensionHandlers for the upgrade plan hooks
+	// NOTE: it is not mandatory to group all the ExtensionHandlers using a struct, what is important
+	// is to have HandlerFunc with the signature defined in sigs.k8s.io/cluster-api/api/runtime/hooks/v1alpha1.
+	upgradePlanExtensionHandlers := upgradeplan.NewExtensionHandlers(mgr.GetClient())
+
+	if err := runtimeExtensionWebhookServer.AddExtensionHandler(server.ExtensionHandler{
+		Hook:        runtimehooksv1.GenerateUpgradePlan,
+		Name:        "generate-upgrade-plan",
+		HandlerFunc: upgradePlanExtensionHandlers.DoGenerateUpgradePlan,
 	}); err != nil {
 		setupLog.Error(err, "Error adding handler")
 		os.Exit(1)

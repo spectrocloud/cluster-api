@@ -23,14 +23,15 @@ aliases:
   - chrischdi
   - enxebre
   - fabriziopandini
+  - JoelSpeed
   - sbueringer
   - vincepri
 
   # folks who can review and LGTM any PRs in the repo
   cluster-api-reviewers:
-  - jackfrancis
-  - JoelSpeed
+  - karthik-k-n
   - richardcase
+  - sivchari
 
   # -----------------------------------------------------------
   # OWNER_ALIASES for controllers/topology
@@ -69,6 +70,14 @@ aliases:
   cluster-api-clusterctl-maintainers:
   cluster-api-clusterctl-reviewers:
   - Jont828
+
+  # -----------------------------------------------------------
+  # OWNER_ALIASES for internal/controllers/machinepool
+  # -----------------------------------------------------------
+
+  cluster-api-machinepool-maintainers:
+  cluster-api-machinepool-reviewers:
+  - AndiDog
 
   # -----------------------------------------------------------
   # OWNER_ALIASES for test
@@ -110,28 +119,21 @@ aliases:
   - elmiko
 
   # -----------------------------------------------------------
-  # OWNER_ALIASES for v1.9 release-team
+  # OWNER_ALIASES for release-team
   # -----------------------------------------------------------
 
   cluster-api-release-lead:
-  - mboersma
+  #- pratik-mahalle
 
   cluster-api-release-team:
-  # members added in commented lines have a pending membership
-  # and will be added back once it is acquired.
-  # - AttyXY
-  # - blind3dd
-  - cahillsf
+  - arshadd-b
+  - aman4433
+  - anshuman-agarwala
+  #- avaneesh634
+  #- blind3dd
   - chandankumar4
-  - cprivitere
-  - hackeramitkumar
   - mboersma
-  # - mbrow137
-  # - pratik-mahalle
-  # - ramessesii2
-  # - RansherSingh
-  - serngawy
-  - shecodesmagic
-  - sreeram-venkitesh
-  - Sunnatillo
+  # - neoaggelos
+  - Peppi-Lotta
+  - SD-13
   - wendy-ha18

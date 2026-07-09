@@ -19,55 +19,43 @@ package webhooks
 import (
 	"context"
 	"fmt"
-	"reflect"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/webhook"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
+	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
+	"sigs.k8s.io/cluster-api/webhooks/conversion"
 )
 
 func (webhook *MachineDrainRule) SetupWebhookWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewWebhookManagedBy(mgr).
-		For(&clusterv1.MachineDrainRule{}).
+	return ctrl.NewWebhookManagedBy(mgr, &clusterv1.MachineDrainRule{}).
 		WithValidator(webhook).
+		WithConverter(conversion.MachineDrainRule).
 		Complete()
 }
 
-// +kubebuilder:webhook:verbs=create;update,path=/validate-cluster-x-k8s-io-v1beta1-machinedrainrule,mutating=false,failurePolicy=fail,matchPolicy=Equivalent,groups=cluster.x-k8s.io,resources=machinedrainrules,versions=v1beta1,name=validation.machinedrainrule.cluster.x-k8s.io,sideEffects=None,admissionReviewVersions=v1;v1beta1
+// +kubebuilder:webhook:verbs=create;update,path=/validate-cluster-x-k8s-io-v1beta2-machinedrainrule,mutating=false,failurePolicy=fail,matchPolicy=Equivalent,groups=cluster.x-k8s.io,resources=machinedrainrules,versions=v1beta2,name=validation.machinedrainrule.cluster.x-k8s.io,sideEffects=None,admissionReviewVersions=v1
 
 // MachineDrainRule implements a validation webhook for MachineDrainRule.
 type MachineDrainRule struct{}
 
-var _ webhook.CustomValidator = &MachineDrainRule{}
+var _ admission.Validator[*clusterv1.MachineDrainRule] = &MachineDrainRule{}
 
 // ValidateCreate implements webhook.CustomValidator so a webhook will be registered for the type.
-func (webhook *MachineDrainRule) ValidateCreate(_ context.Context, obj runtime.Object) (admission.Warnings, error) {
-	mdr, ok := obj.(*clusterv1.MachineDrainRule)
-	if !ok {
-		return nil, apierrors.NewBadRequest(fmt.Sprintf("expected a MachineDrainRule but got a %T", obj))
-	}
-
+func (webhook *MachineDrainRule) ValidateCreate(_ context.Context, mdr *clusterv1.MachineDrainRule) (admission.Warnings, error) {
 	return nil, webhook.validate(mdr)
 }
 
 // ValidateUpdate implements webhook.CustomValidator so a webhook will be registered for the type.
-func (webhook *MachineDrainRule) ValidateUpdate(_ context.Context, _, newObj runtime.Object) (admission.Warnings, error) {
-	newMDR, ok := newObj.(*clusterv1.MachineDrainRule)
-	if !ok {
-		return nil, apierrors.NewBadRequest(fmt.Sprintf("expected a MachineDrainRule but got a %T", newObj))
-	}
-
+func (webhook *MachineDrainRule) ValidateUpdate(_ context.Context, _, newMDR *clusterv1.MachineDrainRule) (admission.Warnings, error) {
 	return nil, webhook.validate(newMDR)
 }
 
 // ValidateDelete implements webhook.CustomValidator so a webhook will be registered for the type.
-func (webhook *MachineDrainRule) ValidateDelete(_ context.Context, _ runtime.Object) (admission.Warnings, error) {
+func (webhook *MachineDrainRule) ValidateDelete(_ context.Context, _ *clusterv1.MachineDrainRule) (admission.Warnings, error) {
 	return nil, nil
 }
 
@@ -101,14 +89,7 @@ func (webhook *MachineDrainRule) validate(newMDR *clusterv1.MachineDrainRule) er
 func ValidateMachineDrainRulesSelectors(machineDrainRule *clusterv1.MachineDrainRule) field.ErrorList {
 	var allErrs field.ErrorList
 
-	machinesSelectorUnique := true
 	for i, machineSelector := range machineDrainRule.Spec.Machines {
-		for j := range i {
-			if machinesSelectorUnique && reflect.DeepEqual(machineDrainRule.Spec.Machines[i], machineDrainRule.Spec.Machines[j]) {
-				machinesSelectorUnique = false
-			}
-		}
-
 		if machineSelector.Selector != nil {
 			if _, err := metav1.LabelSelectorAsSelector(machineSelector.Selector); err != nil {
 				allErrs = append(allErrs,
@@ -124,20 +105,8 @@ func ValidateMachineDrainRulesSelectors(machineDrainRule *clusterv1.MachineDrain
 			}
 		}
 	}
-	if !machinesSelectorUnique {
-		allErrs = append(allErrs,
-			field.Forbidden(field.NewPath("spec", "machines"), "Entries in machines must be unique"),
-		)
-	}
 
-	podsSelectorUnique := true
 	for i, podSelector := range machineDrainRule.Spec.Pods {
-		for j := range i {
-			if podsSelectorUnique && reflect.DeepEqual(machineDrainRule.Spec.Pods[i], machineDrainRule.Spec.Pods[j]) {
-				podsSelectorUnique = false
-			}
-		}
-
 		if podSelector.Selector != nil {
 			if _, err := metav1.LabelSelectorAsSelector(podSelector.Selector); err != nil {
 				allErrs = append(allErrs,
@@ -152,11 +121,6 @@ func ValidateMachineDrainRulesSelectors(machineDrainRule *clusterv1.MachineDrain
 				)
 			}
 		}
-	}
-	if !podsSelectorUnique {
-		allErrs = append(allErrs,
-			field.Forbidden(field.NewPath("spec", "pods"), "Entries in pods must be unique"),
-		)
 	}
 
 	return allErrs

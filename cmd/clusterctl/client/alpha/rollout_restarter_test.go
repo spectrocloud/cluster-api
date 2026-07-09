@@ -24,11 +24,12 @@ import (
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
+	controlplanev1 "sigs.k8s.io/cluster-api/api/controlplane/kubeadm/v1beta2"
+	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/cluster-api/cmd/clusterctl/internal/test"
-	controlplanev1 "sigs.k8s.io/cluster-api/controlplane/kubeadm/api/v1beta1"
 )
 
 func Test_ObjectRestarter(t *testing.T) {
@@ -49,7 +50,7 @@ func Test_ObjectRestarter(t *testing.T) {
 					&clusterv1.MachineDeployment{
 						TypeMeta: metav1.TypeMeta{
 							Kind:       "MachineDeployment",
-							APIVersion: "cluster.x-k8s.io/v1beta1",
+							APIVersion: clusterv1.GroupVersion.String(),
 						},
 						ObjectMeta: metav1.ObjectMeta{
 							Namespace: "default",
@@ -73,14 +74,14 @@ func Test_ObjectRestarter(t *testing.T) {
 					&clusterv1.MachineDeployment{
 						TypeMeta: metav1.TypeMeta{
 							Kind:       "MachineDeployment",
-							APIVersion: "cluster.x-k8s.io/v1beta1",
+							APIVersion: clusterv1.GroupVersion.String(),
 						},
 						ObjectMeta: metav1.ObjectMeta{
 							Namespace: "default",
 							Name:      "md-1",
 						},
 						Spec: clusterv1.MachineDeploymentSpec{
-							Paused: true,
+							Paused: ptr.To(true),
 						},
 					},
 				},
@@ -100,14 +101,16 @@ func Test_ObjectRestarter(t *testing.T) {
 					&clusterv1.MachineDeployment{
 						TypeMeta: metav1.TypeMeta{
 							Kind:       "MachineDeployment",
-							APIVersion: "cluster.x-k8s.io/v1beta1",
+							APIVersion: clusterv1.GroupVersion.String(),
 						},
 						ObjectMeta: metav1.ObjectMeta{
 							Namespace: "default",
 							Name:      "md-1",
 						},
 						Spec: clusterv1.MachineDeploymentSpec{
-							RolloutAfter: &metav1.Time{Time: time.Now().Local().Add(time.Hour)},
+							Rollout: clusterv1.MachineDeploymentRolloutSpec{
+								After: metav1.Time{Time: time.Now().Local().Add(time.Hour)},
+							},
 						},
 					},
 				},
@@ -127,7 +130,7 @@ func Test_ObjectRestarter(t *testing.T) {
 					&controlplanev1.KubeadmControlPlane{
 						TypeMeta: metav1.TypeMeta{
 							Kind:       "KubeadmControlPlane",
-							APIVersion: "controlplane.cluster.x-k8s.io/v1beta1",
+							APIVersion: clusterv1.GroupVersionControlPlane.String(),
 						},
 						ObjectMeta: metav1.ObjectMeta{
 							Namespace: "default",
@@ -151,7 +154,7 @@ func Test_ObjectRestarter(t *testing.T) {
 					&controlplanev1.KubeadmControlPlane{
 						TypeMeta: metav1.TypeMeta{
 							Kind:       "KubeadmControlPlane",
-							APIVersion: "controlplane.cluster.x-k8s.io/v1beta1",
+							APIVersion: clusterv1.GroupVersionControlPlane.String(),
 						},
 						ObjectMeta: metav1.ObjectMeta{
 							Namespace: "default",
@@ -178,14 +181,16 @@ func Test_ObjectRestarter(t *testing.T) {
 					&controlplanev1.KubeadmControlPlane{
 						TypeMeta: metav1.TypeMeta{
 							Kind:       "KubeadmControlPlane",
-							APIVersion: "controlplane.cluster.x-k8s.io/v1beta1",
+							APIVersion: clusterv1.GroupVersionControlPlane.String(),
 						},
 						ObjectMeta: metav1.ObjectMeta{
 							Namespace: "default",
 							Name:      "kcp",
 						},
 						Spec: controlplanev1.KubeadmControlPlaneSpec{
-							RolloutAfter: &metav1.Time{Time: time.Now().Local().Add(time.Hour)},
+							Rollout: controlplanev1.KubeadmControlPlaneRolloutSpec{
+								After: metav1.Time{Time: time.Now().Local().Add(time.Hour)},
+							},
 						},
 					},
 				},
@@ -220,18 +225,18 @@ func Test_ObjectRestarter(t *testing.T) {
 					err = cl.Get(context.TODO(), key, md)
 					g.Expect(err).ToNot(HaveOccurred())
 					if tt.wantRollout {
-						g.Expect(md.Spec.RolloutAfter).NotTo(BeNil())
+						g.Expect(md.Spec.Rollout.After).NotTo(BeNil())
 					} else {
-						g.Expect(md.Spec.RolloutAfter).To(BeNil())
+						g.Expect(md.Spec.Rollout.After).To(BeNil())
 					}
 				case *controlplanev1.KubeadmControlPlane:
 					kcp := &controlplanev1.KubeadmControlPlane{}
 					err = cl.Get(context.TODO(), key, kcp)
 					g.Expect(err).ToNot(HaveOccurred())
 					if tt.wantRollout {
-						g.Expect(kcp.Spec.RolloutAfter).NotTo(BeNil())
+						g.Expect(kcp.Spec.Rollout.After.IsZero()).To(BeFalse())
 					} else {
-						g.Expect(kcp.Spec.RolloutAfter).To(BeNil())
+						g.Expect(kcp.Spec.Rollout.After.IsZero()).To(BeTrue())
 					}
 				}
 			}

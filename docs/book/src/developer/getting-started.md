@@ -65,25 +65,22 @@ You'll need to [install `kubebuilder`][kubebuilder].
 
 ### Envsubst
 
-You'll need [`envsubst`][envsubst] or similar to handle clusterctl var replacement. Note: drone/envsubst releases v1.0.2 and earlier do not have the binary packaged under cmd/envsubst. It is available in Go pseudo-version `v1.0.3-0.20200709231038-aa43e1c1a629`
+You'll need [`envsubst`][envsubst] to handle variable substitution in manifests.
 
-We provide a make target to generate the `envsubst` binary if desired. See the [provider contract][provider-contract] for more details about how clusterctl uses variables.
+The GNU `gettext` version of `envsubst` does not support default values, so you must use the `drone/envsubst` version.
 
 ```bash
-make envsubst
+go install github.com/drone/envsubst/v2/cmd/envsubst@latest
 ```
 
-The generated binary can be found at ./hack/tools/bin/envsubst
-
 [envsubst]: https://github.com/drone/envsubst
-[provider-contract]: providers/contracts/clusterctl.md
 
 ### Cert-Manager
 
 You'll need to deploy [cert-manager] components on your [management cluster][mcluster], using `kubectl`
 
 ```bash
-kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.16.3/cert-manager.yaml
+kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.20.3/cert-manager.yaml
 ```
 
 Ensure the cert-manager webhook service is ready before creating the Cluster API components.
@@ -115,10 +112,10 @@ make docker-build
 make docker-push
 
 # Apply the manifests
-kustomize build config/default | ./hack/tools/bin/envsubst | kubectl apply -f -
-kustomize build bootstrap/kubeadm/config/default | ./hack/tools/bin/envsubst | kubectl apply -f -
-kustomize build controlplane/kubeadm/config/default | ./hack/tools/bin/envsubst | kubectl apply -f -
-kustomize build test/infrastructure/docker/config/default | ./hack/tools/bin/envsubst | kubectl apply -f -
+kustomize build config/default | ~/go/bin/envsubst | kubectl apply -f -
+kustomize build bootstrap/kubeadm/config/default | ~/go/bin/envsubst | kubectl apply -f -
+kustomize build controlplane/kubeadm/config/default | ~/go/bin/envsubst | kubectl apply -f -
+kustomize build test/infrastructure/docker/config/default | ~/go/bin/envsubst | kubectl apply -f -
 ```
 
 ## Testing
@@ -167,12 +164,10 @@ To test another iteration, you'll need to follow the steps to build, push, updat
 
 **Tutorials**
 
-* [kubectl Create Cluster: Production-ready Kubernetes with Cluster API 1.0 - October 2022](https://kccncna2022.sched.com/event/1BZDs)
+* [kubectl Create Cluster: Production-ready Kubernetes with Cluster API 1.0 - October 2022](https://www.youtube.com/watch?v=7wdVPuf-gXI)
 
   [Source code](https://github.com/ykakarap/kubecon-na-22-capi-lab)
-* [So You Want To Develop a Cluster API Provider? - October 2022](https://kccncna2022.sched.com/event/182Ha)
-
-  [Source code](https://capi-samples.github.io/kubecon-na-2022-tutorial/)
+* [So You Want To Develop a Cluster API Provider? - October 2022](https://www.youtube.com/watch?v=5-X6haLVO5A)
 
 **Code walkthroughs**
 
@@ -189,3 +184,10 @@ see [Let's chat about ...](https://github.com/kubernetes-sigs/cluster-api/discus
 * [Local CAPI development and debugging with Tilt (APAC/EMEA) - February 2022](https://www.youtube.com/watch?v=CM-dotO2nSU)
 * [Code structure & Makefile targets (EMEA/Americas) - February 2022](https://www.youtube.com/watch?v=_prbOnziCJw)
 * [Code structure & Makefile targets (APAC/EMEA) - February 2022](https://www.youtube.com/watch?v=Y6Gws65H1tE)
+
+**CAPI e2e Deep Dive***
+
+These are Deep-dive sessions with the CI team to investigate failing and flaking tests.
+
+* [CAPI e2e Deep Dive - 2023-05-11](https://www.youtube.com/watch?v=H6s2SWpTGtU)
+* [CAPI e2e Deep Dive - 2023-05-04](https://www.youtube.com/watch?v=YApWftmiDTg)

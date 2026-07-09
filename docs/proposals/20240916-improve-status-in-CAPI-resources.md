@@ -288,7 +288,7 @@ type MachineStatus struct {
     // The value of those fields is never updated after provisioning is completed.
     // Use conditions to monitor the operational state of the Machine.
     // +optional
-    Initialization *MachineInitializationStatus `json:"initialization,omitempty"`
+    Initialization MachineInitializationStatus `json:"initialization,omitempty,omitzero"`
     
     // Conditions represent the observations of a Machine's current state.
     // +optional
@@ -302,6 +302,7 @@ type MachineStatus struct {
 }
 
 // MachineInitializationStatus provides observations of the Machine initialization process.
+// +kubebuilder:validation:MinProperties=1
 type MachineInitializationStatus struct {
 
     // BootstrapDataSecretCreated is true when the bootstrap provider reports that the Machine's boostrap secret is created.
@@ -320,18 +321,18 @@ type MachineInitializationStatus struct {
 }
 ```
 
-| v1beta1 (CAPI 1.9)            | v1beta2 (tentative Aug 2025)                               | v1beta2 after v1beta1 removal (tentative Aug 2026) |
-|-------------------------------|------------------------------------------------------------|----------------------------------------------------|
-|                               | `Initialization` (new)                                     | `Initialization`                                   |
-| `BootstrapReady`              | `Initialization.BootstrapDataSecretCreated` (renamed)      | `Initialization.BootstrapDataSecretCreated`        |
-| `InfrastructureReady`         | `Initialization.InfrastructureProvisioned` (renamed)       | `Initialization.InfrastructureProvisioned`         |
-| `V1Beta2` (new)               | (removed)                                                  | (removed)                                          |
-| `V1Beta2.Conditions` (new)    | `Conditions` (renamed)                                     | `Conditions`                                       |
-|                               | `Deprecated.V1Beta1` (new)                                 | (removed)                                          |
-| `FailureReason` (deprecated)  | `Deprecated.V1Beta1.FailureReason` (renamed) (deprecated)  | (removed)                                          |
-| `FailureMessage` (deprecated) | `Deprecated.V1Beta1.FailureMessage` (renamed) (deprecated) | (removed)                                          |
-| `Conditions` (deprecated)     | `Deprecated.V1Beta1.Conditions` (renamed) (deprecated)     | (removed)                                          |
-| other fields...               | other fields...                                            | other fields...                                    |
+| v1beta1 (CAPI 1.9)            | v1beta2 (August 2025)                                      | v1beta2 after v1beta1 removal (tentative April 2027) |
+|-------------------------------|------------------------------------------------------------|------------------------------------------------------|
+|                               | `Initialization` (new)                                     | `Initialization`                                     |
+| `BootstrapReady`              | `Initialization.BootstrapDataSecretCreated` (renamed)      | `Initialization.BootstrapDataSecretCreated`          |
+| `InfrastructureReady`         | `Initialization.InfrastructureProvisioned` (renamed)       | `Initialization.InfrastructureProvisioned`           |
+| `V1Beta2` (new)               | (removed)                                                  | (removed)                                            |
+| `V1Beta2.Conditions` (new)    | `Conditions` (renamed)                                     | `Conditions`                                         |
+|                               | `Deprecated.V1Beta1` (new)                                 | (removed)                                            |
+| `FailureReason` (deprecated)  | `Deprecated.V1Beta1.FailureReason` (renamed) (deprecated)  | (removed)                                            |
+| `FailureMessage` (deprecated) | `Deprecated.V1Beta1.FailureMessage` (renamed) (deprecated) | (removed)                                            |
+| `Conditions` (deprecated)     | `Deprecated.V1Beta1.Conditions` (renamed) (deprecated)     | (removed)                                            |
+| other fields...               | other fields...                                            | other fields...                                      |
 
 Notes:
 - The `V1Beta2` struct is going to be added to in v1beta1 types in order to provide a preview of changes coming with the v1beta2 types, but without impacting the semantic of existing fields. 
@@ -422,46 +423,41 @@ type MachineReadinessGate struct {
 }
 ```
 
-| v1beta1 (CAPI 1.9)     | v1Beta2 (tentative Aug 2025) | v1beta2 after v1beta1 removal (tentative Aug 2026) |
-|------------------------|------------------------------|----------------------------------------------------|
-|                        | `MinReadySeconds` (renamed)  | `MinReadySeconds`                                  |
-| `ReadinessGates` (new) | `ReadinessGates`             | `ReadinessGates`                                   |
-| other fields...        | other fields...              | other fields...                                    |
+| v1beta1 (CAPI 1.9)     | v1beta2 (August 2025)       | v1beta2 after v1beta1 removal (tentative April 2027) |
+|------------------------|-----------------------------|------------------------------------------------------|
+|                        | `MinReadySeconds` (renamed) | `MinReadySeconds`                                    |
+| `ReadinessGates` (new) | `ReadinessGates`            | `ReadinessGates`                                     |
+| other fields...        | other fields...             | other fields...                                      |
 
 Notes:
 - As of today v1beta1 MachineDeployments, MachineSets, MachinePools already have a `spec.MinReadySeconds` field. 
   In v1beta2 those field are going to be migrated to MachineDeployments, MachineSets, MachinePools `spec.template.spec.MinReadySeconds` field, which is
   the `MinReadySeconds` field added in the first line of the table above.
-- Similarly to Pod's `ReadinessGates`, also Machine's `ReadinessGates` accept only conditions with positive polarity;
-  The Cluster API project might revisit this in the future to stay aligned with Kubernetes or if there are use cases justifying this change.
 - Both `MinReadySeconds` and `ReadinessGates` should be treated as other in-place propagated fields (changing them should not trigger rollouts).
 
 #### Machine Print columns
 
-| Current       | To be                         |
-|---------------|-------------------------------|
-| `NAME`        | `NAME`                        |
-| `CLUSTER`     | `CLUSTER`                     |
-| `NODE NAME`   | `PAUSED` (new) (*)            |
-| `PROVIDER ID` | `NODE NAME`                   |
-| `PHASE`       | `PROVIDER ID`                 |
-| `AGE`         | `READY` (new)                 |
-| `VERSION`     | `AVAILABLE` (new)             |
-|               | `UP-TO-DATE` (new)            |
-|               | `PHASE`                       |
-|               | `AGE`                         |
-|               | `VERSION`                     |
-|               | `OS-IMAGE` (new) (*)          |
-|               | `KERNEL-VERSION` (new) (*)    |
-|               | `CONTAINER-RUNTIME` (new) (*) |
+| Current       | To be                   |
+|---------------|-------------------------|
+| `NAME`        | `NAME`                  |
+| `CLUSTER`     | `CLUSTER`               |
+| `NODE NAME`   | `NODE NAME`             |
+| `PROVIDER ID` | `PROVIDER ID` (*)       |
+| `PHASE`       | `READY` (new)           |
+| `AGE`         | `AVAILABLE` (new)       |
+| `VERSION`     | `UP-TO-DATE` (new)      |
+|               | `INTERNAL-IP` (new) (*) |
+|               | `EXTERNAL-IP` (new) (*) |
+|               | `OS-IMAGE` (new) (*)    |
+|               | `PAUSED` (new) (*)      |
+|               | `PHASE`                 |
+|               | `AGE`                   |
+|               | `VERSION`               |
 
 (*) visible only when using `kubectl get -o wide`
 
 Notes:
 - Print columns are not subject to any deprecation rule, so it is possible to iteratively improve print columns without waiting for the next API version.
-- During the implementation we are going to verify the resulting layout and eventually make final adjustments to the column list.
-- During the implementation we are going to explore if it is possible to add `INTERNAL-IP` (new) (*), `EXTERNAL-IP` after `VERSION` / before `OS-IMAGE`.
-  Might be something like `$.status.addresses[?(@.type == 'InternalIP')].address` works
 
 ### Changes to MachineSet resource
 
@@ -503,21 +499,21 @@ type MachineSetStatus struct {
 }
 ```
 
-| v1beta1 (CAPI 1.9)                  | v1beta2 (tentative Aug 2025)                                     | v1beta2 after v1beta1 removal (tentative Aug 2026) |
-|-------------------------------------|------------------------------------------------------------------|----------------------------------------------------|
-| `V1Beta2` (new)                     | (removed)                                                        | (removed)                                          |
-| `V1Beta2.Conditions` (new)          | `Conditions` (renamed)                                           | `Conditions`                                       |
-| `V1Beta2.ReadyReplicas` (new)       | `ReadyReplicas` (renamed)                                        | `ReadyReplicas`                                    |
-| `V1Beta2.AvailableReplicas` (new)   | `AvailableReplicas` (renamed)                                    | `AvailableReplicas`                                |
-| `V1Beta2.UpToDateReplicas` (new)    | `UpToDateReplicas` (renamed)                                     | `UpToDateReplicas`                                 |
-|                                     | `Deprecated.V1Beta1` (new)                                       | (removed)                                          |
-| `ReadyReplicas` (deprecated)        | `Deprecated.V1Beta1.ReadyReplicas` (renamed) (deprecated)        | (removed)                                          |
-| `AvailableReplicas` (deprecated)    | `Deprecated.V1Beta1.AvailableReplicas` (renamed) (deprecated)    | (removed)                                          |
-| `FullyLabeledReplicas` (deprecated) | `Deprecated.V1Beta1.FullyLabeledReplicas` (renamed) (deprecated) | (removed)                                          |
-| `FailureReason` (deprecated)        | `Deprecated.V1Beta1.FailureReason` (renamed) (deprecated)        | (removed)                                          |
-| `FailureMessage` (deprecated)       | `Deprecated.V1Beta1.FailureMessage` (renamed) (deprecated)       | (removed)                                          |
-| `Conditions` (deprecated)           | `Deprecated.V1Beta1.Conditions` (renamed) (deprecated)           | (removed)                                          |
-| other fields...                     | other fields...                                                  | other fields...                                    |
+| v1beta1 (CAPI 1.9)                  | v1beta2 (August 2025)                                            | v1beta2 after v1beta1 removal (tentative April 2027) |
+|-------------------------------------|------------------------------------------------------------------|------------------------------------------------------|
+| `V1Beta2` (new)                     | (removed)                                                        | (removed)                                            |
+| `V1Beta2.Conditions` (new)          | `Conditions` (renamed)                                           | `Conditions`                                         |
+| `V1Beta2.ReadyReplicas` (new)       | `ReadyReplicas` (renamed)                                        | `ReadyReplicas`                                      |
+| `V1Beta2.AvailableReplicas` (new)   | `AvailableReplicas` (renamed)                                    | `AvailableReplicas`                                  |
+| `V1Beta2.UpToDateReplicas` (new)    | `UpToDateReplicas` (renamed)                                     | `UpToDateReplicas`                                   |
+|                                     | `Deprecated.V1Beta1` (new)                                       | (removed)                                            |
+| `ReadyReplicas` (deprecated)        | `Deprecated.V1Beta1.ReadyReplicas` (renamed) (deprecated)        | (removed)                                            |
+| `AvailableReplicas` (deprecated)    | `Deprecated.V1Beta1.AvailableReplicas` (renamed) (deprecated)    | (removed)                                            |
+| `FullyLabeledReplicas` (deprecated) | `Deprecated.V1Beta1.FullyLabeledReplicas` (renamed) (deprecated) | (removed)                                            |
+| `FailureReason` (deprecated)        | `Deprecated.V1Beta1.FailureReason` (renamed) (deprecated)        | (removed)                                            |
+| `FailureMessage` (deprecated)       | `Deprecated.V1Beta1.FailureMessage` (renamed) (deprecated)       | (removed)                                            |
+| `Conditions` (deprecated)           | `Deprecated.V1Beta1.Conditions` (renamed) (deprecated)           | (removed)                                            |
+| other fields...                     | other fields...                                                  | other fields...                                      |
 
 Notes:
 - The `V1Beta2` struct is going to be added to in v1beta1 types in order to provide a preview of changes coming with the v1beta2 types, but without impacting the semantic of existing fields.
@@ -552,7 +548,7 @@ Notes:
 - MachineSet is considered as a sort of implementation detail of MachineDeployments, so it doesn't have its own concept of availability.
   Similarly, this proposal is dropping the notion of MachineSet readiness because it is preferred to let users focus on Machines readiness.
 - When implementing this proposal `MachinesUpToDate` condition will be `false` for older MachineSet, `true` for the current MachineSet; 
-  in the future this might change in case Cluster API will start supporting in-place upgrades.
+  in the future this might change in case Cluster API will start supporting in-place updates.
 - `Remediating` for older MachineSets will report that remediation will happen as part of the regular rollout (Cluster API
   does not remediate Machines on old MachineSets, because those Machines are already scheduled for deletion).
 
@@ -564,32 +560,30 @@ Following changes are implemented to MachineSet's spec:
 
 Below you can find a summary table that also shows how changes will be rolled out according to K8s deprecation rules.
 
-| v1beta1 (CAPI 1.9)     | v1beta2 (tentative Aug 2025)                   | v1beta2 after v1beta1 removal (tentative Aug 2026) |
-|------------------------|------------------------------------------------|----------------------------------------------------|
-| `Spec.MinReadySeconds` | `Spec.Template.Spec.MinReadySeconds` (renamed) | `Spec.Template.Spec.MinReadySeconds`               |
-| other fields...        | other fields...                                | other fields...                                    |
+| v1beta1 (CAPI 1.9)     | v1beta2 (August 2025)                          | v1beta2 after v1beta1 removal (tentative April 2027) |
+|------------------------|------------------------------------------------|------------------------------------------------------|
+| `Spec.MinReadySeconds` | `Spec.Template.Spec.MinReadySeconds` (renamed) | `Spec.Template.Spec.MinReadySeconds`                 |
+| other fields...        | other fields...                                | other fields...                                      |
 
 #### MachineSet Print columns
 
-| Current       | To be                   |
-|---------------|-------------------------|
-| `NAME`        | `NAME`                  |
-| `CLUSTER`     | `CLUSTER`               |
-| `DESIRED` (*) | `PAUSED` (new) (*)      |
-| `REPLICAS`    | `DESIRED`               |
-| `READY`       | `CURRENT` (renamed) (*) |
-| `AVAILABLE`   | `READY` (updated)       |
-| `AGE`         | `AVAILABLE` (updated)   |
-| `VERSION`     | `UP-TO-DATE` (new)      |
-|               | `AGE`                   |
-|               | `VERSION`               |
+| Current       | To be                 |
+|---------------|-----------------------|
+| `NAME`        | `NAME`                |
+| `CLUSTER`     | `CLUSTER`             |
+| `DESIRED` (*) | `DESIRED`             |
+| `REPLICAS`    | `CURRENT` (renamed)   |
+| `READY`       | `READY` (updated)     |
+| `AVAILABLE`   | `AVAILABLE` (updated) |
+| `AGE`         | `UP-TO-DATE` (new)    |
+| `VERSION`     | `PAUSED` (new) (*)    |
+|               | `AGE`                 |
+|               | `VERSION`             |
 
 (*) visible only when using `kubectl get -o wide`
 
 Notes:
 - Print columns are not subject to any deprecation rule, so it is possible to iteratively improve print columns without waiting for the next API version.
-- During the implementation we are going to verify the resulting layout and eventually make final adjustments to the column list.
-- During the implementation we should consider if to add columns for bootstrapRef and infraRef resource (same could apply to other resources)
 - In k8s Deployment and ReplicaSet have different print columns for replica counters; this proposal enforces replicas
   counter columns consistent across all resources.
 
@@ -632,20 +626,20 @@ type MachineDeploymentStatus struct {
 }
 ```
 
-| v1beta1 (CAPI 1.9)                 | v1beta2 (tentative Aug 2025)                                    | v1beta2 after v1beta1 removal (tentative Aug 2026) |
-|------------------------------------|-----------------------------------------------------------------|----------------------------------------------------|
-| `V1Beta2` (new)                    | (removed)                                                       | (removed)                                          |
-| `V1Beta2.Conditions` (new)         | `Conditions` (renamed)                                          | `Conditions`                                       |
-| `V1Beta2.ReadyReplicas` (new)      | `ReadyReplicas` (renamed)                                       | `ReadyReplicas`                                    |
-| `V1Beta2.AvilableReplicas` (new)   | `AvailableReplicas` (renamed)                                   | `AvailableReplicas`                                |
-| `V1Beta2.UpToDateReplicas` (new)   | `UpToDateReplicas` (renamed)                                    | `UpToDateReplicas`                                 |
-|                                    | `Deprecated.V1Beta1` (new)                                      | (removed)                                          |
-| `ReadyReplicas` (deprecated)       | `Deprecated.V1Beta1.ReadyReplicas` (renamed) (deprecated)       | (removed)                                          |
-| `AvailableReplicas` (deprecated)   | `Deprecated.V1Beta1.AvailableReplicas` (renamed) (deprecated)   | (removed)                                          |
-| `UnavailableReplicas` (deprecated) | `Deprecated.V1Beta1.UnavailableReplicas` (renamed) (deprecated) | (removed)                                          |
-| `Conditions` (deprecated)          | `Deprecated.V1Beta1.Conditions` (renamed) (deprecated)          | (removed)                                          |
-| `UpdatedReplicas` (deprecated)     | `Deprecated.V1Beta1.UpdatedReplicas` (renamed) (deprecated)     | (removed)                                          |
-| other fields...                    | other fields...                                                 | other fields...                                    |
+| v1beta1 (CAPI 1.9)                 | v1beta2 (August 2025)                                           | v1beta2 after v1beta1 removal (tentative April 2027) |
+|------------------------------------|-----------------------------------------------------------------|------------------------------------------------------|
+| `V1Beta2` (new)                    | (removed)                                                       | (removed)                                            |
+| `V1Beta2.Conditions` (new)         | `Conditions` (renamed)                                          | `Conditions`                                         |
+| `V1Beta2.ReadyReplicas` (new)      | `ReadyReplicas` (renamed)                                       | `ReadyReplicas`                                      |
+| `V1Beta2.AvilableReplicas` (new)   | `AvailableReplicas` (renamed)                                   | `AvailableReplicas`                                  |
+| `V1Beta2.UpToDateReplicas` (new)   | `UpToDateReplicas` (renamed)                                    | `UpToDateReplicas`                                   |
+|                                    | `Deprecated.V1Beta1` (new)                                      | (removed)                                            |
+| `ReadyReplicas` (deprecated)       | `Deprecated.V1Beta1.ReadyReplicas` (renamed) (deprecated)       | (removed)                                            |
+| `AvailableReplicas` (deprecated)   | `Deprecated.V1Beta1.AvailableReplicas` (renamed) (deprecated)   | (removed)                                            |
+| `UnavailableReplicas` (deprecated) | `Deprecated.V1Beta1.UnavailableReplicas` (renamed) (deprecated) | (removed)                                            |
+| `Conditions` (deprecated)          | `Deprecated.V1Beta1.Conditions` (renamed) (deprecated)          | (removed)                                            |
+| `UpdatedReplicas` (deprecated)     | `Deprecated.V1Beta1.UpdatedReplicas` (renamed) (deprecated)     | (removed)                                            |
+| other fields...                    | other fields...                                                 | other fields...                                      |
 
 Notes:
 - The `V1Beta2` struct is going to be added to in v1beta1 types in order to provide a preview of changes coming with the v1beta2 types, but without impacting the semantic of existing fields.
@@ -683,10 +677,10 @@ Following changes are implemented to MachineDeployment's spec:
 
 Below you can find a summary table that also shows how changes will be rolled out according to K8s deprecation rules.
 
-| v1beta1 (CAPI 1.9)     | v1beta2 (tentative Aug 2025)                   | v1beta2 after v1beta1 removal (tentative Aug 2026) |
-|------------------------|------------------------------------------------|----------------------------------------------------|
-| `Spec.MinReadySeconds` | `Spec.Template.Spec.MinReadySeconds` (renamed) | `Spec.Template.Spec.MinReadySeconds`               |
-| other fields...        | other fields...                                | other fields...                                    |
+| v1beta1 (CAPI 1.9)     | v1beta2 (August 2025)                          | v1beta2 after v1beta1 removal (tentative April 2027) |
+|------------------------|------------------------------------------------|------------------------------------------------------|
+| `Spec.MinReadySeconds` | `Spec.Template.Spec.MinReadySeconds` (renamed) | `Spec.Template.Spec.MinReadySeconds`                 |
+| other fields...        | other fields...                                | other fields...                                      |
 
 #### MachineDeployment Print columns
 
@@ -694,21 +688,21 @@ Below you can find a summary table that also shows how changes will be rolled ou
 |-------------------------|------------------------|
 | `NAME`                  | `NAME`                 |
 | `CLUSTER`               | `CLUSTER`              |
-| `DESIRED` (*)           | `PAUSED` (new) (*)     |
+| `DESIRED` (*)           | `AVAILABLE` (new)      |
 | `REPLICAS`              | `DESIRED`              |
-| `READY`                 | `CURRENT` (*)          |
+| `READY`                 | `CURRENT` (renamed)    |
 | `UPDATED` (renamed)     | `READY`                |
 | `UNAVAILABLE` (deleted) | `AVAILABLE` (new)      |
 | `PHASE`                 | `UP-TO-DATE` (renamed) |
-| `AGE`                   | `PHASE`                |
-| `VERSION`               | `AGE`                  |
+| `AGE`                   | `PAUSED` (new) (*)     |
+| `VERSION`               | `PHASE`                |
+|                         | `AGE`                  |
 |                         | `VERSION`              |
 
 (*) visible only when using `kubectl get -o wide`
 
 Notes:
 - Print columns are not subject to any deprecation rule, so it is possible to iteratively improve print columns without waiting for the next API version.
-- During the implementation we are going to verify the resulting layout and eventually make final adjustments to the column list.
 
 ### Changes to Cluster resource
 
@@ -733,7 +727,7 @@ type ClusterStatus struct {
     // The value of those fields is never updated after provisioning is completed.
     // Use conditions to monitor the operational state of the Cluster's BootstrapSecret.
     // +optional
-    Initialization *ClusterInitializationStatus `json:"initialization,omitempty"`
+    Initialization ClusterInitializationStatus `json:"initialization,omitempty,omitzero"`
     
     // Represents the observations of a Cluster's current state.
     // +optional
@@ -754,6 +748,7 @@ type ClusterStatus struct {
 }
 
 // ClusterInitializationStatus provides observations of the Cluster initialization process.
+// +kubebuilder:validation:MinProperties=1
 type ClusterInitializationStatus struct {
 
     // InfrastructureProvisioned is true when the infrastructure provider reports that Cluster's infrastructure is fully provisioned.
@@ -821,30 +816,30 @@ type WorkersStatus struct {
 // NOTE: `FailureReason`, `FailureMessage` fields won't be there anymore
 ```
 
-| v1beta1 (CAPI 1.9)                             | v1beta2 (tentative Aug 2025)                               | v1beta2 after v1beta1 removal (tentative Aug 2026) |
-|------------------------------------------------|------------------------------------------------------------|----------------------------------------------------|
-|                                                | `Initialization` (new)                                     | `Initialization`                                   |
-| `InfrastructureReady`                          | `Initialization.InfrastructureProvisioned` (renamed)       | `Initialization.InfrastructureProvisioned`         |
-| `ControlPlaneReady`                            | `Initialization.ControlPlaneInitialized` (renamed)         | `Initialization.ControlPlaneInitialized`           |
-| `V1Beta2` (new)                                | (removed)                                                  | (removed)                                          |
-| `V1Beta2.Conditions` (new)                     | `Conditions` (renamed)                                     | `Conditions`                                       |
-| `V1Beta2.ControlPlane` (new)                   | `ControlPlane` (renamed)                                   | `ControlPlane`                                     |
-| `V1Beta2.ControlPlane.DesiredReplicas` (new)   | `ControlPlane.DesiredReplicas` (renamed)                   | `ControlPlane.DesiredReplicas`                     |
-| `V1Beta2.ControlPlane.Replicas` (new)          | `ControlPlane.Replicas` (renamed)                          | `ControlPlane.Replicas`                            |
-| `V1Beta2.ControlPlane.ReadyReplicas` (new)     | `ControlPlane.ReadyReplicas` (renamed)                     | `ControlPlane.ReadyReplicas`                       |
-| `V1Beta2.ControlPlane.UpToDateReplicas` (new)  | `ControlPlane.UpToDateReplicas` (renamed)                  | `ControlPlane.UpToDateReplicas`                    |
-| `V1Beta2.ControlPlane.AvailableReplicas` (new) | `ControlPlane.AvailableReplicas` (renamed)                 | `ControlPlane.AvailableReplicas`                   |
-| `V1Beta2.Workers` (new)                        | `Workers` (renamed)                                        | `Workers`                                          |
-| `V1Beta2.Workers.DesiredReplicas` (new)        | `Workers.DesiredReplicas` (renamed)                        | `Workers.DesiredReplicas`                          |
-| `V1Beta2.Workers.Replicas` (new)               | `Workers.Replicas` (renamed)                               | `Workers.Replicas`                                 |
-| `V1Beta2.Workers.ReadyReplicas` (new)          | `Workers.ReadyReplicas` (renamed)                          | `Workers.ReadyReplicas`                            |
-| `V1Beta2.Workers.UpToDateReplicas` (new)       | `Workers.UpToDateReplicas` (renamed)                       | `Workers.UpToDateReplicas`                         |
-| `V1Beta2.Workers.AvailableReplicas` (new)      | `Workers.AvailableReplicas` (renamed)                      | `Workers.AvailableReplicas`                        |
-|                                                | `Deprecated.V1Beta1` (new)                                 | (removed)                                          |
-| `FailureReason` (deprecated)                   | `Deprecated.V1Beta1.FailureReason` (renamed) (deprecated)  | (removed)                                          |
-| `FailureMessage` (deprecated)                  | `Deprecated.V1Beta1.FailureMessage` (renamed) (deprecated) | (removed)                                          |
-| `Conditions` (deprecated)                      | `Deprecated.V1Beta1.Conditions` (renamed) (deprecated)     | (removed)                                          |
-| other fields...                                | other fields...                                            | other fields...                                    |
+| v1beta1 (CAPI 1.9)                             | v1beta2 (August 2025)                                      | v1beta2 after v1beta1 removal (tentative April 2027) |
+|------------------------------------------------|------------------------------------------------------------|------------------------------------------------------|
+|                                                | `Initialization` (new)                                     | `Initialization`                                     |
+| `InfrastructureReady`                          | `Initialization.InfrastructureProvisioned` (renamed)       | `Initialization.InfrastructureProvisioned`           |
+| `ControlPlaneReady`                            | `Initialization.ControlPlaneInitialized` (renamed)         | `Initialization.ControlPlaneInitialized`             |
+| `V1Beta2` (new)                                | (removed)                                                  | (removed)                                            |
+| `V1Beta2.Conditions` (new)                     | `Conditions` (renamed)                                     | `Conditions`                                         |
+| `V1Beta2.ControlPlane` (new)                   | `ControlPlane` (renamed)                                   | `ControlPlane`                                       |
+| `V1Beta2.ControlPlane.DesiredReplicas` (new)   | `ControlPlane.DesiredReplicas` (renamed)                   | `ControlPlane.DesiredReplicas`                       |
+| `V1Beta2.ControlPlane.Replicas` (new)          | `ControlPlane.Replicas` (renamed)                          | `ControlPlane.Replicas`                              |
+| `V1Beta2.ControlPlane.ReadyReplicas` (new)     | `ControlPlane.ReadyReplicas` (renamed)                     | `ControlPlane.ReadyReplicas`                         |
+| `V1Beta2.ControlPlane.UpToDateReplicas` (new)  | `ControlPlane.UpToDateReplicas` (renamed)                  | `ControlPlane.UpToDateReplicas`                      |
+| `V1Beta2.ControlPlane.AvailableReplicas` (new) | `ControlPlane.AvailableReplicas` (renamed)                 | `ControlPlane.AvailableReplicas`                     |
+| `V1Beta2.Workers` (new)                        | `Workers` (renamed)                                        | `Workers`                                            |
+| `V1Beta2.Workers.DesiredReplicas` (new)        | `Workers.DesiredReplicas` (renamed)                        | `Workers.DesiredReplicas`                            |
+| `V1Beta2.Workers.Replicas` (new)               | `Workers.Replicas` (renamed)                               | `Workers.Replicas`                                   |
+| `V1Beta2.Workers.ReadyReplicas` (new)          | `Workers.ReadyReplicas` (renamed)                          | `Workers.ReadyReplicas`                              |
+| `V1Beta2.Workers.UpToDateReplicas` (new)       | `Workers.UpToDateReplicas` (renamed)                       | `Workers.UpToDateReplicas`                           |
+| `V1Beta2.Workers.AvailableReplicas` (new)      | `Workers.AvailableReplicas` (renamed)                      | `Workers.AvailableReplicas`                          |
+|                                                | `Deprecated.V1Beta1` (new)                                 | (removed)                                            |
+| `FailureReason` (deprecated)                   | `Deprecated.V1Beta1.FailureReason` (renamed) (deprecated)  | (removed)                                            |
+| `FailureMessage` (deprecated)                  | `Deprecated.V1Beta1.FailureMessage` (renamed) (deprecated) | (removed)                                            |
+| `Conditions` (deprecated)                      | `Deprecated.V1Beta1.Conditions` (renamed) (deprecated)     | (removed)                                            |
+| other fields...                                | other fields...                                            | other fields...                                      |
 
 Notes:
 - The `V1Beta2` struct is going to be added to in v1beta1 types in order to provide a preview of changes coming with the v1beta2 types, but without impacting the semantic of existing fields.
@@ -920,16 +915,10 @@ type ClusterAvailabilityGate struct {
 }
 ```
 
-| v1beta1 (CAPI 1.9)        | v1Beta2 (tentative Aug 2025) | v1beta2 after v1beta1 removal (tentative Aug 2026) |
-|---------------------------|------------------------------|----------------------------------------------------|
-| `AvailabilityGates` (new) | `AvailabilityGates`          | `AvailabilityGates`                                |
-| other fields...           | other fields...              | other fields...                                    |
-
-Notes:
-- Similarly to Pod's `ReadinessGates`, also Cluster's `AvailabilityGates` accepts only conditions with positive polarity;
-  The Cluster API project might revisit this in the future to stay aligned with Kubernetes or if there are use cases justifying this change.
-- In future the Cluster API project might consider ways to make `AvailabilityGates` configurable at ClusterClass level, but
-  this can be implemented as a follow-up.
+| v1beta1 (CAPI 1.9)        | v1beta2 (August 2025) | v1beta2 after v1beta1 removal (tentative April 2027) |
+|---------------------------|-----------------------|------------------------------------------------------|
+| `AvailabilityGates` (new) | `AvailabilityGates`   | `AvailabilityGates`                                  |
+| other fields...           | other fields...       | other fields...                                      |
 
 #### Cluster Print columns
 
@@ -937,10 +926,9 @@ Notes:
 |-----------------|-----------------------|
 | `NAME`          | `NAME`                |
 | `CLUSTER CLASS` | `CLUSTER CLASS`       |
-| `PHASE`         | `PAUSED` (new) (*)    |
-| `AGE`           | `AVAILABLE` (new)     |
-| `VERSION`       | `CP_DESIRED` (new)    |
-|                 | `CP_CURRENT`(new) (*) |
+| `PHASE`         | `AVAILABLE` (new)     |
+| `AGE`           | `CP_DESIRED` (new)    |
+| `VERSION`       | `CP_CURRENT`(new) (*) |
 |                 | `CP_READY` (new) (*)  |
 |                 | `CP_AVAILABLE` (new)  |
 |                 | `CP_UP-TO-DATE` (new) |
@@ -949,6 +937,7 @@ Notes:
 |                 | `W_READY` (new) (*)   |
 |                 | `W_AVAILABLE` (new)   |
 |                 | `W_UP-TO-DATE` (new)  |
+|                 | `PAUSED` (new) (*)    |
 |                 | `PHASE`               |
 |                 | `AGE`                 |
 |                 | `VERSION`             |
@@ -957,7 +946,6 @@ Notes:
 
 Notes:
 - Print columns are not subject to any deprecation rule, so it is possible to iteratively improve print columns without waiting for the next API version.
-- During the implementation we are going to verify the resulting layout and eventually make final adjustments to the column list.
 
 ### Changes to KubeadmControlPlane (KCP) resource
 
@@ -1004,22 +992,22 @@ type KubeadmControlPlaneStatus struct {
 }
 ```
 
-| v1beta1 (CAPI 1.9)                 | v1beta2 (tentative Aug 2025)                                    | v1beta2 after v1beta1 removal (tentative Aug 2026) |
-|------------------------------------|-----------------------------------------------------------------|----------------------------------------------------|
-| `Ready` (deprecated)               | `Ready` (deprecated)                                            | (removed)                                          |
-| `V1Beta2` (new)                    | (removed)                                                       | (removed)                                          |
-| `V1Beta2.Conditions` (new)         | `Conditions` (renamed)                                          | `Conditions`                                       |
-| `V1Beta2.ReadyReplicas` (new)      | `ReadyReplicas` (renamed)                                       | `ReadyReplicas`                                    |
-| `V1Beta2.AvailableReplicas` (new)  | `AvailableReplicas` (renamed)                                   | `AvailableReplicas`                                |
-| `V1Beta2.UpToDateReplicas` (new)   | `UpToDateReplicas` (renamed)                                    | `UpToDateReplicas`                                 |
-|                                    | `Deprecated.V1Beta1` (new)                                      | (removed)                                          |
-| `ReadyReplicas` (deprecated)       | `Deprecated.V1Beta1.ReadyReplicas` (renamed) (deprecated)       | (removed)                                          |
-| `UnavailableReplicas` (deprecated) | `Deprecated.V1Beta1.UnavailableReplicas` (renamed) (deprecated) | (removed)                                          |
-| `FailureReason` (deprecated)       | `Deprecated.V1Beta1.FailureReason` (renamed) (deprecated)       | (removed)                                          |
-| `FailureMessage` (deprecated)      | `Deprecated.V1Beta1.FailureMessage` (renamed) (deprecated)      | (removed)                                          |
-| `Conditions` (deprecated)          | `Deprecated.V1Beta1.Conditions` (renamed) (deprecated)          | (removed)                                          |
-| `UpdatedReplicas` (deprecated)     | `Deprecated.V1Beta1.UpdatedReplicas` (renamed) (deprecated)     | (removed)                                          |
-| other fields...                    | other fields...                                                 | other fields...                                    |
+| v1beta1 (CAPI 1.9)                 | v1beta2 (August 2025)                                           | v1beta2 after v1beta1 removal (tentative April 2027) |
+|------------------------------------|-----------------------------------------------------------------|------------------------------------------------------|
+| `Ready` (deprecated)               | `Ready` (deprecated)                                            | (removed)                                            |
+| `V1Beta2` (new)                    | (removed)                                                       | (removed)                                            |
+| `V1Beta2.Conditions` (new)         | `Conditions` (renamed)                                          | `Conditions`                                         |
+| `V1Beta2.ReadyReplicas` (new)      | `ReadyReplicas` (renamed)                                       | `ReadyReplicas`                                      |
+| `V1Beta2.AvailableReplicas` (new)  | `AvailableReplicas` (renamed)                                   | `AvailableReplicas`                                  |
+| `V1Beta2.UpToDateReplicas` (new)   | `UpToDateReplicas` (renamed)                                    | `UpToDateReplicas`                                   |
+|                                    | `Deprecated.V1Beta1` (new)                                      | (removed)                                            |
+| `ReadyReplicas` (deprecated)       | `Deprecated.V1Beta1.ReadyReplicas` (renamed) (deprecated)       | (removed)                                            |
+| `UnavailableReplicas` (deprecated) | `Deprecated.V1Beta1.UnavailableReplicas` (renamed) (deprecated) | (removed)                                            |
+| `FailureReason` (deprecated)       | `Deprecated.V1Beta1.FailureReason` (renamed) (deprecated)       | (removed)                                            |
+| `FailureMessage` (deprecated)      | `Deprecated.V1Beta1.FailureMessage` (renamed) (deprecated)      | (removed)                                            |
+| `Conditions` (deprecated)          | `Deprecated.V1Beta1.Conditions` (renamed) (deprecated)          | (removed)                                            |
+| `UpdatedReplicas` (deprecated)     | `Deprecated.V1Beta1.UpdatedReplicas` (renamed) (deprecated)     | (removed)                                            |
+| other fields...                    | other fields...                                                 | other fields...                                      |
 
 Notes:
 - The `V1Beta2` struct is going to be added to in v1beta1 types in order to provide a preview of changes coming with the v1beta2 types, but without impacting the semantic of existing fields.
@@ -1066,13 +1054,14 @@ Notes:
 |-------------------------|------------------------|
 | `NAME`                  | `NAME`                 |
 | `CLUSTER`               | `CLUSTER`              |
-| `DESIRED` (*)           | `PAUSED` (new) (*)     |
-| `REPLICAS`              | `INITIALIZED` (new)    |
-| `READY`                 | `DESIRED`              |
-| `UPDATED` (renamed)     | `CURRENT` (*)          |
-| `UNAVAILABLE` (deleted) | `READY`                |
-| `AGE`                   | `AVAILABLE` (new)      |
-| `VERSION`               | `UP-TO-DATE` (renamed) |
+| `DESIRED` (*)           | `AVAILABLE` (new)      |
+| `REPLICAS`              | `DESIRED`              |
+| `READY`                 | `CURRENT` (renamed)    |
+| `UPDATED` (renamed)     | `READY`                |
+| `UNAVAILABLE` (deleted) | `AVAILABLE` (new)      |
+| `AGE`                   | `UP-TO-DATE` (renamed) |
+| `VERSION`               | `PAUSED` (new) (*)     |
+|                         | `INITIALIZED` (new)    |
 |                         | `AGE`                  |
 |                         | `VERSION`              |
 
@@ -1080,7 +1069,6 @@ Notes:
 
 Notes:
 - Print columns are not subject to any deprecation rule, so it is possible to iteratively improve print columns without waiting for the next API version.
-- During the implementation we are going to verify the resulting layout and eventually make final adjustments to the column list.
 
 ### Changes to MachinePool resource
 
@@ -1117,7 +1105,7 @@ type MachinePoolStatus struct {
     // The value of those fields is never updated after provisioning is completed.
     // Use conditions to monitor the operational state of the MachinePool.
     // +optional
-    Initialization *MachinePoolInitializationStatus `json:"initialization,omitempty"`
+    Initialization MachinePoolInitializationStatus `json:"initialization,omitempty,omitzero"`
     
     // Conditions represent the observations of a MachinePool's current state.
     // +optional
@@ -1131,6 +1119,7 @@ type MachinePoolStatus struct {
 }
 
 // MachinePoolInitializationStatus provides observations of the MachinePool initialization process.
+// +kubebuilder:validation:MinProperties=1
 type MachinePoolInitializationStatus struct {
 
     // BootstrapDataSecretCreated is true when the bootstrap provider reports that the MachinePool's boostrap data secret is created.
@@ -1149,24 +1138,24 @@ type MachinePoolInitializationStatus struct {
 }
 ```
 
-| v1beta1 (CAPI 1.9)                 | v1beta2 (tentative Aug 2025)                                    | v1beta2 after v1beta1 removal (tentative Aug 2026) |
-|------------------------------------|-----------------------------------------------------------------|----------------------------------------------------|
-|                                    | `Initialization` (new)                                          | `Initialization`                                   |
-| `BootstrapReady`                   | `Initialization.BootstrapDataSecretCreated` (renamed)           | `Initialization.BootstrapDataSecretCreated`        |
-| `InfrastructureReady`              | `Initialization.InfrastructureProvisioned` (renamed)            | `Initialization.InfrastructureProvisioned`         |
-| `V1Beta2` (new)                    | (removed)                                                       | (removed)                                          |
-| `V1Beta2.Conditions` (new)         | `Conditions` (renamed)                                          | `Conditions`                                       |
-| `V1Beta2.UpToDateReplicas` (new)   | `UpToDateReplicas` (renamed)                                    | `UpToDateReplicas`                                 |
-| `V1Beta2.ReadyReplicas` (new)      | `ReadyReplicas` (renamed)                                       | `ReadyReplicas`                                    |
-| `V1Beta2.AvailableReplicas` (new)  | `AvailableReplicas` (renamed)                                   | `AvailableReplicas`                                |
-|                                    | `Deprecated.V1Beta1` (new)                                      | (removed)                                          |
-| `ReadyReplicas` (deprecated)       | `Deprecated.V1Beta1.ReadyReplicas` (renamed) (deprecated)       | (removed)                                          |
-| `AvailableReplicas` (deprecated)   | `Deprecated.V1Beta1.AvailableReplicas` (renamed) (deprecated)   | (removed)                                          |
-| `UnavailableReplicas` (deprecated) | `Deprecated.V1Beta1.UnavailableReplicas` (renamed) (deprecated) | (removed)                                          |
-| `FailureReason` (deprecated)       | `Deprecated.V1Beta1.FailureReason` (renamed) (deprecated)       | (removed)                                          |
-| `FailureMessage` (deprecated)      | `Deprecated.V1Beta1.FailureMessage` (renamed) (deprecated)      | (removed)                                          |
-| `Conditions` (deprecated)          | `Deprecated.V1Beta1.Conditions` (renamed) (deprecated)          | (removed)                                          |
-| other fields...                    | other fields...                                                 | other fields...                                    |
+| v1beta1 (CAPI 1.9)                 | v1beta2 (August 2025)                                           | v1beta2 after v1beta1 removal (tentative April 2027) |
+|------------------------------------|-----------------------------------------------------------------|------------------------------------------------------|
+|                                    | `Initialization` (new)                                          | `Initialization`                                     |
+| `BootstrapReady`                   | `Initialization.BootstrapDataSecretCreated` (renamed)           | `Initialization.BootstrapDataSecretCreated`          |
+| `InfrastructureReady`              | `Initialization.InfrastructureProvisioned` (renamed)            | `Initialization.InfrastructureProvisioned`           |
+| `V1Beta2` (new)                    | (removed)                                                       | (removed)                                            |
+| `V1Beta2.Conditions` (new)         | `Conditions` (renamed)                                          | `Conditions`                                         |
+| `V1Beta2.UpToDateReplicas` (new)   | `UpToDateReplicas` (renamed)                                    | `UpToDateReplicas`                                   |
+| `V1Beta2.ReadyReplicas` (new)      | `ReadyReplicas` (renamed)                                       | `ReadyReplicas`                                      |
+| `V1Beta2.AvailableReplicas` (new)  | `AvailableReplicas` (renamed)                                   | `AvailableReplicas`                                  |
+|                                    | `Deprecated.V1Beta1` (new)                                      | (removed)                                            |
+| `ReadyReplicas` (deprecated)       | `Deprecated.V1Beta1.ReadyReplicas` (renamed) (deprecated)       | (removed)                                            |
+| `AvailableReplicas` (deprecated)   | `Deprecated.V1Beta1.AvailableReplicas` (renamed) (deprecated)   | (removed)                                            |
+| `UnavailableReplicas` (deprecated) | `Deprecated.V1Beta1.UnavailableReplicas` (renamed) (deprecated) | (removed)                                            |
+| `FailureReason` (deprecated)       | `Deprecated.V1Beta1.FailureReason` (renamed) (deprecated)       | (removed)                                            |
+| `FailureMessage` (deprecated)      | `Deprecated.V1Beta1.FailureMessage` (renamed) (deprecated)      | (removed)                                            |
+| `Conditions` (deprecated)          | `Deprecated.V1Beta1.Conditions` (renamed) (deprecated)          | (removed)                                            |
+| other fields...                    | other fields...                                                 | other fields...                                      |
 
 Notes:
 - The `V1Beta2` struct is going to be added to in v1beta1 types in order to provide a preview of changes coming with the v1beta2 types, but without impacting the semantic of existing fields.
@@ -1207,10 +1196,10 @@ Following changes are implemented to MachinePool's spec:
 
 Below you can find a summary table that also shows how changes will be rolled out according to K8s deprecation rules.
 
-| v1beta1 (CAPI 1.9)     | v1beta2 (tentative Aug 2025)                   | v1beta2 after v1beta1 removal (tentative Aug 2026) |
-|------------------------|------------------------------------------------|----------------------------------------------------|
-| `Spec.MinReadySeconds` | `Spec.Template.Spec.MinReadySeconds` (renamed) | `Spec.Template.Spec.MinReadySeconds`               |
-| other fields...        | other fields...                                | other fields...                                    |
+| v1beta1 (CAPI 1.9)     | v1beta2 (August 2025)                          | v1beta2 after v1beta1 removal (tentative April 2027) |
+|------------------------|------------------------------------------------|------------------------------------------------------|
+| `Spec.MinReadySeconds` | `Spec.Template.Spec.MinReadySeconds` (renamed) | `Spec.Template.Spec.MinReadySeconds`                 |
+| other fields...        | other fields...                                | other fields...                                      |
 
 #### MachinePool Print columns
 
@@ -1218,21 +1207,20 @@ Below you can find a summary table that also shows how changes will be rolled ou
 |---------------|------------------------|
 | `NAME`        | `NAME`                 |
 | `CLUSTER`     | `CLUSTER`              |
-| `DESIRED` (*) | `PAUSED` (new) (*)     |
-| `REPLICAS`    | `DESIRED`              |
-| `PHASE`       | `CURRENT` (*)          |
-| `AGE`         | `READY`                |
-| `VERSION`     | `AVAILABLE` (new)      |
-|               | `UP-TO-DATE` (renamed) |
+| `DESIRED` (*) | `DESIRED`              |
+| `REPLICAS`    | `CURRENT` (renamed)    |
+| `PHASE`       | `READY`                |
+| `AGE`         | `AVAILABLE` (new)      |
+| `VERSION`     | `UP-TO-DATE` (renamed) |
+|               | `PAUSED` (new) (*)     |
 |               | `PHASE`                |
 |               | `AGE`                  |
 |               | `VERSION`              |
-
+ 
 (*) visible only when using `kubectl get -o wide`
 
 Notes:
 - Print columns are not subject to any deprecation rule, so it is possible to iteratively improve print columns without waiting for the next API version.
-- During the implementation we are going to verify the resulting layout and eventually make final adjustments to the column list.
 
 ### Changes to Cluster API contract
 
@@ -1258,9 +1246,9 @@ a mechanism that allows providers to adapt to a new contract incrementally, more
   Cluster API's v1beta2 release.
 
 - Each provider can implement changes described in the following paragraphs at its own pace, but the transition
-  _must be completed_ before v1beta1 removal (tentative Aug 2026).
+  _must be completed_ before v1beta1 removal (tentative April 2027).
 
-- Starting from the CAPI release when v1beta1 removal will happen (tentative Aug 2026), providers which are implementing
+- Starting from the CAPI release when v1beta1 removal will happen (tentative April 2027), providers which are implementing
   the v1beta1 contract will stop to work (they will work only with older versions of Cluster API).
 
 Additionally:
@@ -1270,7 +1258,7 @@ Additionally:
   with Kubernetes, Cluster API and the ecosystem).
 
 - However, providers choosing to keep using Cluster API custom conditions should be aware that starting from the
-  CAPI release when v1beta1 removal will happen (tentative Aug 2026), the Cluster API project will remove the
+  CAPI release when v1beta1 removal will happen (tentative April 2027), the Cluster API project will remove the
   Cluster API condition type, the `util/conditions` package, the code handling conditions in `util/patch.Helper` and
   everything related to the custom Cluster API `v1beta.Condition` type.
   (in other words, Cluster API custom condition must be replaced by provider's own custom conditions).
@@ -1287,14 +1275,16 @@ Following changes are planned for the contract for the InfrastructureCluster res
 - Disambiguate the usage of the ready term by renaming fields used for the initial provisioning workflow
   - Rename `status.ready` into `status.initialization.provisioned`.
 - Remove `failureReason` and `failureMessage`.
+- Change `.status.failureDomains` from a map to an array. Also each failure domain has an additional `name` property which replaces the previous map key.
 
-| v1beta1 (CAPI 1.9)                                                    | v1beta2 (tentative Aug 2025)                                                                                     | v1beta2 after v1beta1 removal (tentative Aug 2026)                                         |
+| v1beta1 (CAPI 1.9)                                                    | v1beta2 (August 2025)                                                                                            | v1beta2 after v1beta1 removal (tentative April 2027)                                       |
 |-----------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------|--------------------------------------------------------------------------------------------|
 | `status.ready`, required                                              | `status.ready` (deprecated), one of `status.ready` or `status.initialization.provisioned` required               | (removed)                                                                                  |
 |                                                                       | `status.initialization.provisioned` (new), one of `status.ready` or `status.initialization.provisioned` required | `status.initialization.provisioned`                                                        |
 | `status.conditions[Ready]`, optional with fall back on `status.ready` | `status.conditions[Ready]`, optional with fall back on `status.ready` or `status.initialization.provisioned`     | `status.conditions[Ready]`, optional with fall back on `status.initialization.provisioned` |
 | `status.failureReason`, optional                                      | `status.failureReason` (deprecated), optional                                                                    | (removed)                                                                                  |
 | `status.failureMessage`, optional                                     | `status.failureMessage` (deprecated), optional                                                                   | (removed)                                                                                  |
+| `status.failureDomains` (map), optional                               | `status.failureDomains` (array), optional                                                                        | `status.failureDomains` (array), optional                                                  |
 | other fields/rules...                                                 | other fields/rules...                                                                                            |                                                                                            |
 
 Notes:
@@ -1304,6 +1294,8 @@ Notes:
 - InfrastructureCluster's `status.conditions[Ready]` will surface into Cluster's `status.conditions[InfrastructureReady]` condition.
 - InfrastructureCluster's `status.conditions[Ready]` must surface issues during the entire lifecycle of the InfrastructureCluster
   (both during initial InfrastructureCluster provisioning and after the initial provisioning is completed).
+- In v1beta1 `.status.failureDomains` was a map of `FailureDomainSpec` objects. In v1beta2 it is an array of `FailureDomain` objects.
+  The name of the failure domain was previously used as map key, it has been now added as an additional field to `FailureDomain`.
 
 ##### InfrastructureMachine
 
@@ -1313,7 +1305,7 @@ Following changes are planned for the contract for the InfrastructureMachine res
   - Rename `status.ready` into `status.initialization.provisioned`.
 - Remove `failureReason` and `failureMessage`.
 
-| v1beta1 (CAPI 1.9)                                                    | v1beta2 (tentative Aug 2025)                                                                                     | v1beta2 after v1beta1 removal (tentative Aug 2026)                                         |
+| v1beta1 (CAPI 1.9)                                                    | v1beta2 (August 2025)                                                                                            | v1beta2 after v1beta1 removal (tentative April 2027)                                       |
 |-----------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------|--------------------------------------------------------------------------------------------|
 | `status.ready`, required                                              | `status.ready` (deprecated), one of `status.ready` or `status.initialization.provisioned` required               | (removed)                                                                                  |
 |                                                                       | `status.initialization.provisioned` (new), one of `status.ready` or `status.initialization.provisioned` required | `status.initialization.provisioned`                                                        |
@@ -1338,7 +1330,7 @@ Following changes are planned for the contract for the BootstrapConfig resource:
   - Rename `status.ready` into `status.initialization.dataSecretCreated`.
 - Remove `failureReason` and `failureMessage`.
 
-| v1beta1 (CAPI 1.9)                                                    | v1beta2 (tentative Aug 2025)                                                                                                  | v1beta2 after v1beta1 removal (tentative Aug 2026)                                                   |
+| v1beta1 (CAPI 1.9)                                                    | v1beta2 (August 2025)                                                                                                         | v1beta2 after v1beta1 removal (tentative April 2027)                                                 |
 |-----------------------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------|
 | `status.ready`, required                                              | `status.ready` (deprecated), one of `status.ready` or `status.initialization.dataSecretCreated`, required                     | (removed)                                                                                            |
 |                                                                       | `status.initialization.dataSecretCreated` (new), one of `status.ready` or `status.initialization.dataSecretCreated`, required | `status.initialization.dataSecretCreated`, required                                                  |
@@ -1365,10 +1357,60 @@ Following changes are planned for the contract for the ControlPlane resource:
 - Remove `failureReason` and `failureMessage`.
 - Align replica counters with CAPI core objects
 
-| v1beta1 (CAPI 1.9)                                                    | v1beta2 (tentative Aug 2025)                                                                                                                                          | v1beta2 after v1beta1 removal (tentative Aug 2026)                                                          |
+Below you can find the relevant fields in ControlPlane v1beta2, after v1beta1 removal (end state);
+Below the Go types, you can find a summary table that also shows how changes will be rolled out according to K8s deprecation rules.
+
+```golang
+type KubeadmControlPlaneStatus struct {
+
+    // Initialization provides observations of the ControlPlane initialization process.
+    // NOTE: Fields in this struct are part of the Cluster API contract and are used to orchestrate initial Cluster provisioning.
+    // The value of those fields is never updated after provisioning is completed.
+    // Use conditions to monitor the operational state of the Cluster.
+    // +optional
+    Initialization KubeadmControlPlaneInitializationStatus `json:"initialization,omitempty,omitzero"`
+    
+    // Conditions represent the observations of a ControlPlane's current state.
+    // +optional
+    // +listType=map
+    // +listMapKey=type
+    // +kubebuilder:validation:MaxItems=32
+    Conditions []metav1.Condition `json:"conditions,omitempty"`
+	
+    // The number of ready replicas for this ControlPlane. A machine is considered ready when Machine's Ready condition is true.
+    // +optional
+    ReadyReplicas *int32 `json:"readyReplicas,omitempty"`
+
+    // The number of available replicas for this ControlPlane. A machine is considered available when Machine's Available condition is true.
+    // +optional
+    AvailableReplicas *int32 `json:"availableReplicas,omitempty"`
+
+    // The number of up-to-date replicas for this ControlPlane. A machine is considered up-to-date when Machine's UpToDate condition is true.
+    // +optional
+    UpToDateReplicas *int32 `json:"upToDateReplicas,omitempty"`
+	
+    // Other fields...
+    // NOTE: `FailureReason`, `FailureMessage`, `Ready`, `Initialized`, `updatedReplicas` fields won't be there anymore
+}
+
+// KubeadmControlPlaneInitializationStatus provides observations of the ControlPlane initialization process.
+// +kubebuilder:validation:MinProperties=1
+type KubeadmControlPlaneInitializationStatus struct {
+	
+    // controlPlaneInitialized is true when the control plane provider reports that the Kubernetes control plane is initialized; 
+    // usually a control plane is considered initialized when it can accept requests, no matter if this happens before 
+    // the control plane is fully provisioned or not.
+    // NOTE: this field is part of the Cluster API contract, and it is used to orchestrate initial Cluster provisioning.
+    // +optional 
+    ControlPlaneInitialized bool `json:"controlPlaneInitialized"`
+}
+```
+
+| v1beta1 (CAPI 1.9)                                                    | v1beta2 (August 2025)                                                                                                                                                 | v1beta2 after v1beta1 removal (tentative April 2027)                                                        |
 |-----------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------|-------------------------------------------------------------------------------------------------------------|
 | `status.ready`, required                                              | `status.ready` (deprecated), one of `status.ready` or `status.initialization.controlPlaneInitialized` required                                                        | (removed)                                                                                                   |
-| `status.initialized`, required                                        | `status.initialization.controlPlaneInitialized` (renamed), one of `status.ready` or `status.initialization.controlPlaneInitialized` required                          | `status.initialization.controlPlaneInitialized`, required                                                   |
+|                                                                       | `status.initialization.controlPlaneInitialized` (renamed), one of `status.ready` or `status.initialization.controlPlaneInitialized` required                          | `status.initialization.controlPlaneInitialized`, required                                                   |
+| `status.initialized`, required                                        | `status.initialized` (deprecated)                                                                                                                                     | (removed)                                                                                                   |
 | `status.conditions[Ready]`, optional with fall back on `status.ready` | `status.deprecated.v1beta1.conditions[Ready]` (renamed, deprecated), optional with fall back on `status.ready` or `status.initialization.controlPlaneInitialized` set | (removed)                                                                                                   |
 |                                                                       | `status.conditions[Available]` (new), optional with fall back optional with fall back on `status.ready` or `status.initialization.controlPlaneInitialized` set        | `status.conditions[Available]`, optional with fall back on `status.initializiation.controlPlaneInitialized` |
 | `status.failureReason`, optional                                      | `status.failureReason` (deprecated), optional                                                                                                                         | (removed)                                                                                                   |
@@ -1436,13 +1478,13 @@ _Like any API change, this proposal will have impact on Cluster API users_
 Mitigations:
 
 This proposal abides to Kubernetes deprecation rules, and it also ensures isomorphic conversions to/from v1beta1 APIs
-can be supported (until v1beta1 removal, tentative Aug 2026).
+can be supported (until v1beta1 removal, tentative April 2027).
 
 On top of that, a few design decisions have been made with the specific intent to further minimize impact on
 users and providers e.g.
-- The decision to keep `Deprecated` fields in v1beta2 API (until v1beta1 removal, tentative Aug 2026).
+- The decision to keep `Deprecated` fields in v1beta2 API (until v1beta1 removal, tentative April 2027).
 - The decision to allow providers to adopt the Cluster API v1beta2 contract at their own pace (transition _must be completed_
-  before v1beta1 removal, tentative Aug 2026).
+  before v1beta1 removal, tentative April 2027).
 
 All in all, those decisions are consistent with the fact that in Cluster API we are already treating our APIs
 (and the Cluster API contract) as fully graduated APIs no matter if they are still beta.
@@ -1488,4 +1530,6 @@ Transition from v1beta1 API/contract to v1beta2 contract is detailed in previous
 - [x] 2024-07-17: Present proposal at a [community meeting](https://www.youtube.com/watch?v=frCg522ZfRQ)
   - [10000 feet overview](https://docs.google.com/presentation/d/1hhgCufOIuqHz6YR_RUPGo0uTjfm5YafjCb6JHY1_clY/edit?usp=sharing)
 - [x] 2024-09-16: Proposal approved
-- [x] 2025-01-30: v1beta2 tentative date moved from Apr 2025 to Aug 2025
+- [x] 2025-01-30: v1beta2 tentative date moved from April 2025 to August 2025
+- [x] 2025-07-28: align print columns to v1beta2 API
+- [x] 2026-03-02: v1beta1 removal tentative date moved from August 2026 to April 2027

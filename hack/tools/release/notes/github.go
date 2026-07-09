@@ -35,6 +35,18 @@ type githubClient struct {
 	repo string
 }
 
+// to allow for mocking in tests.
+type githubClientInterface interface {
+	getDiffAllCommits(base, head string) (*githubDiff, error)
+	getRef(ref string) (githubRef, error)
+	getTag(tagSHA string) (githubTag, error)
+	getCommit(sha string) (githubCommit, error)
+	listMergedPRs(after, before time.Time, baseBranches ...string) ([]githubPR, error)
+}
+
+// Ensure githubClient implements githubClientInterface.
+var _ githubClientInterface = (*githubClient)(nil)
+
 // githubDiff is the API response for the "compare" endpoint.
 type githubDiff struct {
 	// MergeBaseCommit points to most recent common ancestor between two references.
@@ -165,7 +177,7 @@ func (c githubClient) listMergedPRs(after, before time.Time, baseBranches ...str
 }
 
 func (c githubClient) runGHAPICommand(url string, response any) error {
-	cmd := exec.Command("gh", "api", url)
+	cmd := exec.Command("gh", "api", url) //nolint:noctx,gosec // No context available in this function. No security issue: variable is safe.
 
 	out, err := cmd.CombinedOutput()
 	if err != nil {

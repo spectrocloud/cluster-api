@@ -34,7 +34,6 @@ import (
 	"sigs.k8s.io/cluster-api/cmd/clusterctl/client/cluster"
 	"sigs.k8s.io/cluster-api/cmd/clusterctl/client/config"
 	"sigs.k8s.io/cluster-api/cmd/clusterctl/client/repository"
-	"sigs.k8s.io/cluster-api/cmd/clusterctl/internal/test"
 )
 
 func Test_clusterctlClient_GetProvidersConfig(t *testing.T) {
@@ -65,6 +64,7 @@ func Test_clusterctlClient_GetProvidersConfig(t *testing.T) {
 				config.RKE2BootstrapProviderName,
 				config.TalosBootstrapProviderName,
 				config.CanonicalKubernetesControlPlaneProviderName,
+				config.HCPControlPlaneProviderName,
 				config.K0smotronControlPlaneProviderName,
 				config.KamajiControlPlaneProviderName,
 				config.KubeadmControlPlaneProviderName,
@@ -76,6 +76,7 @@ func Test_clusterctlClient_GetProvidersConfig(t *testing.T) {
 				config.AWSProviderName,
 				config.AzureProviderName,
 				config.BYOHProviderName,
+				config.CloudscaleProviderName,
 				config.CloudStackProviderName,
 				config.CoxEdgeProviderName,
 				config.DOProviderName,
@@ -84,22 +85,24 @@ func Test_clusterctlClient_GetProvidersConfig(t *testing.T) {
 				config.HarvesterProviderName,
 				config.HetznerProviderName,
 				config.HivelocityProviderName,
+				config.HuaweiProviderName,
 				config.IBMCloudProviderName,
-				config.InMemoryProviderName,
 				config.IonosCloudProviderName,
 				config.K0smotronProviderName,
 				config.KubeKeyProviderName,
 				config.KubevirtProviderName,
 				config.LinodeProviderName,
 				config.MAASProviderName,
+				config.MetalStackProviderName,
 				config.Metal3ProviderName,
 				config.NestedProviderName,
 				config.NutanixProviderName,
 				config.OCIProviderName,
+				config.OpenNebulaProviderName,
 				config.OpenStackProviderName,
 				config.OutscaleProviderName,
-				config.PacketProviderName,
 				config.ProxmoxProviderName,
+				config.ScalewayProviderName,
 				config.SideroProviderName,
 				config.TinkerbellProviderName,
 				config.VCloudDirectorProviderName,
@@ -108,8 +111,10 @@ func Test_clusterctlClient_GetProvidersConfig(t *testing.T) {
 				config.VSphereProviderName,
 				config.VultrProviderName,
 				config.InClusterIPAMProviderName,
+				config.Metal3ProviderName,
 				config.NutanixIPAMProviderName,
 				config.NutanixRuntimeExtensionsProviderName,
+				config.Cdk8sAddonProviderName,
 				config.HelmAddonProviderName,
 				config.FleetAddonProviderName,
 			},
@@ -132,6 +137,7 @@ func Test_clusterctlClient_GetProvidersConfig(t *testing.T) {
 				config.RKE2BootstrapProviderName,
 				config.TalosBootstrapProviderName,
 				config.CanonicalKubernetesControlPlaneProviderName,
+				config.HCPControlPlaneProviderName,
 				config.K0smotronControlPlaneProviderName,
 				config.KamajiControlPlaneProviderName,
 				config.KubeadmControlPlaneProviderName,
@@ -143,6 +149,7 @@ func Test_clusterctlClient_GetProvidersConfig(t *testing.T) {
 				config.AWSProviderName,
 				config.AzureProviderName,
 				config.BYOHProviderName,
+				config.CloudscaleProviderName,
 				config.CloudStackProviderName,
 				config.CoxEdgeProviderName,
 				config.DOProviderName,
@@ -151,22 +158,24 @@ func Test_clusterctlClient_GetProvidersConfig(t *testing.T) {
 				config.HarvesterProviderName,
 				config.HetznerProviderName,
 				config.HivelocityProviderName,
+				config.HuaweiProviderName,
 				config.IBMCloudProviderName,
-				config.InMemoryProviderName,
 				config.IonosCloudProviderName,
 				config.K0smotronProviderName,
 				config.KubeKeyProviderName,
 				config.KubevirtProviderName,
 				config.LinodeProviderName,
 				config.MAASProviderName,
+				config.MetalStackProviderName,
 				config.Metal3ProviderName,
 				config.NestedProviderName,
 				config.NutanixProviderName,
 				config.OCIProviderName,
+				config.OpenNebulaProviderName,
 				config.OpenStackProviderName,
 				config.OutscaleProviderName,
-				config.PacketProviderName,
 				config.ProxmoxProviderName,
+				config.ScalewayProviderName,
 				config.SideroProviderName,
 				config.TinkerbellProviderName,
 				config.VCloudDirectorProviderName,
@@ -175,8 +184,10 @@ func Test_clusterctlClient_GetProvidersConfig(t *testing.T) {
 				config.VSphereProviderName,
 				config.VultrProviderName,
 				config.InClusterIPAMProviderName,
+				config.Metal3ProviderName,
 				config.NutanixIPAMProviderName,
 				config.NutanixRuntimeExtensionsProviderName,
+				config.Cdk8sAddonProviderName,
 				config.HelmAddonProviderName,
 				config.FleetAddonProviderName,
 			},
@@ -523,10 +534,7 @@ func Test_clusterctlClient_GetClusterTemplate(t *testing.T) {
 
 	rawTemplate := templateYAML("ns3", "${ CLUSTER_NAME }")
 
-	// Template on a file
-	tmpDir, err := os.MkdirTemp("", "cc")
-	g.Expect(err).ToNot(HaveOccurred())
-	defer os.RemoveAll(tmpDir)
+	tmpDir := t.TempDir()
 
 	path := filepath.Join(tmpDir, "cluster-template.yaml")
 	g.Expect(os.WriteFile(path, rawTemplate, 0600)).To(Succeed())
@@ -557,7 +565,7 @@ func Test_clusterctlClient_GetClusterTemplate(t *testing.T) {
 	cluster1 := newFakeCluster(cluster.Kubeconfig{Path: "kubeconfig", Context: "mgmt-context"}, config1).
 		WithProviderInventory(infraProviderConfig.Name(), infraProviderConfig.Type(), "v3.0.0", "foo").
 		WithObjs(configMap).
-		WithObjs(test.FakeCAPISetupObjects()...)
+		WithObjs(fakeCAPISetupObjects()...)
 
 	client := newFakeClient(ctx, config1).
 		WithCluster(cluster1).
@@ -718,7 +726,7 @@ func Test_clusterctlClient_GetClusterTemplate_withClusterClass(t *testing.T) {
 
 	cluster1 := newFakeCluster(cluster.Kubeconfig{Path: "kubeconfig", Context: "mgmt-context"}, config1).
 		WithProviderInventory(infraProviderConfig.Name(), infraProviderConfig.Type(), "v3.0.0", "ns4").
-		WithObjs(test.FakeCAPISetupObjects()...)
+		WithObjs(fakeCAPISetupObjects()...)
 
 	client := newFakeClient(ctx, config1).
 		WithCluster(cluster1).
@@ -743,10 +751,7 @@ func Test_clusterctlClient_GetClusterTemplate_onEmptyCluster(t *testing.T) {
 
 	rawTemplate := templateYAML("ns3", "${ CLUSTER_NAME }")
 
-	// Template on a file
-	tmpDir, err := os.MkdirTemp("", "cc")
-	g.Expect(err).ToNot(HaveOccurred())
-	defer os.RemoveAll(tmpDir)
+	tmpDir := t.TempDir()
 
 	path := filepath.Join(tmpDir, "cluster-template.yaml")
 	g.Expect(os.WriteFile(path, rawTemplate, 0600)).To(Succeed())
@@ -1013,9 +1018,7 @@ func Test_clusterctlClient_ProcessYAML(t *testing.T) {
 	template := `v1: ${VAR1:=default1}
 v2: ${VAR2=default2}
 v3: ${VAR3:-default3}`
-	dir, err := os.MkdirTemp("", "clusterctl")
-	g.Expect(err).ToNot(HaveOccurred())
-	defer os.RemoveAll(dir)
+	dir := t.TempDir()
 
 	templateFile := filepath.Join(dir, "template.yaml")
 	g.Expect(os.WriteFile(templateFile, []byte(template), 0600)).To(Succeed())

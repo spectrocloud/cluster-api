@@ -25,7 +25,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"k8s.io/utils/ptr"
 
-	bootstrapv1 "sigs.k8s.io/cluster-api/bootstrap/kubeadm/api/v1beta1"
+	bootstrapv1 "sigs.k8s.io/cluster-api/api/bootstrap/kubeadm/v1beta2"
 	"sigs.k8s.io/cluster-api/bootstrap/kubeadm/internal/cloudinit"
 	"sigs.k8s.io/cluster-api/bootstrap/kubeadm/internal/ignition/clc"
 )
@@ -64,7 +64,6 @@ func TestRender(t *testing.T) {
 		// Test multi-line commands as well.
 		"cat <<EOF > /etc/modules-load.d/containerd.conf\noverlay\nbr_netfilter\nEOF\n",
 	}
-
 	tc := []struct {
 		desc         string
 		input        *cloudinit.BaseUserData
@@ -86,13 +85,13 @@ func TestRender(t *testing.T) {
 				Users: []bootstrapv1.User{
 					{
 						Name:         "foo",
-						Gecos:        ptr.To("Foo B. Bar"),
-						Groups:       ptr.To("foo, bar"),
-						HomeDir:      ptr.To("/home/foo"),
-						Shell:        ptr.To("/bin/false"),
-						Passwd:       ptr.To("$6$j212wezy$7H/1LT4f9/N3wpgNunhsIqtMj62OKiS3nyNwuizouQc3u7MbYCarYeAHWYPYb2FT.lbioDm2RrkJPb9BZMN1O/"),
-						PrimaryGroup: ptr.To("foo"),
-						Sudo:         ptr.To("ALL=(ALL) NOPASSWD:ALL"),
+						Gecos:        "Foo B. Bar",
+						Groups:       "foo, bar",
+						HomeDir:      "/home/foo",
+						Shell:        "/bin/false",
+						Passwd:       "$6$j212wezy$7H/1LT4f9/N3wpgNunhsIqtMj62OKiS3nyNwuizouQc3u7MbYCarYeAHWYPYb2FT.lbioDm2RrkJPb9BZMN1O/",
+						PrimaryGroup: "foo",
+						Sudo:         "ALL=(ALL) NOPASSWD:ALL",
 						SSHAuthorizedKeys: []string{
 							"foo",
 							"bar",
@@ -103,9 +102,9 @@ func TestRender(t *testing.T) {
 					Partitions: []bootstrapv1.Partition{
 						{
 							Device:    "/dev/disk/azure/scsi1/lun0",
-							Layout:    true,
+							Layout:    ptr.To(true),
 							Overwrite: ptr.To(true),
-							TableType: ptr.To("gpt"),
+							TableType: "gpt",
 						},
 					},
 					Filesystems: []bootstrapv1.Filesystem{
@@ -602,7 +601,7 @@ func TestRender(t *testing.T) {
 
 	t.Run("treats warnings as errors in strict mode", func(t *testing.T) {
 		config := &bootstrapv1.ContainerLinuxConfig{
-			Strict:           true,
+			Strict:           ptr.To(true),
 			AdditionalConfig: configWithWarning,
 		}
 

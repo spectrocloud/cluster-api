@@ -24,21 +24,18 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/go-logr/logr"
 	"github.com/pkg/errors"
-	"golang.org/x/net/http2"
-	"golang.org/x/net/http2/h2c"
 	kerrors "k8s.io/apimachinery/pkg/util/errors"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/util/wait"
-	"k8s.io/klog/v2"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
-	infrav1 "sigs.k8s.io/cluster-api/test/infrastructure/inmemory/api/v1alpha1"
 	inmemoryruntime "sigs.k8s.io/cluster-api/test/infrastructure/inmemory/pkg/runtime"
 	inmemoryapi "sigs.k8s.io/cluster-api/test/infrastructure/inmemory/pkg/server/api"
 	inmemoryetcd "sigs.k8s.io/cluster-api/test/infrastructure/inmemory/pkg/server/etcd"
@@ -55,7 +52,7 @@ const (
 	// DefaultMinPort default min port of the workload clusters mux.
 	DefaultMinPort = 20000
 	// DefaultMaxPort default max port of the workload clusters mux.
-	DefaultMaxPort = 24000
+	DefaultMaxPort = 30000
 )
 
 // WorkloadClustersMuxOption define an option for the WorkloadClustersMux creation.
@@ -65,9 +62,9 @@ type WorkloadClustersMuxOption interface {
 
 // WorkloadClustersMuxOptions are options for the workload clusters mux.
 type WorkloadClustersMuxOptions struct {
-	MinPort   int
-	MaxPort   int
-	DebugPort int
+	MinPort   int32
+	MaxPort   int32
+	DebugPort int32
 }
 
 // ApplyOptions applies WorkloadClustersMuxOption to the current WorkloadClustersMuxOptions.
@@ -80,9 +77,9 @@ func (o *WorkloadClustersMuxOptions) ApplyOptions(opts []WorkloadClustersMuxOpti
 
 // CustomPorts allows to customize the ports used by the workload clusters mux.
 type CustomPorts struct {
-	MinPort   int
-	MaxPort   int
-	DebugPort int
+	MinPort   int32
+	MaxPort   int32
+	DebugPort int32
 }
 
 // Apply applies this configuration to the given WorkloadClustersMuxOptions.
@@ -99,9 +96,9 @@ func (c CustomPorts) Apply(options *WorkloadClustersMuxOptions) {
 // WorkloadClustersMux is also responsible for handling certificates for each of the above use cases.
 type WorkloadClustersMux struct {
 	host      string
-	minPort   int // TODO: move port management to a port range type
-	maxPort   int
-	portIndex int
+	minPort   int32 // TODO: move port management to a port range type
+	maxPort   int32
+	portIndex int32
 
 	manager inmemoryruntime.Manager // TODO: figure out if we can have a smaller interface (GetResourceGroup, GetSchema)
 
@@ -153,13 +150,25 @@ func NewWorkloadClustersMux(manager inmemoryruntime.Manager, host string, opts .
 	m.debugServer = http.Server{
 		Handler: inmemoryapi.NewDebugHandler(manager, m.log, m),
 	}
-	l, err := net.Listen("tcp", net.JoinHostPort(host, fmt.Sprintf("%d", options.DebugPort)))
+	l, err := net.Listen("tcp", fmt.Sprintf(":%d", options.DebugPort)) //nolint:noctx
 	if err != nil {
 		return nil, errors.Wrapf(err, "failed to create listener for workload cluster mux")
 	}
-	go func() { _ = m.debugServer.Serve(l) }()
+	go func() {
+		if err := m.debugServer.Serve(l); err != nil {
+			// During unit test it might happen that when the go routine is started, the server has been already closed (so ignore this error).
+			if !errors.Is(err, http.ErrServerClosed) {
+				panic(err.Error())
+			}
+		}
+	}()
 
 	return m, nil
+}
+
+// Host return the host address for the WorkloadClustersMux.
+func (m *WorkloadClustersMux) Host() string {
+	return m.host
 }
 
 // mixedHandler returns an handler that can serve either API server calls or etcd calls.
@@ -198,15 +207,13 @@ func (m *WorkloadClustersMux) mixedHandler() http.Handler {
 
 	// Creates the mixed handler combining the two above depending on
 	// the type of request being processed
-	mixedHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.ProtoMajor == 2 && strings.HasPrefix(r.Header.Get("content-type"), "application/grpc") {
 			etcdHandler.ServeHTTP(w, r)
 			return
 		}
 		apiHandler.ServeHTTP(w, r)
 	})
-
-	return h2c.NewHandler(mixedHandler, &http2.Server{})
 }
 
 // getCertificate selects certificates for a specific cluster depending on the request being processed
@@ -249,54 +256,9 @@ func (m *WorkloadClustersMux) getCertificate(info *tls.ClientHelloInfo) (*tls.Ce
 	return wcl.apiServerServingCertificate, nil
 }
 
-// HotRestart tries to set up the mux according to an existing set of InMemoryClusters.
-// NOTE: This is done at best effort in order to make iterative development workflows easier.
-func (m *WorkloadClustersMux) HotRestart(clusters *infrav1.InMemoryClusterList) error {
-	if len(clusters.Items) == 0 {
-		return nil
-	}
-
-	m.lock.Lock()
-	defer m.lock.Unlock()
-
-	if len(m.workloadClusterListeners) > 0 {
-		return errors.New("WorkloadClustersMux cannot be hot restarted when there are already initialized listeners")
-	}
-
-	ports := sets.Set[int]{}
-	maxPort := m.minPort - 1
-	for _, c := range clusters.Items {
-		if c.Spec.ControlPlaneEndpoint.Host == "" {
-			continue
-		}
-
-		if c.Spec.ControlPlaneEndpoint.Host != m.host {
-			return errors.Errorf("unable to restart the WorkloadClustersMux, the host address is changed from %s to %s", c.Spec.ControlPlaneEndpoint.Host, m.host)
-		}
-
-		if ports.Has(c.Spec.ControlPlaneEndpoint.Port) {
-			return errors.Errorf("unable to restart the WorkloadClustersMux, there are two or more clusters using port %d", c.Spec.ControlPlaneEndpoint.Port)
-		}
-
-		listenerName, ok := c.Annotations[infrav1.ListenerAnnotationName]
-		if !ok {
-			return errors.Errorf("unable to restart the WorkloadClustersMux, cluster %s doesn't have the %s annotation", klog.KRef(c.Namespace, c.Name), infrav1.ListenerAnnotationName)
-		}
-
-		m.initWorkloadClusterListenerWithPortLocked(listenerName, c.Spec.ControlPlaneEndpoint.Port)
-
-		if maxPort < c.Spec.ControlPlaneEndpoint.Port {
-			maxPort = c.Spec.ControlPlaneEndpoint.Port
-		}
-	}
-
-	m.portIndex = maxPort + 1
-	return nil
-}
-
 // InitWorkloadClusterListener initialize a WorkloadClusterListener by reserving a port for it.
 // Note: The listener will be started when the first API server will be added.
-func (m *WorkloadClustersMux) InitWorkloadClusterListener(wclName string) (*WorkloadClusterListener, error) {
+func (m *WorkloadClustersMux) InitWorkloadClusterListener(wclName string, port int32) (*WorkloadClusterListener, error) {
 	m.lock.Lock()
 	defer m.lock.Unlock()
 
@@ -304,19 +266,16 @@ func (m *WorkloadClustersMux) InitWorkloadClusterListener(wclName string) (*Work
 		return wcl, nil
 	}
 
-	port, err := m.getFreePortLocked()
-	if err != nil {
-		return nil, err
+	if port == 0 {
+		var err error
+		port, err = m.getFreePortLocked()
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		m.portIndex = max(m.portIndex, port+1)
 	}
 
-	wcl := m.initWorkloadClusterListenerWithPortLocked(wclName, port)
-
-	return wcl, nil
-}
-
-// initWorkloadClusterListenerWithPortLocked initializes a workload cluster listener.
-// Note: m.lock must be locked before calling this method.
-func (m *WorkloadClustersMux) initWorkloadClusterListenerWithPortLocked(wclName string, port int) *WorkloadClusterListener {
 	wcl := &WorkloadClusterListener{
 		scheme:                  m.manager.GetScheme(),
 		host:                    m.host,
@@ -332,7 +291,8 @@ func (m *WorkloadClustersMux) initWorkloadClusterListenerWithPortLocked(wclName 
 	m.workloadClusterNameByPort[fmt.Sprintf("%d", wcl.Port())] = wclName
 
 	m.log.Info("Workload cluster listener created", "listenerName", wclName, "address", wcl.Address())
-	return wcl
+
+	return wcl, nil
 }
 
 // RegisterResourceGroup registers the resource group that host in memory resources for a WorkloadClusterListener.
@@ -375,7 +335,7 @@ func (m *WorkloadClustersMux) WorkloadClusterByResourceGroup(resouceGroup string
 			return wclName, nil
 		}
 	}
-	return "", errors.Errorf("resouceGroup with name %s not yet registered to a workloadClusterListener", resouceGroup)
+	return "", errors.Errorf("resourceGroup with name %s not yet registered to a workloadClusterListener", resouceGroup)
 }
 
 // AddAPIServer mimics adding an API server instance behind the WorkloadClusterListener.
@@ -441,11 +401,11 @@ func (m *WorkloadClustersMux) AddAPIServer(wclName, podName string, caCert *x509
 			return nil
 		}
 
-		l, err := net.Listen("tcp", fmt.Sprintf(":%d", wcl.Port()))
+		l, err := net.Listen("tcp", fmt.Sprintf(":%d", wcl.Port())) //nolint:noctx
 		if err != nil {
 			return errors.Wrapf(err, "failed to start WorkloadClusterListener %s, %s", wclName, fmt.Sprintf(":%d", wcl.Port()))
 		}
-		wcl.listener = l
+		wcl.listener = newTrackingListener(l)
 
 		go func() {
 			if startServerErr = m.muxServer.ServeTLS(wcl.listener, "", ""); startServerErr != nil && !errors.Is(startServerErr, http.ErrServerClosed) {
@@ -462,7 +422,7 @@ func (m *WorkloadClustersMux) AddAPIServer(wclName, podName string, caCert *x509
 	var pollErr error
 	err = wait.PollUntilContextTimeout(context.TODO(), 250*time.Millisecond, 5*time.Second, true, func(context.Context) (done bool, err error) {
 		d := &net.Dialer{Timeout: 50 * time.Millisecond}
-		conn, err := tls.DialWithDialer(d, "tcp", wcl.HostPort(), &tls.Config{
+		conn, err := tls.DialWithDialer(d, "tcp", wcl.HostPort(), &tls.Config{ //nolint:noctx
 			InsecureSkipVerify: true, //nolint:gosec // config is used to connect to our own port.
 		})
 		if err != nil {
@@ -489,6 +449,35 @@ func (m *WorkloadClustersMux) AddAPIServer(wclName, podName string, caCert *x509
 	return nil
 }
 
+// StartListener starts the listener for a wcl cluster.
+func (m *WorkloadClustersMux) StartListener(wclName string) error {
+	m.lock.Lock()
+	defer m.lock.Unlock()
+
+	wcl, ok := m.workloadClusterListeners[wclName]
+	if !ok {
+		return errors.Errorf("workloadClusterListener with name %s must be initialized before being started", wclName)
+	}
+
+	if wcl.listener != nil {
+		return nil
+	}
+
+	l, err := net.Listen("tcp", fmt.Sprintf(":%d", wcl.Port())) //nolint:noctx
+	if err != nil {
+		return errors.Wrapf(err, "failed to start WorkloadClusterListener %s, %s", wclName, fmt.Sprintf(":%d", wcl.Port()))
+	}
+	wcl.listener = newTrackingListener(l)
+	m.log.Info("WorkloadClusterListener started", "listenerName", wclName, "address", wcl.Address())
+
+	go func() {
+		if startServerErr := m.muxServer.ServeTLS(wcl.listener, "", ""); startServerErr != nil && !errors.Is(startServerErr, http.ErrServerClosed) {
+			m.log.Error(startServerErr, "Failed to start WorkloadClusterListener", "listenerName", wclName, "address", wcl.Address())
+		}
+	}()
+	return nil
+}
+
 // DeleteAPIServer removes an API server instance from the WorkloadClusterListener.
 func (m *WorkloadClustersMux) DeleteAPIServer(wclName, podName string) error {
 	m.lock.Lock()
@@ -502,12 +491,34 @@ func (m *WorkloadClustersMux) DeleteAPIServer(wclName, podName string) error {
 	m.log.Info("APIServer instance removed from the workloadClusterListener", "listenerName", wclName, "address", wcl.Address(), "podName", podName)
 
 	if wcl.apiServers.Len() < 1 && wcl.listener != nil {
-		if err := wcl.listener.Close(); err != nil {
+		if err := wcl.listener.CloseAll(); err != nil {
 			return errors.Wrapf(err, "failed to stop WorkloadClusterListener %s, %s", wclName, wcl.HostPort())
 		}
 		wcl.listener = nil
 		m.log.Info("WorkloadClusterListener stopped because there are no APIServer left", "listenerName", wclName, "address", wcl.Address())
 	}
+	return nil
+}
+
+// StopListener stops the listener for a wcl cluster.
+func (m *WorkloadClustersMux) StopListener(wclName string) error {
+	m.lock.Lock()
+	defer m.lock.Unlock()
+
+	wcl, ok := m.workloadClusterListeners[wclName]
+	if !ok {
+		return errors.Errorf("workloadClusterListener with name %s must be initialized before being stopped", wclName)
+	}
+
+	if wcl.listener == nil {
+		return nil
+	}
+
+	if err := wcl.listener.CloseAll(); err != nil {
+		return errors.Wrapf(err, "failed to stop WorkloadClusterListener %s, %s", wclName, wcl.HostPort())
+	}
+	wcl.listener = nil
+	m.log.Info("WorkloadClusterListener stopped", "listenerName", wclName, "address", wcl.Address())
 	return nil
 }
 
@@ -583,6 +594,30 @@ func (m *WorkloadClustersMux) DeleteEtcdMember(wclName, podName string) error {
 	return nil
 }
 
+// GetCluster return debug info for a wcl cluster.
+func (m *WorkloadClustersMux) GetCluster(wclName string) *inmemoryapi.ClusterDebugInfo {
+	m.lock.RLock()
+	defer m.lock.RUnlock()
+
+	wcl, ok := m.workloadClusterListeners[wclName]
+	if !ok {
+		return nil
+	}
+
+	apiServers := wcl.apiServers.UnsortedList()
+	etcdMembers := wcl.etcdMembers.UnsortedList()
+	sort.Strings(apiServers)
+	sort.Strings(etcdMembers)
+	return &inmemoryapi.ClusterDebugInfo{
+		Host:           wcl.host,
+		Port:           wcl.port,
+		ListenerActive: wcl.listener != nil,
+		ResourceGroup:  wcl.resourceGroup,
+		APIServers:     apiServers,
+		EtcdMembers:    etcdMembers,
+	}
+}
+
 // ListListeners implements api.DebugInfoProvider.
 func (m *WorkloadClustersMux) ListListeners() map[string]string {
 	m.lock.RLock()
@@ -591,6 +626,9 @@ func (m *WorkloadClustersMux) ListListeners() map[string]string {
 	ret := map[string]string{}
 	for k, l := range m.workloadClusterListeners {
 		ret[k] = l.Address()
+		if l.listener == nil {
+			ret[k] += " (stopped)"
+		}
 	}
 	return ret
 }
@@ -606,7 +644,7 @@ func (m *WorkloadClustersMux) DeleteWorkloadClusterListener(wclName string) erro
 	}
 
 	if wcl.listener != nil {
-		if err := wcl.listener.Close(); err != nil {
+		if err := wcl.listener.CloseAll(); err != nil {
 			return errors.Wrapf(err, "failed to stop WorkloadClusterListener %s, %s", wclName, wcl.HostPort())
 		}
 	}
@@ -628,7 +666,7 @@ func (m *WorkloadClustersMux) Shutdown(ctx context.Context) error {
 	}
 
 	// NOTE: this closes all the listeners
-	if err := m.muxServer.Shutdown(ctx); err != nil {
+	if err := m.muxServer.Shutdown(ctx); err != nil && !errors.Is(err, net.ErrClosed) {
 		return errors.Wrap(err, "failed to shutdown the mux server")
 	}
 
@@ -637,7 +675,7 @@ func (m *WorkloadClustersMux) Shutdown(ctx context.Context) error {
 
 // getFreePortLocked gets a free port.
 // Note: m.lock must be locked before calling this method.
-func (m *WorkloadClustersMux) getFreePortLocked() (int, error) {
+func (m *WorkloadClustersMux) getFreePortLocked() (int32, error) {
 	port := m.portIndex
 	if port > m.maxPort {
 		return -1, errors.Errorf("no more free ports in the %d-%d range", m.minPort, m.maxPort)

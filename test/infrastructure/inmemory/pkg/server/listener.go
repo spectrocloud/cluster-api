@@ -22,14 +22,14 @@ import (
 	"crypto/x509"
 	"fmt"
 	"net"
+	"sync"
 
+	"github.com/pkg/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
-	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
 
 	"sigs.k8s.io/cluster-api/util/certs"
 )
@@ -37,7 +37,7 @@ import (
 // WorkloadClusterListener represents a listener for a workload cluster.
 type WorkloadClusterListener struct {
 	host string
-	port int
+	port int32
 
 	resourceGroup string
 
@@ -54,7 +54,7 @@ type WorkloadClusterListener struct {
 	etcdMembers             sets.Set[string]
 	etcdServingCertificates map[string]*tls.Certificate
 
-	listener net.Listener
+	listener *trackingListener
 }
 
 // Host returns the host of a WorkloadClusterListener.
@@ -63,7 +63,7 @@ func (s *WorkloadClusterListener) Host() string {
 }
 
 // Port returns the port of a WorkloadClusterListener.
-func (s *WorkloadClusterListener) Port() int {
+func (s *WorkloadClusterListener) Port() int32 {
 	return s.port
 }
 
@@ -120,27 +120,58 @@ func (s *WorkloadClusterListener) RESTConfig() (*rest.Config, error) {
 	return restConfig, nil
 }
 
-// GetClient returns a client for a WorkloadClusterListener.
-func (s *WorkloadClusterListener) GetClient() (client.WithWatch, error) {
-	restConfig, err := s.RESTConfig()
+type trackingListener struct {
+	net.Listener
+	mu    sync.Mutex
+	conns map[net.Conn]struct{}
+}
+
+func newTrackingListener(l net.Listener) *trackingListener {
+	return &trackingListener{
+		Listener: l,
+		conns:    make(map[net.Conn]struct{}),
+	}
+}
+
+func (tl *trackingListener) Accept() (net.Conn, error) {
+	conn, err := tl.Listener.Accept()
 	if err != nil {
 		return nil, err
 	}
 
-	httpClient, err := rest.HTTPClientFor(restConfig)
-	if err != nil {
-		return nil, err
+	tl.mu.Lock()
+	tl.conns[conn] = struct{}{}
+	tl.mu.Unlock()
+
+	// Return a wrapped connection so we know when it's closed
+	return &trackedConn{Conn: conn, tl: tl}, nil
+}
+
+type trackedConn struct {
+	net.Conn
+	tl *trackingListener
+}
+
+func (tc *trackedConn) Close() error {
+	tc.tl.mu.Lock()
+	delete(tc.tl.conns, tc.Conn)
+	tc.tl.mu.Unlock()
+	return tc.Conn.Close()
+}
+
+func (tl *trackingListener) CloseAll() error {
+	// Stop accepting new connections first
+	if err := tl.Listener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+		return err
 	}
 
-	mapper, err := apiutil.NewDynamicRESTMapper(restConfig, httpClient)
-	if err != nil {
-		return nil, err
-	}
+	tl.mu.Lock()
+	defer tl.mu.Unlock()
 
-	c, err := client.NewWithWatch(restConfig, client.Options{Scheme: s.scheme, Mapper: mapper})
-	if err != nil {
-		return nil, err
+	for conn := range tl.conns {
+		if err := conn.Close(); err != nil && !errors.Is(err, net.ErrClosed) { // This triggers the underlying TCP close
+			return err
+		}
 	}
-
-	return c, nil
+	return nil
 }

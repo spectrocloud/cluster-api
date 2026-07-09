@@ -1,6 +1,6 @@
 # Contract rules for InfraCluster
 
-Infrastructure providers SHOULD implement an InfraCluster resource.
+Infrastructure providers SHOULD implement an InfraCluster resource using Kubernetes' CustomResourceDefinition (CRD).
 
 The goal of an InfraCluster resource is to supply whatever prerequisites (in term of infrastructure) are necessary for running machines.
 Examples might include networking, load balancers, firewall rules, and so on.
@@ -41,7 +41,7 @@ repo or add an item to the agenda in the [Cluster API community meeting](https:/
 
 </aside>
 
-## Rules (contract version v1beta1)
+## Rules (contract version v1beta2)
 
 | Rule                                                                 | Mandatory | Note                                                                |
 |----------------------------------------------------------------------|-----------|---------------------------------------------------------------------|
@@ -83,8 +83,9 @@ The domain for Cluster API resources is `cluster.x-k8s.io`, and infrastructure p
 generally use `infrastructure.cluster.x-k8s.io` as API group.
 
 If your provider uses a different API group, you MUST grant full read/write RBAC permissions for resources in your API group
-to the Cluster API core controllers. The canonical way to do so is via a `ClusterRole` resource with the [aggregation label]
-`cluster.x-k8s.io/aggregate-to-manager: "true"`.
+to the Cluster API core controllers. If any resource sets another resource as the owner with `blockOwnerDeletion` set,
+additional RBAC to update finalizers on the **owner resource** is required.
+The canonical way to do so is via a `ClusterRole` resource with the [aggregation label] `cluster.x-k8s.io/aggregate-to-manager: "true"`.
 
 The following is an example ClusterRole for a `FooCluster` resource in the `infrastructure.foo.com` API group:
 
@@ -149,12 +150,20 @@ To apply the label to CRDs it’s possible to use labels in your `kustomization.
 ```yaml
 labels:
 - pairs:
-    cluster.x-k8s.io/v1alpha2: v1alpha1
-    cluster.x-k8s.io/v1alpha3: v1alpha2
     cluster.x-k8s.io/v1beta1: v1beta1
+    cluster.x-k8s.io/v1beta2: v1beta2
 ```
 
 An example of this is in the [Kubeadm Bootstrap provider](https://github.com/kubernetes-sigs/cluster-api/blob/release-1.1/controlplane/kubeadm/config/crd/kustomization.yaml).
+
+<aside  class="note warning">
+
+<h1>Important</h1>
+
+If the provider implements the [clusterctl provider contract], the contract version defined in the
+label above must be consistent with the contract version defined in the `metadata.yaml` file.
+
+</aside>
 
 ### InfraCluster, InfraClusterList resource definition
 
@@ -221,6 +230,46 @@ in the InfraCluster resource.
 type FooClusterSpec struct {
     // controlPlaneEndpoint represents the endpoint used to communicate with the control plane.
     // +optional
+    ControlPlaneEndpoint APIEndpoint `json:"controlPlaneEndpoint,omitempty,omitzero"`
+    
+    // See other rules for more details about mandatory/optional fields in InfraCluster spec.
+    // Other fields SHOULD be added based on the needs of your provider.
+}
+
+// APIEndpoint represents a reachable Kubernetes API endpoint.
+// +kubebuilder:validation:MinProperties=1
+type APIEndpoint struct {
+    // host is the hostname on which the API server is serving.
+    // +optional
+    // +kubebuilder:validation:MinLength=1
+    // +kubebuilder:validation:MaxLength=512
+    Host string `json:"host,omitempty"`
+
+    // port is the port on which the API server is serving.
+    // +optional
+    // +kubebuilder:validation:Minimum=1
+    // +kubebuilder:validation:Maximum=65535
+    Port int32 `json:"port,omitempty"`
+}
+```
+
+Once `spec.controlPlaneEndpoint` is set on the InfraCluster resource and the [InfraCluster initialization completed],
+the Cluster controller will surface this info in Cluster's `spec.controlPlaneEndpoint`.
+
+If instead you are developing an infrastructure provider which is NOT responsible to provide a control plane endpoint,
+the implementer should exit reconciliation until it sees Cluster's `spec.controlPlaneEndpoint` populated.
+
+<aside class="note warning">
+
+<h1>Compatibility with the deprecated v1beta1 contract</h1>
+
+In order to ease the transition for providers, the v1beta2 version of the Cluster API contract _temporarily_
+preserves compatibility with the deprecated v1beta1 contract; compatibility will be removed tentatively in April 2027.
+
+```go
+type FooClusterSpec struct {
+    // controlPlaneEndpoint represents the endpoint used to communicate with the control plane.
+    // +optional
     ControlPlaneEndpoint APIEndpoint `json:"controlPlaneEndpoint"`
     
     // See other rules for more details about mandatory/optional fields in InfraCluster spec.
@@ -237,11 +286,7 @@ type APIEndpoint struct {
 }
 ```
 
-Once `spec.controlPlaneEndpoint` is set on the InfraCluster resource and the [InfraCluster initialization completed],
-the Cluster controller will surface this info in Cluster's `spec.controlPlaneEndpoint`.
-
-If instead you are developing an infrastructure provider which is NOT responsible to provide a control plane endpoint,
-the implementer should exit reconciliation until it sees Cluster's `spec.controlPlaneEndpoint` populated.
+</aside>
 
 ### InfraCluster: failure domains
 
@@ -251,52 +296,85 @@ placed in, the list of available failure domains MUST surface on `status.failure
 ```go
 type FooClusterStatus struct {
     // failureDomains is a list of failure domain objects synced from the infrastructure provider.
-    FailureDomains clusterv1.FailureDomains `json:"failureDomains,omitempty"`
+    // +optional
+    // +listType=map
+    // +listMapKey=name
+    // +kubebuilder:validation:MinItems=1
+    // +kubebuilder:validation:MaxItems=100
+    FailureDomains []clusterv1.FailureDomain `json:"failureDomains,omitempty"`
     
     // See other rules for more details about mandatory/optional fields in InfraCluster status.
     // Other fields SHOULD be added based on the needs of your provider.
 }
 ```
 
-`clusterv1.FailureDomains` is a map, defined as `map[string]FailureDomainSpec`. A unique key must be used for each `FailureDomainSpec`.
-`FailureDomainSpec` is defined as:
-- `controlPlane bool`: indicates if failure domain is appropriate for running control plane instances.
+`FailureDomain` is defined as:
+- `name string`: the name of the failure domain (must be unique)
+- `controlPlane *bool`: indicates if failure domain is appropriate for running control plane instances.
 - `attributes map[string]string`: arbitrary attributes for users to apply to a failure domain.
 
 Once `status.failureDomains` is set on the InfraCluster resource and the [InfraCluster initialization completed],
 the Cluster controller will surface this info in Cluster's `status.failureDomains`.
 
+<aside class="note warning">
+
+<h1>Compatibility with the deprecated v1beta1 contract</h1>
+
+In order to ease the transition for providers, the v1beta2 version of the Cluster API contract _temporarily_
+preserves compatibility with the deprecated v1beta1 contract; compatibility will be removed tentatively in April 2027.
+
+For reference, with the v1beta1 contract the field is of type `clusterv1beta1.FailureDomains`, which is a map defined as 
+`map[string]clusterv1beta1.FailureDomainSpec`. A unique key must be used for each `FailureDomainSpec`.
+`FailureDomainSpec` is defined as:
+- `controlPlane bool`: indicates if failure domain is appropriate for running control plane instances.
+- `attributes map[string]string`: arbitrary attributes for users to apply to a failure domain.
+
+</aside>
+
 ### InfraCluster: initialization completed
 
-Each InfraCluster MUST report when Cluster's infrastructure is fully provisioned (initialization) by setting
-`status.ready` in the InfraCluster resource.
+Each InfraCluster MUST report when Machine's infrastructure is fully provisioned (initialization) by setting
+`status.initialization.provisioned` in the InfraCluster resource.
 
 ```go
 type FooClusterStatus struct {
-    // ready denotes that the foo cluster infrastructure is fully provisioned.
-	// NOTE: this field is part of the Cluster API contract and it is used to orchestrate provisioning.
-	// The value of this field is never updated after provisioning is completed. Please use conditions
-	// to check the operational state of the infa cluster.
+    // initialization provides observations of the FooCluster initialization process.
+    // NOTE: Fields in this struct are part of the Cluster API contract and are used to orchestrate initial Cluster provisioning.
     // +optional
-    Ready bool `json:"ready"`
+    Initialization FooClusterInitializationStatus `json:"initialization,omitempty,omitzero"`
     
     // See other rules for more details about mandatory/optional fields in InfraCluster status.
     // Other fields SHOULD be added based on the needs of your provider.
 }
+
+// FooClusterInitializationStatus provides observations of the FooCluster initialization process.
+// +kubebuilder:validation:MinProperties=1
+type FooClusterInitializationStatus struct {
+	// provisioned is true when the infrastructure provider reports that the Cluster's infrastructure is fully provisioned.
+	// NOTE: this field is part of the Cluster API contract, and it is used to orchestrate initial Cluster provisioning.
+	// +optional
+	Provisioned *bool `json:"provisioned,omitempty"`
+}
 ```
 
-Once `status.ready` is set, the Cluster "core" controller will bubbles up this info in Cluster's `status.infrastructureReady`;
-If defined, also InfraCluster's `spec.controlPlaneEndpoint` and `status.failureDomains` will be surfaced on Cluster's
-corresponding fields at the same time.
+Once `status.initialization.provisioned` is set the Cluster "core" controller will bubble up this info in Cluster's
+`status.initialization.infrastructureProvisioned`; if defined, also InfraCluster's `spec.controlPlaneEndpoint` 
+and `status.failureDomains` will be surfaced on Cluster's corresponding fields at the same time.
 
 <aside class="note warning">
 
-<h1>Heads up! this will change with the v1beta2 contract</h1>
+<h1>Compatibility with the deprecated v1beta1 contract</h1>
 
-When the v1beta2 contract will be released (tentative Apr 2025), `status.initialization.provisioned` will be used
-instead of `status.ready`. However, `status.ready` will be supported until v1beta1 removal (~one year later).
+In order to ease the transition for providers, the v1beta2 version of the Cluster API contract _temporarily_
+preserves compatibility with the deprecated v1beta1 contract; compatibility will be removed tentatively in April 2027.
 
-See [Improving status in CAPI resources].
+With regards to initialization completed:
+
+Cluster API will continue to temporarily support InfraCluster resource using `status.ready` field to
+report initialization completed.
+
+After compatibility with the deprecated v1beta1 contract will be removed, `status.ready` field in
+the InfraCluster resource will be ignored.
 
 </aside>
 
@@ -306,82 +384,66 @@ According to [Kubernetes API Conventions], Conditions provide a standard mechani
 status reporting from a controller.
 
 Providers implementers SHOULD implement `status.conditions` for their InfraCluster resource.
-In case conditions are implemented, Cluster API condition type MUST be used.
+In case conditions are implemented on a InfraCluster resource, Cluster API will only consider conditions providing the following information:
+- `type` (required)
+- `status` (required, one of True, False, Unknown)
+- `reason` (optional, if omitted a default one will be used)
+- `message` (optional, if omitted an empty message will be used)
+- `lastTransitionTime` (optional, if omitted time.Now will be used)
+- `observedGeneration` (optional, if omitted the generation of the InfraCluster resource will be used)
+
+Other fields will be ignored.
 
 If a condition with type `Ready` exist, such condition will be mirrored in Cluster's `InfrastructureReady` condition.
 
 Please note that the `Ready` condition is expected to surface the status of the InfraCluster during its own entire lifecycle,
 including initial provisioning, the final deletion process, and the period in between these two moments.
 
-See [Cluster API condition proposal] for more context.
+See [Improving status in CAPI resources] for more context.
 
 <aside class="note warning">
 
-<h1>Heads up! this will change with the v1beta2 contract</h1>
+<h1>Compatibility with the deprecated v1beta1 contract</h1>
 
-When the v1beta2 contract will be released (tentative Apr 2025), Cluster API will start using Kubernetes metav1.Condition
-types and fully comply to [Kubernetes API Conventions].
+In order to ease the transition for providers, the v1beta2 version of the Cluster API contract _temporarily_
+preserves compatibility with the deprecated v1beta1 contract; compatibility will be removed tentatively in April 2027.
 
-In order to support providers continuing to use legacy Cluster API condition types, providers transitioning to
-metav1.Condition or even providers adopting custom condition types, Cluster API will start to accept `Ready` condition that
-provides following information:
-- `type`
-- `status`
-- `reason` ((optional, if omitted, a default one will be used)
-- `message` (optional)
-- `lastTransitionTime` (optional, if omitted, time.Now will be used) 
+With regards to conditions:
 
-Other fields will be ignored
+Cluster API will continue to read conditions from providers using deprecated Cluster API condition types.
 
-See [Improving status in CAPI resources] for more context.
-
-Please note that provider that will continue to use legacy Cluster API condition types MUST carefully take into account
-the implication of this choice which are described both in the document above and in the notice at the beginning of the [Cluster API condition proposal]..
+Please note that provider that will continue to use deprecated Cluster API condition types MUST carefully take into account
+the implication of this choice which are described both in the [Cluster API v1.11 migration notes] and in the [Improving status in CAPI resources] proposal.
 
 </aside>
 
 ### InfraCluster: terminal failures
 
-Each InfraCluster SHOULD report when Cluster's enter in a state that cannot be recovered (terminal failure) by
-setting `status.failureReason` and `status.failureMessage` in the InfraCluster resource.
+Starting from the v1beta2 contract version, there is no more special treatment for provider's terminal failures within Cluster API.
 
-```go
-type FooClusterStatus struct {
-    // failureReason will be set in the event that there is a terminal problem reconciling the FooCluster 
-    // and will contain a succinct value suitable for machine interpretation.
-    //
-    // This field should not be set for transitive errors that can be fixed automatically or with manual intervention,
-    // but instead indicate that something is fundamentally wrong with the FooCluster and that it cannot be recovered.
-    // +optional
-    FailureReason *capierrors.ClusterStatusError `json:"failureReason,omitempty"`
-    
-    // failureMessage will be set in the event that there is a terminal problem reconciling the FooCluster
-    // and will contain a more verbose string suitable for logging and human consumption.
-    //
-    // This field should not be set for transitive errors that can be fixed automatically or with manual intervention,
-    // but instead indicate that something is fundamentally wrong with the FooCluster and that it cannot be recovered.
-    // +optional
-    FailureMessage *string `json:"failureMessage,omitempty"`
-    
-    // See other rules for more details about mandatory/optional fields in InfraCluster status.
-    // Other fields SHOULD be added based on the needs of your provider.
-}
-```
+In case necessary, "terminal failures" should be surfaced using conditions, with a well documented type/reason;
+it is up to consumers to treat them accordingly.
 
-Once `status.failureReason` and `status.failureMessage` are set on the InfraCluster resource, the Cluster "core" controller
-will surface those info in the corresponding fields in Cluster's `status`.
-
-Please note that once failureReason/failureMessage is set in Cluster's `status`, the only way to recover is to delete and
-recreate the Cluster (it is a terminal failure).
+See [Improving status in CAPI resources] for more context.
 
 <aside class="note warning">
 
-<h1>Heads up! this will change with the v1beta2 contract</h1>
+<h1>Compatibility with the deprecated v1beta1 contract</h1>
 
-When the v1beta2 contract will be released (tentative Apr 2025), support for `status.failureReason` and `status.failureMessage`
-will be dropped.
+In order to ease the transition for providers, the v1beta2 version of the Cluster API contract _temporarily_
+preserves compatibility with the deprecated v1beta1 contract; compatibility will be removed tentatively in April 2027.
 
-See [Improving status in CAPI resources].
+With regards to terminal failures:
+
+In case an infrastructure provider reports that a InfraCluster resource is in a state that cannot be recovered (terminal failure) by
+setting `status.failureReason` and `status.failureMessage` as defined by the deprecated v1beta1 contract,
+the "core" Cluster controller will surface those info in the corresponding fields in the Cluster's `status.deprecated.v1beta1` struct.
+
+However, those info won't have any impact on the Cluster lifecycle as before (the Cluster controller won't consider the
+presence of `status.failureReason` and `status.failureMessage` info as "terminal failures").
+
+After compatibility with the deprecated v1beta1 contract will be removed, `status.failureReason` and `status.failureMessage`
+fields in the InfraCluster resource will be ignored and Cluster's `status.deprecated.v1beta1` struct will be dropped.
 
 </aside>
 
@@ -411,7 +473,7 @@ type FooClusterTemplateResource struct {
     // Standard object's metadata.
     // More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
     // +optional
-    ObjectMeta clusterv1.ObjectMeta `json:"metadata,omitempty"`
+    ObjectMeta clusterv1.ObjectMeta `json:"metadata,omitempty,omitzero"`
     Spec FooClusterSpec `json:"spec"`
 }
 ```
@@ -501,7 +563,7 @@ is implemented in InfraCluster controllers:
 1. Reconcile provider-specific cluster infrastructure
     1. If any errors are encountered, exit the reconciliation
 1. If the provider created a load balancer for the control plane, record its hostname or IP in `spec.controlPlaneEndpoint`
-1. Set `status.ready` to `true`
+1. Set `status.infrastructure.provisioned` to `true`
 1. Set `status.failureDomains` based on available provider failure domains (optional)
 1. Patch the resource to persist changes
 
@@ -525,7 +587,6 @@ is implemented in InfraCluster controllers:
 [Improving status in CAPI resources]: https://github.com/kubernetes-sigs/cluster-api/blob/main/docs/proposals/20240916-improve-status-in-CAPI-resources.md
 [InfraCluster: conditions]: #infracluster-conditions
 [Kubernetes API Conventions]: https://github.com/kubernetes/community/blob/master/contributors/devel/sig-architecture/api-conventions.md#typical-status-properties
-[Cluster API condition proposal]: https://github.com/kubernetes-sigs/cluster-api/blob/main/docs/proposals/20200506-conditions.md
 [InfraCluster: terminal failures]: #infracluster-terminal-failures
 [InfraClusterTemplate, InfraClusterTemplateList resource definition]: #infraclustertemplate-infraclustertemplatelist-resource-definition
 [Externally managed infrastructure]: #externally-managed-infrastructure
@@ -537,3 +598,4 @@ is implemented in InfraCluster controllers:
 [implementation best practices]: ../best-practices.md
 [infrastructure Provider Security Guidance]: ../security-guidelines.md
 [InfraCluster: pausing]: #infracluster-pausing
+[Cluster API v1.11 migration notes]: ../migrations/v1.10-to-v1.11.md

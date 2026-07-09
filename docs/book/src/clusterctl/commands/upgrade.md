@@ -34,7 +34,7 @@ You can now apply the upgrade by executing the following command:
    clusterctl upgrade apply --contract v1beta1
 ```
 
-The output contains the latest release available for each API Version of Cluster API (contract)
+The output contains the latest release available for each Cluster API contract version.
 available at the moment.
 
 <aside class="note">
@@ -77,18 +77,13 @@ clusterctl upgrade apply \
 
 <aside class="note warning">
 
-<h1>Clusterctl upgrade test coverage</h1>
+<h1>Skip upgrades</h1>
 
-Cluster API only tests a subset of possible clusterctl upgrade paths as otherwise the test matrix would be overwhelming.
-Untested upgrade paths are not blocked by clusterctl and should work in general, but users
-intending to perform an upgrade path not tested by us should do their own validation to ensure the operation works correctly.
+Please check providers documentation before performing skip upgrades (skip minor versions).
+Not supported skip upgrades might lead to non functional management clusters. 
 
-The following is an example of the tested upgrade paths for v1.7:
-
-| From | To   | Note                         |
-|------|------|------------------------------|
-| v1.5 | v1.7 | n-2 --> n (v1.5 is v1.7 - 2) |
-| v1.6 | v1.7 | n-1 --> n (v1.6 is v1.7 - 1) |
+For Core provider, Kubeadm bootstrap provider, Kubeadm control plane provider and Docker infrastructure provider
+please look at [skip upgrades](../../reference/versions.md#skip-upgrades) rules.
 
 </aside>
 

@@ -51,7 +51,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/kustomize/api/types"
 
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
+	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	clusterctlv1 "sigs.k8s.io/cluster-api/cmd/clusterctl/api/v1alpha3"
 	"sigs.k8s.io/cluster-api/cmd/clusterctl/client/cluster"
 	"sigs.k8s.io/cluster-api/cmd/clusterctl/client/config"
@@ -71,7 +71,7 @@ const (
 
 var (
 	// Defines the default version to be used for the provider CR if no version is specified in the tilt-provider.yaml|json file.
-	defaultProviderVersion = "v1.10.99"
+	defaultProviderVersion = "v1.14.99"
 
 	// This data struct mirrors a subset of info from the providers struct in the tilt file
 	// which is containing "hard-coded" tilt-provider.yaml files for the providers managed in the Cluster API repository.
@@ -90,10 +90,6 @@ var (
 		},
 		"docker": {
 			Context:           ptr.To("test/infrastructure/docker"),
-			hardCodedProvider: true,
-		},
-		"in-memory": {
-			Context:           ptr.To("test/infrastructure/inmemory"),
 			hardCodedProvider: true,
 		},
 		"test-extension": {
@@ -119,6 +115,7 @@ type tiltSettings struct {
 	AllowedContexts          []string                           `json:"allowed_contexts,omitempty"`
 	ProviderRepos            []string                           `json:"provider_repos,omitempty"`
 	AdditionalKustomizations map[string]string                  `json:"additional_kustomizations,omitempty"`
+	PreloadImages            *bool                              `json:"preload_images,omitempty"`
 }
 
 type tiltSettingsDebugConfig struct {
@@ -149,7 +146,7 @@ type tiltProviderConfig struct {
 }
 
 func init() {
-	cmd := exec.Command("git", "rev-parse", "--show-toplevel")
+	cmd := exec.Command("git", "rev-parse", "--show-toplevel") //nolint:noctx // init() does not have a context.
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -302,9 +299,15 @@ func tiltResources(ctx context.Context, ts *tiltSettings) error {
 		// The images can only be preloaded when the cluster is a kind cluster.
 		// Note: Not repeating the validation on the config already done in allowK8sConfig here.
 		if strings.HasPrefix(cfg.Contexts[cfg.CurrentContext].Cluster, "kind-") {
-			tasks["cert-manager-cainjector"] = preLoadImageTask(fmt.Sprintf("quay.io/jetstack/cert-manager-cainjector:%s", config.CertManagerDefaultVersion))
-			tasks["cert-manager-webhook"] = preLoadImageTask(fmt.Sprintf("quay.io/jetstack/cert-manager-webhook:%s", config.CertManagerDefaultVersion))
-			tasks["cert-manager-controller"] = preLoadImageTask(fmt.Sprintf("quay.io/jetstack/cert-manager-controller:%s", config.CertManagerDefaultVersion))
+			preloadImages := true
+			if ts.PreloadImages != nil {
+				preloadImages = *ts.PreloadImages
+			}
+			if preloadImages {
+				tasks["cert-manager-cainjector"] = preLoadImageTask(fmt.Sprintf("quay.io/jetstack/cert-manager-cainjector:%s", config.CertManagerDefaultVersion))
+				tasks["cert-manager-webhook"] = preLoadImageTask(fmt.Sprintf("quay.io/jetstack/cert-manager-webhook:%s", config.CertManagerDefaultVersion))
+				tasks["cert-manager-controller"] = preLoadImageTask(fmt.Sprintf("quay.io/jetstack/cert-manager-controller:%s", config.CertManagerDefaultVersion))
+			}
 		}
 		tasks["cert-manager"] = certManagerTask()
 	}
@@ -526,7 +529,7 @@ func runTask(ctx context.Context, wg *sync.WaitGroup, prefix string, f taskFunct
 // makeTask generates a task for invoking a make target.
 func makeTask(name string) taskFunction {
 	return func(ctx context.Context, prefix string, errCh chan error) {
-		cmd := exec.CommandContext(ctx, "make", name)
+		cmd := exec.CommandContext(ctx, "make", name) //nolint:gosec // No security issue: variable is safe.
 
 		var stderr bytes.Buffer
 		cmd.Dir = rootPath
@@ -537,9 +540,13 @@ func makeTask(name string) taskFunction {
 	}
 }
 
-// preLoadImageTask generates a task for pre-loading an image into kind.
 func preLoadImageTask(image string) taskFunction {
 	return func(ctx context.Context, prefix string, errCh chan error) {
+		// Note: `kind load docker-image` can fail for multi-arch images like cert-manager on some
+		// configurations (e.g. Apple Silicon, Docker CE >= v29) due to
+		// https://github.com/kubernetes-sigs/kind/issues/3795.
+		// In such cases, users can disable preloading via tilt-settings.yaml and let the
+		// Kubelet pull images on-demand.
 		docker, err := container.NewDockerClient()
 		if err != nil {
 			errCh <- errors.Wrapf(err, "[%s] failed to create docker client", prefix)
@@ -560,7 +567,7 @@ func preLoadImageTask(image string) taskFunction {
 		// set command to use capi cluster name
 		namecmd := fmt.Sprintf("--name=%s", name)
 
-		cmd := exec.CommandContext(ctx, //nolint:gosec
+		cmd := exec.CommandContext(ctx, //nolint:gosec // G204: namecmd and image are trusted internal values, not user input.
 			"kind",
 			"load",
 			"docker-image",
@@ -674,7 +681,7 @@ func cleanupChartTask(path string) taskFunction {
 // kustomizeTask generates a task for running kustomize build on a path and saving the output on a file.
 func kustomizeTask(path, out string) taskFunction {
 	return func(ctx context.Context, prefix string, errCh chan error) {
-		cmd := exec.CommandContext(ctx,
+		cmd := exec.CommandContext(ctx, //nolint:gosec // No security issue: variable is safe.
 			kustomizePath,
 			"build",
 			path,
@@ -705,7 +712,7 @@ func kustomizeTask(path, out string) taskFunction {
 // and adding the workload resource mimicking what clusterctl init does.
 func workloadTask(name, workloadType, binaryName, containerName string, liveReloadDeps []string, debugConfig *tiltSettingsDebugConfig, extraArgs tiltSettingsExtraArgs, hardCodedProvider bool, path string, options []string, getAdditionalObject func(string, []unstructured.Unstructured) (*unstructured.Unstructured, error)) taskFunction {
 	return func(ctx context.Context, prefix string, errCh chan error) {
-		args := []string{"build"}
+		args := []string{"build"} //nolint:prealloc
 		args = append(args, options...)
 		args = append(args, path)
 		kustomizeCmd := exec.CommandContext(ctx, kustomizePath, args...)
@@ -951,10 +958,6 @@ func getProviderObj(version *string) func(prefix string, objs []unstructured.Uns
 		}
 
 		provider := &clusterctlv1.Provider{
-			TypeMeta: metav1.TypeMeta{
-				Kind:       "Provider",
-				APIVersion: clusterctlv1.GroupVersion.String(),
-			},
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      manifestLabel,
 				Namespace: namespace,

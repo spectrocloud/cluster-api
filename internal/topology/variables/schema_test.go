@@ -25,7 +25,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	"k8s.io/utils/ptr"
 
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
+	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 )
 
 func Test_convertToAPIExtensionsJSONSchemaProps(t *testing.T) {
@@ -46,9 +46,9 @@ func Test_convertToAPIExtensionsJSONSchemaProps(t *testing.T) {
 				MinLength:        ptr.To[int64](2),
 				Pattern:          "abc.*",
 				Maximum:          ptr.To[int64](43),
-				ExclusiveMaximum: true,
+				ExclusiveMaximum: ptr.To(true),
 				Minimum:          ptr.To[int64](1),
-				ExclusiveMinimum: false,
+				ExclusiveMinimum: ptr.To(false),
 				OneOf: []clusterv1.JSONSchemaProps{{
 					Required: []string{"property1", "property2"},
 				}, {
@@ -380,7 +380,7 @@ func Test_convertToAPIExtensionsJSONSchemaProps(t *testing.T) {
 			name: "pass for schema validation with XIntOrString",
 			schema: &clusterv1.JSONSchemaProps{
 				Items: &clusterv1.JSONSchemaProps{
-					XIntOrString: true,
+					XIntOrString: ptr.To(true),
 					AnyOf: []clusterv1.JSONSchemaProps{{
 						Type: "integer",
 					}, {

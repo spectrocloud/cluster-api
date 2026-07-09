@@ -34,13 +34,12 @@ import (
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
-	bootstrapv1 "sigs.k8s.io/cluster-api/bootstrap/kubeadm/api/v1beta1"
+	addonsv1 "sigs.k8s.io/cluster-api/api/addons/v1beta2"
+	bootstrapv1 "sigs.k8s.io/cluster-api/api/bootstrap/kubeadm/v1beta2"
+	controlplanev1 "sigs.k8s.io/cluster-api/api/controlplane/kubeadm/v1beta2"
+	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	clusterctlcluster "sigs.k8s.io/cluster-api/cmd/clusterctl/client/cluster"
-	controlplanev1 "sigs.k8s.io/cluster-api/controlplane/kubeadm/api/v1beta1"
-	addonsv1 "sigs.k8s.io/cluster-api/exp/addons/api/v1beta1"
-	expv1 "sigs.k8s.io/cluster-api/exp/api/v1beta1"
-	infraexpv1 "sigs.k8s.io/cluster-api/test/infrastructure/docker/exp/api/v1beta1"
+	infrav1 "sigs.k8s.io/cluster-api/test/infrastructure/docker/api/v1beta2"
 	"sigs.k8s.io/cluster-api/util/patch"
 )
 
@@ -199,7 +198,7 @@ var (
 	clusterResourceSetBindingKind = "ClusterResourceSetBinding"
 	machinePoolKind               = "MachinePool"
 
-	machinePoolController = metav1.OwnerReference{Kind: machinePoolKind, APIVersion: expv1.GroupVersion.String(), Controller: ptr.To(true)}
+	machinePoolController = metav1.OwnerReference{Kind: machinePoolKind, APIVersion: clusterv1.GroupVersion.String(), Controller: ptr.To(true)}
 
 	clusterResourceSetOwner = metav1.OwnerReference{Kind: clusterResourceSetKind, APIVersion: addonsv1.GroupVersion.String()}
 )
@@ -258,15 +257,24 @@ var (
 // OwnerReferences aren't as expected.
 // Note: These relationships are documented in https://github.com/kubernetes-sigs/cluster-api/tree/main/docs/book/src/reference/owner_references.md.
 // That document should be updated if these references change.
-var KubeadmControlPlaneOwnerReferenceAssertions = map[string]func(types.NamespacedName, []metav1.OwnerReference) error{
-	kubeadmControlPlaneKind: func(_ types.NamespacedName, owners []metav1.OwnerReference) error {
-		// The KubeadmControlPlane must be owned and controlled by a Cluster.
-		return HasExactOwners(owners, clusterController)
-	},
-	kubeadmControlPlaneTemplateKind: func(_ types.NamespacedName, owners []metav1.OwnerReference) error {
-		// The KubeadmControlPlaneTemplate must be owned by a ClusterClass.
-		return HasExactOwners(owners, clusterClassOwner)
-	},
+// When topologyManaged is true, KubeadmControlPlane must be owned and controlled by a Cluster (controller: true).
+// When topologyManaged is false, KubeadmControlPlane is owned but not controlled by a Cluster (controller: false).
+func KubeadmControlPlaneOwnerReferenceAssertions(topologyManaged bool) map[string]func(types.NamespacedName, []metav1.OwnerReference) error {
+	kcpOwnerRef := clusterOwner
+	if topologyManaged {
+		kcpOwnerRef = clusterController
+	}
+	return map[string]func(types.NamespacedName, []metav1.OwnerReference) error{
+		kubeadmControlPlaneKind: func(_ types.NamespacedName, owners []metav1.OwnerReference) error {
+			// The KubeadmControlPlane must be owned and controlled by a Cluster when topology is defined.
+			// Without topology, it's owned but not controlled by a Cluster.
+			return HasExactOwners(owners, kcpOwnerRef)
+		},
+		kubeadmControlPlaneTemplateKind: func(_ types.NamespacedName, owners []metav1.OwnerReference) error {
+			// The KubeadmControlPlaneTemplate must be owned by a ClusterClass.
+			return HasExactOwners(owners, clusterClassOwner)
+		},
+	}
 }
 
 // Owners and kinds for types in the Kubeadm Bootstrap package.
@@ -293,53 +301,63 @@ var KubeadmBootstrapOwnerReferenceAssertions = map[string]func(types.NamespacedN
 	},
 }
 
-// Kinds for types in the Docker infrastructure package.
+// Kinds for types in the Dev infrastructure package.
 var (
-	dockerMachineKind             = "DockerMachine"
-	dockerMachineTemplateKind     = "DockerMachineTemplate"
-	dockerMachinePoolKind         = "DockerMachinePool"
-	dockerMachinePoolTemplateKind = "DockerMachinePoolTemplate"
-	dockerClusterKind             = "DockerCluster"
-	dockerClusterTemplateKind     = "DockerClusterTemplate"
+	devMachineKind             = "DevMachine"
+	devMachineTemplateKind     = "DevMachineTemplate"
+	devMachinePoolKind         = "DevMachinePool"
+	devMachinePoolTemplateKind = "DevMachinePoolTemplate"
+	devClusterKind             = "DevCluster"
+	devClusterTemplateKind     = "DevClusterTemplate"
 
-	dockerMachinePoolController = metav1.OwnerReference{Kind: dockerMachinePoolKind, APIVersion: infraexpv1.GroupVersion.String()}
+	devMachinePoolController = metav1.OwnerReference{Kind: devMachinePoolKind, APIVersion: infrav1.GroupVersion.String()}
 )
 
-// DockerInfraOwnerReferenceAssertions maps Docker Infrastructure types to functions which return an error if the passed
+// DevInfraOwnerReferenceAssertions maps Dev Infrastructure types to functions which return an error if the passed
 // OwnerReferences aren't as expected.
 // Note: These relationships are documented in https://github.com/kubernetes-sigs/cluster-api/tree/main/docs/book/src/reference/owner_references.md.
 // That document should be updated if these references change.
-var DockerInfraOwnerReferenceAssertions = map[string]func(types.NamespacedName, []metav1.OwnerReference) error{
-	dockerMachineKind: func(_ types.NamespacedName, owners []metav1.OwnerReference) error {
-		// The DockerMachine must be owned and controlled by a Machine or a DockerMachinePool.
-		return HasOneOfExactOwners(owners, []metav1.OwnerReference{machineController}, []metav1.OwnerReference{machineController, dockerMachinePoolController})
-	},
-	dockerMachineTemplateKind: func(_ types.NamespacedName, owners []metav1.OwnerReference) error {
-		// Base DockerMachineTemplates referenced in a ClusterClass must be owned by the ClusterClass.
-		// DockerMachineTemplates created for specific Clusters in the Topology controller must be owned by a Cluster.
-		return HasOneOfExactOwners(owners, []metav1.OwnerReference{clusterOwner}, []metav1.OwnerReference{clusterClassOwner})
-	},
-	dockerClusterKind: func(_ types.NamespacedName, owners []metav1.OwnerReference) error {
-		// DockerCluster must be owned and controlled by a Cluster.
-		return HasExactOwners(owners, clusterController)
-	},
-	dockerClusterTemplateKind: func(_ types.NamespacedName, owners []metav1.OwnerReference) error {
-		// DockerClusterTemplate must be owned by a ClusterClass.
-		return HasExactOwners(owners, clusterClassOwner)
-	},
-	dockerMachinePoolKind: func(_ types.NamespacedName, owners []metav1.OwnerReference) error {
-		// DockerMachinePool must be owned and controlled by a MachinePool.
-		return HasExactOwners(owners, machinePoolController, clusterOwner)
-	},
-	dockerMachinePoolTemplateKind: func(_ types.NamespacedName, owners []metav1.OwnerReference) error {
-		// DockerMachinePoolTemplate must be owned by a ClusterClass.
-		return HasExactOwners(owners, clusterClassOwner)
-	},
+// When topologyManaged is true, DevCluster must be owned and controlled by a Cluster (controller: true).
+// When topologyManaged is false, DevCluster is owned but not controlled by a Cluster (controller: false).
+func DevInfraOwnerReferenceAssertions(topologyManaged bool) map[string]func(types.NamespacedName, []metav1.OwnerReference) error {
+	clusterOwnerRef := clusterOwner
+	if topologyManaged {
+		clusterOwnerRef = clusterController
+	}
+
+	return map[string]func(types.NamespacedName, []metav1.OwnerReference) error{
+		devMachineKind: func(_ types.NamespacedName, owners []metav1.OwnerReference) error {
+			// The DevMachine must be owned and controlled by a Machine or a DevMachinePool.
+			return HasOneOfExactOwners(owners, []metav1.OwnerReference{machineController}, []metav1.OwnerReference{machineController, devMachinePoolController})
+		},
+		devMachineTemplateKind: func(_ types.NamespacedName, owners []metav1.OwnerReference) error {
+			// Base DevMachineTemplates referenced in a ClusterClass must be owned by the ClusterClass.
+			// DevMachineTemplates created for specific Clusters in the Topology controller must be owned by a Cluster.
+			return HasOneOfExactOwners(owners, []metav1.OwnerReference{clusterOwner}, []metav1.OwnerReference{clusterClassOwner})
+		},
+		devClusterKind: func(_ types.NamespacedName, owners []metav1.OwnerReference) error {
+			// DevCluster must be owned and controlled by a Cluster when topology is defined.
+			// Without topology, it's owned but not controlled by a Cluster.
+			return HasExactOwners(owners, clusterOwnerRef)
+		},
+		devClusterTemplateKind: func(_ types.NamespacedName, owners []metav1.OwnerReference) error {
+			// DevClusterTemplate must be owned by a ClusterClass.
+			return HasExactOwners(owners, clusterClassOwner)
+		},
+		devMachinePoolKind: func(_ types.NamespacedName, owners []metav1.OwnerReference) error {
+			// DevMachinePool must be owned and controlled by a MachinePool.
+			return HasExactOwners(owners, machinePoolController, clusterOwner)
+		},
+		devMachinePoolTemplateKind: func(_ types.NamespacedName, owners []metav1.OwnerReference) error {
+			// DevMachinePoolTemplate must be owned by a ClusterClass.
+			return HasExactOwners(owners, clusterClassOwner)
+		},
+	}
 }
 
 func HasExactOwners(gotOwners []metav1.OwnerReference, wantOwners ...metav1.OwnerReference) error {
-	wantComparable := []string{}
-	gotComparable := []string{}
+	wantComparable := make([]string, 0, len(wantOwners))
+	gotComparable := make([]string, 0, len(gotOwners))
 	for _, ref := range gotOwners {
 		gotComparable = append(gotComparable, ownerReferenceString(ref))
 	}
@@ -356,7 +374,7 @@ func HasExactOwners(gotOwners []metav1.OwnerReference, wantOwners ...metav1.Owne
 }
 
 func ownerReferenceString(ref metav1.OwnerReference) string {
-	controller := false
+	var controller bool
 	if ref.Controller != nil && *ref.Controller {
 		controller = true
 	}
@@ -392,7 +410,7 @@ func forceClusterClassReconcile(ctx context.Context, cli client.Client, clusterK
 	cluster := &clusterv1.Cluster{}
 	Expect(cli.Get(ctx, clusterKey, cluster)).To(Succeed())
 
-	if cluster.Spec.Topology != nil {
+	if cluster.Spec.Topology.IsDefined() {
 		class := &clusterv1.ClusterClass{}
 		Expect(cli.Get(ctx, cluster.GetClassKey(), class)).To(Succeed())
 		annotationPatch := client.RawPatch(types.MergePatchType, []byte(fmt.Sprintf("{\"metadata\":{\"annotations\":{\"cluster.x-k8s.io/modifiedAt\":\"%v\"}}}", time.Now().Format(time.RFC3339))))
@@ -424,7 +442,7 @@ func changeOwnerReferencesAPIVersion(ctx context.Context, proxy ClusterProxy, na
 		helper, err := patch.NewHelper(obj, proxy.GetClient())
 		Expect(err).ToNot(HaveOccurred())
 
-		newOwners := []metav1.OwnerReference{}
+		newOwners := make([]metav1.OwnerReference, 0, len(obj.GetOwnerReferences()))
 		for _, owner := range obj.GetOwnerReferences() {
 			gv, err := schema.ParseGroupVersion(owner.APIVersion)
 			Expect(err).To(Succeed())

@@ -19,16 +19,26 @@ limitations under the License.
 package upstreamv1beta3
 
 import (
+	"reflect"
 	"testing"
+	"time"
 
-	fuzz "github.com/google/gofuzz"
 	. "github.com/onsi/gomega"
 	"k8s.io/apimachinery/pkg/api/apitesting/fuzzer"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	runtimeserializer "k8s.io/apimachinery/pkg/runtime/serializer"
+	"k8s.io/utils/ptr"
+	"sigs.k8s.io/randfill"
 
-	bootstrapv1 "sigs.k8s.io/cluster-api/bootstrap/kubeadm/api/v1beta1"
-	utilconversion "sigs.k8s.io/cluster-api/util/conversion"
+	bootstrapv1 "sigs.k8s.io/cluster-api/api/bootstrap/kubeadm/v1beta2"
+	"sigs.k8s.io/cluster-api/bootstrap/kubeadm/types/upstreamhub"
+	conversionutil "sigs.k8s.io/cluster-api/util/conversion"
+)
+
+const (
+	fakeID     = "abcdef"
+	fakeSecret = "abcdef0123456789"
 )
 
 // Test is disabled when the race detector is enabled (via "//go:build !race" above) because otherwise the fuzz tests would just time out.
@@ -36,28 +46,27 @@ import (
 func TestFuzzyConversion(t *testing.T) {
 	g := NewWithT(t)
 	scheme := runtime.NewScheme()
-	g.Expect(AddToScheme(scheme)).To(Succeed())
 	g.Expect(bootstrapv1.AddToScheme(scheme)).To(Succeed())
 
-	t.Run("for ClusterConfiguration", utilconversion.FuzzTestFunc(utilconversion.FuzzTestFuncInput{
+	t.Run("for ClusterConfiguration", conversionutil.FuzzTestFunc(conversionutil.FuzzTestFuncInput{
 		Scheme: scheme,
-		Hub:    &bootstrapv1.ClusterConfiguration{},
+		Hub:    &upstreamhub.ClusterConfiguration{},
 		Spoke:  &ClusterConfiguration{},
 		// NOTE: Kubeadm types does not have ObjectMeta, so we are required to skip data annotation cleanup in the spoke-hub-spoke round trip test.
 		SkipSpokeAnnotationCleanup: true,
-		FuzzerFuncs:                []fuzzer.FuzzerFuncs{fuzzFuncs},
+		FuzzerFuncs:                []fuzzer.FuzzerFuncs{fuzzFuncs, clusterConfigurationFuzzFuncs},
 	}))
-	t.Run("for InitConfiguration", utilconversion.FuzzTestFunc(utilconversion.FuzzTestFuncInput{
+	t.Run("for InitConfiguration", conversionutil.FuzzTestFunc(conversionutil.FuzzTestFuncInput{
 		Scheme: scheme,
-		Hub:    &bootstrapv1.InitConfiguration{},
+		Hub:    &upstreamhub.InitConfiguration{},
 		Spoke:  &InitConfiguration{},
 		// NOTE: Kubeadm types does not have ObjectMeta, so we are required to skip data annotation cleanup in the spoke-hub-spoke round trip test.
 		SkipSpokeAnnotationCleanup: true,
-		FuzzerFuncs:                []fuzzer.FuzzerFuncs{fuzzFuncs},
+		FuzzerFuncs:                []fuzzer.FuzzerFuncs{fuzzFuncs, initConfigurationFuzzFuncs},
 	}))
-	t.Run("for JoinConfiguration", utilconversion.FuzzTestFunc(utilconversion.FuzzTestFuncInput{
+	t.Run("for JoinConfiguration", conversionutil.FuzzTestFunc(conversionutil.FuzzTestFuncInput{
 		Scheme: scheme,
-		Hub:    &bootstrapv1.JoinConfiguration{},
+		Hub:    &upstreamhub.JoinConfiguration{},
 		Spoke:  &JoinConfiguration{},
 		// NOTE: Kubeadm types does not have ObjectMeta, so we are required to skip data annotation cleanup in the spoke-hub-spoke round trip test.
 		SkipSpokeAnnotationCleanup: true,
@@ -67,14 +76,34 @@ func TestFuzzyConversion(t *testing.T) {
 
 func fuzzFuncs(_ runtimeserializer.CodecFactory) []interface{} {
 	return []interface{}{
-		initConfigurationFuzzer,
-		joinConfigurationFuzzer,
-		bootstrapv1JoinConfigurationFuzzer,
-		nodeRegistrationOptionsFuzzer,
-		joinControlPlanesFuzzer,
-		bootstrapv1ControlPlaneComponentFuzzer,
-		bootstrapv1LocalEtcdFuzzer,
-		bootstrapv1NodeRegistrationOptionsFuzzer,
+		spokeInitConfigurationFuzzer,
+		spokeJoinConfigurationFuzzer,
+		spokeAPIServerFuzzer,
+		hubJoinConfigurationFuzzer,
+		spokeNodeRegistrationOptionsFuzzer,
+		spokeJoinControlPlanesFuzzer,
+		hubInitConfigurationFuzzer,
+		hubAPIServerFuzzer,
+		hubControllerManagerFuzzer,
+		hubSchedulerFuzzer,
+		hubLocalEtcdFuzzer,
+		hubNodeRegistrationOptionsFuzzer,
+		hubHostPathMountFuzzer,
+		hubBootstrapTokenDiscoveryFuzzer,
+		hubClusterConfigurationFuzzer,
+	}
+}
+
+func clusterConfigurationFuzzFuncs(_ runtimeserializer.CodecFactory) []interface{} {
+	return []interface{}{
+		spokeClusterConfigurationFuzzer,
+	}
+}
+
+func initConfigurationFuzzFuncs(_ runtimeserializer.CodecFactory) []interface{} {
+	return []interface{}{
+		spokeBootstrapToken,
+		spokeBootstrapTokenString,
 	}
 }
 
@@ -82,57 +111,194 @@ func fuzzFuncs(_ runtimeserializer.CodecFactory) []interface{} {
 // NOTES:
 // - When fields do not exist in cabpk v1beta1 types, pinning it to avoid kubeadm v1beta3 --> cabpk v1beta1 --> kubeadm v1beta3 round trip errors.
 
-func initConfigurationFuzzer(obj *InitConfiguration, c fuzz.Continue) {
-	c.Fuzz(obj)
+func spokeClusterConfigurationFuzzer(in *ClusterConfiguration, c randfill.Continue) {
+	c.FillNoCustom(in)
 
-	obj.CertificateKey = ""
-	obj.SkipPhases = nil
-}
+	// Drop the following fields as they have been removed in v1beta2, so we don't have to preserve them.
+	in.Networking.ServiceSubnet = ""
+	in.Networking.PodSubnet = ""
+	in.Networking.DNSDomain = ""
+	in.KubernetesVersion = ""
+	in.ClusterName = ""
 
-func joinConfigurationFuzzer(obj *JoinConfiguration, c fuzz.Continue) {
-	c.Fuzz(obj)
-
-	obj.SkipPhases = nil
-}
-
-func bootstrapv1JoinConfigurationFuzzer(obj *bootstrapv1.JoinConfiguration, c fuzz.Continue) {
-	c.FuzzNoCustom(obj)
-
-	if obj.Discovery.File != nil {
-		obj.Discovery.File.KubeConfig = nil
+	if in.Etcd.Local != nil && reflect.DeepEqual(in.Etcd.Local, &LocalEtcd{}) {
+		in.Etcd.Local = nil
+	}
+	if in.Etcd.External != nil && reflect.DeepEqual(in.Etcd.External, &ExternalEtcd{}) {
+		in.Etcd.External = nil
 	}
 }
 
-func nodeRegistrationOptionsFuzzer(obj *NodeRegistrationOptions, c fuzz.Continue) {
-	c.FuzzNoCustom(obj)
+func spokeInitConfigurationFuzzer(obj *InitConfiguration, c randfill.Continue) {
+	c.FillNoCustom(obj)
+
+	obj.CertificateKey = ""
+	obj.SkipPhases = nil
+
+	if obj.Patches != nil && reflect.DeepEqual(obj.Patches, &Patches{}) {
+		obj.Patches = nil
+	}
+}
+
+func spokeJoinConfigurationFuzzer(obj *JoinConfiguration, c randfill.Continue) {
+	c.FillNoCustom(obj)
+
+	obj.SkipPhases = nil
+	if obj.Discovery.Timeout != nil {
+		obj.Discovery.Timeout = ptr.To[metav1.Duration](metav1.Duration{Duration: time.Duration(c.Int31()) * time.Second})
+	}
+	if obj.Discovery.File != nil && reflect.DeepEqual(obj.Discovery.File, &FileDiscovery{}) {
+		obj.Discovery.File = nil
+	}
+	if obj.Patches != nil && reflect.DeepEqual(obj.Patches, &Patches{}) {
+		obj.Patches = nil
+	}
+}
+
+func spokeAPIServerFuzzer(obj *APIServer, c randfill.Continue) {
+	c.FillNoCustom(obj)
+
+	obj.TimeoutForControlPlane = nil
+}
+
+func hubJoinConfigurationFuzzer(obj *bootstrapv1.JoinConfiguration, c randfill.Continue) {
+	c.FillNoCustom(obj)
+
+	obj.Discovery.File.KubeConfig = bootstrapv1.FileDiscoveryKubeConfig{}
+	if obj.Timeouts.TLSBootstrapSeconds != nil {
+		obj.Timeouts = bootstrapv1.Timeouts{TLSBootstrapSeconds: obj.Timeouts.TLSBootstrapSeconds}
+	} else {
+		obj.Timeouts = bootstrapv1.Timeouts{}
+	}
+
+	for i, arg := range obj.NodeRegistration.KubeletExtraArgs {
+		if arg.Value == nil {
+			arg.Value = ptr.To("")
+		}
+		obj.NodeRegistration.KubeletExtraArgs[i] = arg
+	}
+}
+
+func spokeNodeRegistrationOptionsFuzzer(obj *NodeRegistrationOptions, c randfill.Continue) {
+	c.FillNoCustom(obj)
 
 	obj.IgnorePreflightErrors = nil
 }
 
-func joinControlPlanesFuzzer(obj *JoinControlPlane, c fuzz.Continue) {
-	c.FuzzNoCustom(obj)
+func spokeJoinControlPlanesFuzzer(obj *JoinControlPlane, c randfill.Continue) {
+	c.FillNoCustom(obj)
 
 	obj.CertificateKey = ""
 }
 
-// Custom fuzzers for CABPK v1beta1 types.
-// NOTES:
-// - When fields do not exist in kubeadm v1beta4 types, pinning them to avoid cabpk v1beta1 --> kubeadm v1beta4 --> cabpk v1beta1 round trip errors.
+func spokeBootstrapToken(in *BootstrapToken, c randfill.Continue) {
+	c.FillNoCustom(in)
 
-func bootstrapv1ControlPlaneComponentFuzzer(obj *bootstrapv1.ControlPlaneComponent, c fuzz.Continue) {
-	c.FuzzNoCustom(obj)
+	if in.TTL != nil {
+		in.TTL = ptr.To[metav1.Duration](metav1.Duration{Duration: time.Duration(c.Int31()) * time.Second})
+	}
+	if reflect.DeepEqual(in.Expires, &metav1.Time{}) {
+		in.Expires = nil
+	}
+}
+
+func spokeBootstrapTokenString(in *BootstrapTokenString, _ randfill.Continue) {
+	in.ID = fakeID
+	in.Secret = fakeSecret
+}
+
+func hubAPIServerFuzzer(obj *bootstrapv1.APIServer, c randfill.Continue) {
+	c.FillNoCustom(obj)
 
 	obj.ExtraEnvs = nil
 }
 
-func bootstrapv1LocalEtcdFuzzer(obj *bootstrapv1.LocalEtcd, c fuzz.Continue) {
-	c.FuzzNoCustom(obj)
+func hubControllerManagerFuzzer(obj *bootstrapv1.ControllerManager, c randfill.Continue) {
+	c.FillNoCustom(obj)
 
 	obj.ExtraEnvs = nil
 }
 
-func bootstrapv1NodeRegistrationOptionsFuzzer(obj *bootstrapv1.NodeRegistrationOptions, c fuzz.Continue) {
-	c.FuzzNoCustom(obj)
+func hubSchedulerFuzzer(obj *bootstrapv1.Scheduler, c randfill.Continue) {
+	c.FillNoCustom(obj)
+
+	obj.ExtraEnvs = nil
+}
+
+func hubLocalEtcdFuzzer(obj *bootstrapv1.LocalEtcd, c randfill.Continue) {
+	c.FillNoCustom(obj)
+
+	obj.ExtraEnvs = nil
+}
+
+func hubNodeRegistrationOptionsFuzzer(obj *bootstrapv1.NodeRegistrationOptions, c randfill.Continue) {
+	c.FillNoCustom(obj)
 
 	obj.ImagePullSerial = nil
+
+	if obj.Taints != nil && *obj.Taints == nil {
+		obj.Taints = nil
+	}
+}
+
+func hubInitConfigurationFuzzer(obj *bootstrapv1.InitConfiguration, c randfill.Continue) {
+	c.FillNoCustom(obj)
+
+	obj.Timeouts = bootstrapv1.Timeouts{}
+
+	for i, arg := range obj.NodeRegistration.KubeletExtraArgs {
+		if arg.Value == nil {
+			arg.Value = ptr.To("")
+		}
+		obj.NodeRegistration.KubeletExtraArgs[i] = arg
+	}
+}
+
+func hubHostPathMountFuzzer(obj *bootstrapv1.HostPathMount, c randfill.Continue) {
+	c.FillNoCustom(obj)
+
+	if obj.ReadOnly == nil {
+		obj.ReadOnly = ptr.To(false)
+	}
+}
+
+func hubBootstrapTokenDiscoveryFuzzer(obj *bootstrapv1.BootstrapTokenDiscovery, c randfill.Continue) {
+	c.FillNoCustom(obj)
+
+	if obj.UnsafeSkipCAVerification == nil {
+		obj.UnsafeSkipCAVerification = ptr.To(false)
+	}
+}
+
+func hubClusterConfigurationFuzzer(obj *bootstrapv1.ClusterConfiguration, c randfill.Continue) {
+	c.FillNoCustom(obj)
+
+	obj.CertificateValidityPeriodDays = 0
+	obj.CACertificateValidityPeriodDays = 0
+	obj.EncryptionAlgorithm = ""
+
+	for i, arg := range obj.APIServer.ExtraArgs {
+		if arg.Value == nil {
+			arg.Value = ptr.To("")
+		}
+		obj.APIServer.ExtraArgs[i] = arg
+	}
+	for i, arg := range obj.ControllerManager.ExtraArgs {
+		if arg.Value == nil {
+			arg.Value = ptr.To("")
+		}
+		obj.ControllerManager.ExtraArgs[i] = arg
+	}
+	for i, arg := range obj.Scheduler.ExtraArgs {
+		if arg.Value == nil {
+			arg.Value = ptr.To("")
+		}
+		obj.Scheduler.ExtraArgs[i] = arg
+	}
+	for i, arg := range obj.Etcd.Local.ExtraArgs {
+		if arg.Value == nil {
+			arg.Value = ptr.To("")
+		}
+		obj.Etcd.Local.ExtraArgs[i] = arg
+	}
 }

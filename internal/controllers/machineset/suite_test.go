@@ -28,23 +28,20 @@ import (
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/selection"
 	"k8s.io/apimachinery/pkg/util/uuid"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
-	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
-	"sigs.k8s.io/cluster-api/api/v1beta1/index"
+	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/cluster-api/controllers/clustercache"
-	"sigs.k8s.io/cluster-api/controllers/remote"
 	machinecontroller "sigs.k8s.io/cluster-api/internal/controllers/machine"
+	"sigs.k8s.io/cluster-api/internal/setup"
 	"sigs.k8s.io/cluster-api/internal/test/envtest"
+	"sigs.k8s.io/cluster-api/util/index"
 )
 
 const (
@@ -72,21 +69,15 @@ func TestMain(m *testing.M) {
 	}
 
 	setupReconcilers := func(ctx context.Context, mgr ctrl.Manager) {
+		secretCachingClient, err := setup.CreateSecretCachingClient(mgr)
+		if err != nil {
+			panic(fmt.Sprintf("Unable to create secret caching client: %s", err))
+		}
+
 		clusterCache, err := clustercache.SetupWithManager(ctx, mgr, clustercache.Options{
-			SecretClient: mgr.GetClient(),
-			Cache: clustercache.CacheOptions{
-				Indexes: []clustercache.CacheOptionsIndex{clustercache.NodeProviderIDIndex},
-			},
-			Client: clustercache.ClientOptions{
-				UserAgent: remote.DefaultClusterAPIUserAgent("test-controller-manager"),
-				Cache: clustercache.ClientCacheOptions{
-					DisableFor: []client.Object{
-						// Don't cache ConfigMaps & Secrets.
-						&corev1.ConfigMap{},
-						&corev1.Secret{},
-					},
-				},
-			},
+			SecretClient: secretCachingClient,
+			Cache:        setup.ClusterCacheCacheOptions(),
+			Client:       setup.ClusterCacheClientOptions("test-controller-manager", 20, 30),
 		}, controller.Options{MaxConcurrentReconciles: 10})
 		if err != nil {
 			panic(fmt.Sprintf("Failed to create ClusterCache: %v", err))
@@ -97,14 +88,18 @@ func TestMain(m *testing.M) {
 		}()
 
 		if err := (&Reconciler{
-			Client:       mgr.GetClient(),
+			// Note: Ensure the fieldManager defaults to manager like in prod.
+			//       Otherwise it defaults to the binary name which is not manager in tests.
+			Client:       client.WithFieldOwner(mgr.GetClient(), "manager"),
 			APIReader:    mgr.GetAPIReader(),
 			ClusterCache: clusterCache,
 		}).SetupWithManager(ctx, mgr, controller.Options{MaxConcurrentReconciles: 1}); err != nil {
 			panic(fmt.Sprintf("Failed to start MMachineSetReconciler: %v", err))
 		}
 		if err := (&machinecontroller.Reconciler{
-			Client:                      mgr.GetClient(),
+			// Note: Ensure the fieldManager defaults to manager like in prod.
+			//       Otherwise it defaults to the binary name which is not manager in tests.
+			Client:                      client.WithFieldOwner(mgr.GetClient(), "manager"),
 			APIReader:                   mgr.GetAPIReader(),
 			ClusterCache:                clusterCache,
 			RemoteConditionsGracePeriod: 5 * time.Minute,
@@ -116,40 +111,28 @@ func TestMain(m *testing.M) {
 	SetDefaultEventuallyPollingInterval(100 * time.Millisecond)
 	SetDefaultEventuallyTimeout(timeout)
 
-	req, _ := labels.NewRequirement(clusterv1.ClusterNameLabel, selection.Exists, nil)
-	clusterSecretCacheSelector := labels.NewSelector().Add(*req)
-
 	os.Exit(envtest.Run(ctx, envtest.RunInput{
 		M: m,
-		ManagerCacheOptions: cache.Options{
-			ByObject: map[client.Object]cache.ByObject{
-				// Only cache Secrets with the cluster name label.
-				// This is similar to the real world.
-				&corev1.Secret{}: {
-					Label: clusterSecretCacheSelector,
-				},
-			},
+		SetupManagerCacheOptions: func(scheme *runtime.Scheme) cache.Options {
+			return setup.ManagerCacheOptions(scheme, "test-controller-manager", "", 10*time.Minute)
 		},
-		ManagerUncachedObjs: []client.Object{
-			&corev1.ConfigMap{},
-			&corev1.Secret{},
-		},
-		SetupEnv:         func(e *envtest.Environment) { env = e },
-		SetupIndexes:     setupIndexes,
-		SetupReconcilers: setupReconcilers,
+		ManagerClientOptions: setup.ManagerClientOptions(),
+		SetupEnv:             func(e *envtest.Environment) { env = e },
+		SetupIndexes:         setupIndexes,
+		SetupReconcilers:     setupReconcilers,
 	}))
 }
 
-func fakeBootstrapRefReady(ref corev1.ObjectReference, base map[string]interface{}, g *WithT) {
+func fakeBootstrapRefDataSecretCreated(ref clusterv1.ContractVersionedObjectReference, namespace string, base map[string]interface{}, g *WithT) {
 	bref := (&unstructured.Unstructured{Object: base}).DeepCopy()
 	g.Eventually(func() error {
-		return env.Get(ctx, client.ObjectKey{Name: ref.Name, Namespace: ref.Namespace}, bref)
+		return env.Get(ctx, client.ObjectKey{Name: ref.Name, Namespace: namespace}, bref)
 	}).Should(Succeed())
 
 	bdataSecret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
 			GenerateName: ref.Name,
-			Namespace:    ref.Namespace,
+			Namespace:    namespace,
 		},
 		StringData: map[string]string{
 			"value": "data",
@@ -158,15 +141,15 @@ func fakeBootstrapRefReady(ref corev1.ObjectReference, base map[string]interface
 	g.Expect(env.Create(ctx, bdataSecret)).To(Succeed())
 
 	brefPatch := client.MergeFrom(bref.DeepCopy())
-	g.Expect(unstructured.SetNestedField(bref.Object, true, "status", "ready")).To(Succeed())
+	g.Expect(unstructured.SetNestedField(bref.Object, true, "status", "initialization", "dataSecretCreated")).To(Succeed())
 	g.Expect(unstructured.SetNestedField(bref.Object, bdataSecret.Name, "status", "dataSecretName")).To(Succeed())
 	g.Expect(env.Status().Patch(ctx, bref, brefPatch)).To(Succeed())
 }
 
-func fakeInfrastructureRefReady(ref corev1.ObjectReference, base map[string]interface{}, g *WithT) string {
+func fakeInfrastructureRefProvisioned(ref clusterv1.ContractVersionedObjectReference, namespace string, base map[string]interface{}, g *WithT) string {
 	iref := (&unstructured.Unstructured{Object: base}).DeepCopy()
 	g.Eventually(func() error {
-		return env.Get(ctx, client.ObjectKey{Name: ref.Name, Namespace: ref.Namespace}, iref)
+		return env.Get(ctx, client.ObjectKey{Name: ref.Name, Namespace: namespace}, iref)
 	}).Should(Succeed())
 
 	irefPatch := client.MergeFrom(iref.DeepCopy())
@@ -175,7 +158,7 @@ func fakeInfrastructureRefReady(ref corev1.ObjectReference, base map[string]inte
 	g.Expect(env.Patch(ctx, iref, irefPatch)).To(Succeed())
 
 	irefPatch = client.MergeFrom(iref.DeepCopy())
-	g.Expect(unstructured.SetNestedField(iref.Object, true, "status", "ready")).To(Succeed())
+	g.Expect(unstructured.SetNestedField(iref.Object, true, "status", "initialization", "provisioned")).To(Succeed())
 	g.Expect(env.Status().Patch(ctx, iref, irefPatch)).To(Succeed())
 	return providerID
 }
@@ -186,7 +169,7 @@ func fakeMachineNodeRef(m *clusterv1.Machine, pid string, g *WithT) {
 		return env.Get(ctx, key, &clusterv1.Machine{})
 	}).Should(Succeed())
 
-	if m.Status.NodeRef != nil {
+	if m.Status.NodeRef.IsDefined() {
 		return
 	}
 
@@ -208,19 +191,22 @@ func fakeMachineNodeRef(m *clusterv1.Machine, pid string, g *WithT) {
 
 	// Patch the node and make it look like ready.
 	patchNode := client.MergeFrom(node.DeepCopy())
-	node.Status.Conditions = append(node.Status.Conditions, corev1.NodeCondition{Type: corev1.NodeReady, Status: corev1.ConditionTrue, Reason: "SomeReason"})
+	node.Status.Conditions = append(node.Status.Conditions,
+		corev1.NodeCondition{Type: corev1.NodeReady, Status: corev1.ConditionTrue},
+		corev1.NodeCondition{Type: corev1.NodePIDPressure, Status: corev1.ConditionFalse},
+		corev1.NodeCondition{Type: corev1.NodeMemoryPressure, Status: corev1.ConditionFalse},
+		corev1.NodeCondition{Type: corev1.NodeDiskPressure, Status: corev1.ConditionFalse},
+	)
 	g.Expect(env.Status().Patch(ctx, node, patchNode)).To(Succeed())
 
 	// Patch the Machine.
 	patchMachine := client.MergeFrom(m.DeepCopy())
-	m.Spec.ProviderID = ptr.To(pid)
+	m.Spec.ProviderID = pid
 	g.Expect(env.Patch(ctx, m, patchMachine)).To(Succeed())
 
 	patchMachine = client.MergeFrom(m.DeepCopy())
-	m.Status.NodeRef = &corev1.ObjectReference{
-		APIVersion: corev1.SchemeGroupVersion.String(),
-		Kind:       "Node",
-		Name:       node.Name,
+	m.Status.NodeRef = clusterv1.MachineNodeReference{
+		Name: node.Name,
 	}
 	g.Expect(env.Status().Patch(ctx, m, patchMachine)).To(Succeed())
 }

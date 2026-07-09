@@ -21,11 +21,12 @@ import (
 
 	"github.com/go-logr/logr"
 	. "github.com/onsi/gomega"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
+	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/cluster-api/util/conditions"
 	"sigs.k8s.io/cluster-api/util/predicates"
 )
@@ -35,10 +36,10 @@ func TestClusterControlplaneInitializedPredicate(t *testing.T) {
 	predicate := predicates.ClusterControlPlaneInitialized(runtime.NewScheme(), logr.New(log.NullLogSink{}))
 
 	markedFalse := clusterv1.Cluster{}
-	conditions.MarkFalse(&markedFalse, clusterv1.ControlPlaneInitializedCondition, clusterv1.MissingNodeRefReason, clusterv1.ConditionSeverityWarning, "")
+	conditions.Set(&markedFalse, metav1.Condition{Type: clusterv1.ClusterControlPlaneInitializedCondition, Status: metav1.ConditionFalse})
 
 	markedTrue := clusterv1.Cluster{}
-	conditions.MarkTrue(&markedTrue, clusterv1.ControlPlaneInitializedCondition)
+	conditions.Set(&markedTrue, metav1.Condition{Type: clusterv1.ClusterControlPlaneInitializedCondition, Status: metav1.ConditionTrue})
 
 	notMarked := clusterv1.Cluster{}
 

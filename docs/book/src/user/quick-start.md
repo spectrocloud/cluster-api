@@ -2,14 +2,6 @@
 
 In this tutorial we'll cover the basics of how to use Cluster API to create one or more Kubernetes clusters.
 
-<aside class="note warning">
-
-<h1>Warning</h1>
-
-If using a [provider] that does not support v1beta1 or v1alpha4 yet, please follow the [release 0.3](https://release-0-3.cluster-api.sigs.k8s.io/user/quick-start.html) or [release 0.4](https://release-0-4.cluster-api.sigs.k8s.io/user/quick-start.html) quickstart instructions instead.
-
-</aside>
-
 ## Installation
 
 There are two major quickstart paths:  Using clusterctl or the Cluster API Operator.
@@ -56,7 +48,7 @@ a target [management cluster] on the selected [infrastructure provider].
 
    [kind] is not designed for production use.
 
-   **Minimum [kind] supported version**: v0.25.0
+   **Minimum [kind] supported version**: v0.32.0
 
    **Help with common issues can be found in the [Troubleshooting Guide](./troubleshooting.md).**
 
@@ -171,17 +163,17 @@ If you are unsure you can determine your computers architecture by running `unam
 
 Download for AMD64:
 ```bash
-curl -L {{#releaselink repo:"https://github.com/kubernetes-sigs/cluster-api" gomodule:"sigs.k8s.io/cluster-api" asset:"clusterctl-linux-amd64" version:"1.9.x"}} -o clusterctl
+curl -L {{#releaselink repo:"https://github.com/kubernetes-sigs/cluster-api" gomodule:"sigs.k8s.io/cluster-api" asset:"clusterctl-linux-amd64" version:"1.13.x"}} -o clusterctl
 ```
 
 Download for ARM64:
 ```bash
-curl -L {{#releaselink repo:"https://github.com/kubernetes-sigs/cluster-api" gomodule:"sigs.k8s.io/cluster-api" asset:"clusterctl-linux-arm64" version:"1.9.x"}} -o clusterctl
+curl -L {{#releaselink repo:"https://github.com/kubernetes-sigs/cluster-api" gomodule:"sigs.k8s.io/cluster-api" asset:"clusterctl-linux-arm64" version:"1.13.x"}} -o clusterctl
 ```
 
 Download for PPC64LE:
 ```bash
-curl -L {{#releaselink repo:"https://github.com/kubernetes-sigs/cluster-api" gomodule:"sigs.k8s.io/cluster-api" asset:"clusterctl-linux-ppc64le" version:"1.9.x"}} -o clusterctl
+curl -L {{#releaselink repo:"https://github.com/kubernetes-sigs/cluster-api" gomodule:"sigs.k8s.io/cluster-api" asset:"clusterctl-linux-ppc64le" version:"1.13.x"}} -o clusterctl
 ```
 
 Install clusterctl:
@@ -201,12 +193,12 @@ If you are unsure you can determine your computers architecture by running `unam
 
 Download for AMD64:
 ```bash
-curl -L {{#releaselink repo:"https://github.com/kubernetes-sigs/cluster-api" gomodule:"sigs.k8s.io/cluster-api" asset:"clusterctl-darwin-amd64" version:"1.9.x"}} -o clusterctl
+curl -L {{#releaselink repo:"https://github.com/kubernetes-sigs/cluster-api" gomodule:"sigs.k8s.io/cluster-api" asset:"clusterctl-darwin-amd64" version:"1.13.x"}} -o clusterctl
 ```
 
 Download for M1 CPU ("Apple Silicon") / ARM64:
 ```bash
-curl -L {{#releaselink repo:"https://github.com/kubernetes-sigs/cluster-api" gomodule:"sigs.k8s.io/cluster-api" asset:"clusterctl-darwin-arm64" version:"1.9.x"}} -o clusterctl
+curl -L {{#releaselink repo:"https://github.com/kubernetes-sigs/cluster-api" gomodule:"sigs.k8s.io/cluster-api" asset:"clusterctl-darwin-arm64" version:"1.13.x"}} -o clusterctl
 ```
 
 Make the clusterctl binary executable.
@@ -245,7 +237,7 @@ Go to the working directory where you want clusterctl downloaded.
 
 Download the latest release; on Windows, type:
 ```powershell
-curl.exe -L {{#releaselink repo:"https://github.com/kubernetes-sigs/cluster-api" gomodule:"sigs.k8s.io/cluster-api" asset:"clusterctl-windows-amd64.exe" version:"1.9.x"}} -o clusterctl.exe
+curl.exe -L {{#releaselink repo:"https://github.com/kubernetes-sigs/cluster-api" gomodule:"sigs.k8s.io/cluster-api" asset:"clusterctl-windows-amd64.exe" version:"1.13.x"}} -o clusterctl.exe
 ```
 Append or prepend the path of that directory to the `PATH` environment variable.
 
@@ -281,7 +273,7 @@ Additional documentation about experimental features can be found in [Experiment
 Depending on the infrastructure provider you are planning to use, some additional prerequisites should be satisfied
 before getting started with Cluster API. See below for the expected settings for common providers.
 
-{{#tabs name:"tab-installation-infrastructure" tabs:"Akamai (Linode),AWS,Azure,CloudStack,DigitalOcean,Docker,Equinix Metal,GCP,Harvester,Hetzner,Hivelocity,IBM Cloud,IONOS Cloud,K0smotron,KubeKey,KubeVirt,Metal3,Nutanix,OCI,OpenStack,Outscale,Proxmox,VCD,vcluster,Virtink,vSphere,Vultr"}}
+{{#tabs name:"tab-installation-infrastructure" tabs:"Akamai (Linode),AWS,Azure,cloudscale,CloudStack,DigitalOcean,Docker,GCP,Harvester,Hetzner,Hivelocity,Huawei,IBM Cloud,IONOS Cloud,K0smotron,KubeKey,KubeVirt,Metal3,metal-stack,Nutanix,OCI,OpenNebula,OpenStack,Outscale,Proxmox,Scaleway,VCD,vcluster,Virtink,vSphere,Vultr"}}
 {{#tab Akamai (Linode)}}
 
 ```bash
@@ -488,6 +480,22 @@ clusterctl init --infrastructure azure
 ```
 
 {{#/tab }}
+{{#tab cloudscale}}
+
+```bash
+# The cloudscale API token.
+# You may want to set this in `$XDG_CONFIG_HOME/cluster-api/clusterctl.yaml` so your token is not in
+# bash history
+export CLOUDSCALE_API_TOKEN="AAAEXAMPLE"
+
+# initialize the management cluster
+clusterctl init --infrastructure cloudscale-ch-cloudscale
+```
+
+For more information about the CAPI provider for cloudscale, see the [cloudscale cluster-api
+project][cloudscale getting started guide].
+
+{{#/tab }}
 {{#tab CloudStack}}
 
 Create a file named cloud-config in the repo's root directory, substituting in your own environment's values
@@ -548,20 +556,6 @@ clusterctl init --infrastructure docker
 ```
 
 {{#/tab }}
-{{#tab Equinix Metal}}
-
-In order to initialize the Equinix Metal Provider (formerly Packet) you have to expose the environment
-variable `PACKET_API_KEY`. This variable is used to authorize the infrastructure
-provider manager against the Equinix Metal API. You can retrieve your token directly
-from the Equinix Metal Console.
-
-```bash
-export PACKET_API_KEY="34ts3g4s5g45gd45dhdh"
-
-clusterctl init --infrastructure packet
-```
-
-{{#/tab }}
 {{#tab GCP}}
 
 ```bash
@@ -591,6 +585,18 @@ Please visit the [Hetzner project][Hetzner provider].
 {{#tab Hivelocity}}
 
 Please visit the [Hivelocity project][Hivelocity provider].
+
+{{#/tab }}
+{{#tab Huawei}}
+
+```bash
+# Please ensure that the values for `CLOUD_SDK_AK` and `CLOUD_SDK_SK` are base64 encoded.
+export CLOUD_SDK_AK=$( echo $AccessKey | base64 | tr -d '\n' )
+export CLOUD_SDK_SK=$( echo $SecretKey | base64 | tr -d '\n' )
+
+# Finally, initialize the management cluster
+clusterctl init --infrastructure huawei
+```
 
 {{#/tab }}
 {{#tab IBM Cloud}}
@@ -708,6 +714,15 @@ clusterctl init --infrastructure kubevirt
 Please visit the [Metal3 project][Metal3 provider].
 
 {{#/tab }}
+{{#tab metal-stack}}
+
+```bash
+clusterctl init --infrastructure metal-stack
+```
+
+Please follow the Cluster API Provider for [metal-stack Getting Started Guide](https://metal-stack.io/docs/references/cluster-api-provider-metal-stack#getting-started)
+
+{{#/tab }}
 {{#tab Nutanix}}
 
 Please follow the Cluster API Provider for [Nutanix Getting Started Guide](https://opendocs.nutanix.com/capx/latest/getting_started/)
@@ -716,6 +731,16 @@ Please follow the Cluster API Provider for [Nutanix Getting Started Guide](https
 {{#tab OCI}}
 
 Please follow the Cluster API Provider for [Oracle Cloud Infrastructure (OCI) Getting Started Guide][oci-provider]
+
+{{#/tab }}
+{{#tab OpenNebula}}
+
+```bash
+# Initialize the management cluster
+clusterctl init --infrastructure opennebula
+```
+
+Please visit [OpenNebula Cluster API Provider Wiki][CAPONE Wiki].
 
 {{#/tab }}
 {{#tab OpenStack}}
@@ -772,6 +797,15 @@ project][Proxmox getting started guide].
 
 {{#/tab }}
 
+{{#tab Scaleway}}
+
+```bash
+# Initialize the management cluster
+clusterctl init --infrastructure scaleway
+```
+
+{{#/tab }}
+
 {{#tab VCD}}
 
 Please follow the Cluster API Provider for [Cloud Director Getting Started Guide](https://github.com/vmware/cluster-api-provider-cloud-director/blob/main/README.md)
@@ -820,10 +854,10 @@ project][vSphere getting started guide].
 {{#tab Vultr}}
 
 ```bash
-export VULTR_API_KEY=<your_api_key>
+export VULTR_API_KEY="$(echo -n "${VULTR_API_KEY}" | base64 | tr -d '\n')"
 
 # initialize the management cluster
-clusterctl init --infrastructure vultr
+clusterctl init --infrastructure vultr-vultr
 ```
 {{#/tab }}
 {{#/tabs }}
@@ -882,7 +916,7 @@ The `clusterctl generate cluster` command by default uses cluster templates whic
 providers. See the provider's documentation for more information.
 
 See the `clusterctl generate cluster` [command][clusterctl generate cluster] documentation for
-details about how to use alternative sources. for cluster templates.
+details about how to use alternative sources for cluster templates.
 
 </aside>
 
@@ -894,7 +928,7 @@ before configuring a cluster with Cluster API. Instructions are provided for com
 Otherwise, you can look at the `clusterctl generate cluster` [command][clusterctl generate cluster] documentation for details about how to
 discover the list of variables required by a cluster templates.
 
-{{#tabs name:"tab-configuration-infrastructure" tabs:"Akamai (Linode),AWS,Azure,CloudStack,DigitalOcean,Docker,Equinix Metal,GCP,Harvester,IBM Cloud,IONOS Cloud,K0smotron,KubeKey,KubeVirt,Metal3,Nutanix,OpenStack,Outscale,Proxmox,Tinkerbell,VCD,vcluster,Virtink,vSphere,Vultr"}}
+{{#tabs name:"tab-configuration-infrastructure" tabs:"Akamai (Linode),AWS,Azure,cloudscale,CloudStack,DigitalOcean,Docker,GCP,Harvester,Huawei,IBM Cloud,IONOS Cloud,K0smotron,KubeKey,KubeVirt,Metal3,metal-stack,Nutanix,OpenNebula,OpenStack,Outscale,Proxmox,Scaleway,Tinkerbell,VCD,vcluster,Virtink,vSphere,Vultr"}}
 {{#tab Akamai (Linode)}}
 
 ```bash
@@ -941,6 +975,35 @@ export AZURE_NODE_MACHINE_TYPE="Standard_D2s_v3"
 # [Optional] Select resource group. The default value is ${CLUSTER_NAME}.
 export AZURE_RESOURCE_GROUP="<ResourceGroupName>"
 ```
+
+{{#/tab }}
+{{#tab cloudscale}}
+
+A ClusterAPI compatible image must be available in your cloudscale project. For instructions on how to build a compatible VM template
+see [image-builder](https://image-builder.sigs.k8s.io/capi/providers/openstack).
+
+```bash
+# The cloudscale API token.
+# You may want to set this in `$XDG_CONFIG_HOME/cluster-api/clusterctl.yaml` so your token is not in
+# bash history
+export CLOUDSCALE_API_TOKEN="AAAEXAMPLE"
+# SSH public key added to nodes
+export CLOUDSCALE_SSH_PUBLIC_KEY="ssh-ed25519 AAAA..."
+# cloudscale.ch region
+export CLOUDSCALE_REGION="lpg"
+# Server image for nodes
+export CLOUDSCALE_MACHINE_IMAGE="custom:ubuntu-2404-kube-v1.36.1"
+# Flavor for control plane nodes
+export CLOUDSCALE_CONTROL_PLANE_MACHINE_FLAVOR="flex-4-2"
+# Flavor for worker nodes 
+export CLOUDSCALE_WORKER_MACHINE_FLAVOR="flex-4-2"
+# Root volume size in GB
+export CLOUDSCALE_ROOT_VOLUME_SIZE="50"
+
+```
+
+For more information about the setup for cloudscale, see the [cloudscale cluster-api
+project][cloudscale getting started guide].
 
 {{#/tab }}
 {{#tab CloudStack}}
@@ -1025,35 +1088,6 @@ export POD_SECURITY_STANDARD_ENABLED="false"
 ```
 
 {{#/tab }}
-{{#tab Equinix Metal}}
-
-There are several required variables you need to set to create a cluster. There
-are also a few optional tunables if you'd like to change the OS or CIDRs used.
-
-```bash
-# Required (made up examples shown)
-# The project where your cluster will be placed to.
-# You have to get one from the Equinix Metal Console if you don't have one already.
-export PROJECT_ID="2b59569f-10d1-49a6-a000-c2fb95a959a1"
-# This can help to take advantage of automated, interconnected bare metal across our global metros.
-export METRO="da"
-# What plan to use for your control plane nodes
-export CONTROLPLANE_NODE_TYPE="m3.small.x86"
-# What plan to use for your worker nodes
-export WORKER_NODE_TYPE="m3.small.x86"
-# The ssh key you would like to have access to the nodes
-export SSH_KEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDvMgVEubPLztrvVKgNPnRe9sZSjAqaYj9nmCkgr4PdK username@computer"
-export CLUSTER_NAME="my-cluster"
-
-# Optional (defaults shown)
-export NODE_OS="ubuntu_18_04"
-export POD_CIDR="192.168.0.0/16"
-export SERVICE_CIDR="172.26.0.0/16"
-# Only relevant if using the kube-vip flavor
-export KUBE_VIP_VERSION="v0.5.0"
-```
-
-{{#/tab }}
 {{#tab GCP}}
 
 
@@ -1085,7 +1119,7 @@ export CLOUD_CONFIG_KUBECONFIG_B64=""
 export CLUSTER_NAME="<CLUSTER_NAME>"
 # Number of Control Plane machines
 export CONTROL_PLANE_MACHINE_COUNT=3
-# URL to access the Harvester Cluster, this will be overriden by the controller
+# URL to access the Harvester Cluster, this will be overridden by the controller
 export HARVESTER_ENDPOINT=""
 # Base64-Encoded Kubeconfig to access Harvester, which can be downloaded from Harvester's UI or from a Harvester Manager Node.
 export HARVESTER_KUBECONFIG_B64="<HARVESTER_KUBECONFIG_ENCODED_IN_BASE64>"
@@ -1112,6 +1146,31 @@ export WORKER_MACHINE_COUNT=2
 ```
 
 See the [Harvester provider] for more information.
+
+{{#/tab }}
+{{#tab Huawei}}
+
+
+```bash
+# huawei cloud region
+export HC_REGION="cn-east-1"
+# ECS SSH key name
+export HC_SSH_KEY_NAME="default"
+# kubernetes version
+export KUBERNETES_VERSION="1.32.0"
+# number of control plane machines
+export CONTROL_PLANE_MACHINE_COUNT="1"
+# number of worker machines
+export WORKER_MACHINE_COUNT="1"
+# control plane machine type
+export HC_CONTROL_PLANE_MACHINE_TYPE="x1e.2u.4g"
+# worker node machine type
+export HC_NODE_MACHINE_TYPE="x1e.2u.4g"
+# ECS image ID
+export ECS_IMAGE_ID="218ca5t7-bxf3-5dg0-852p-y703c9fe1a52"
+```
+
+See the [Huawei Cloud provider] for more information.
 
 {{#/tab }}
 {{#tab IBM Cloud}}
@@ -1195,10 +1254,10 @@ Please visit the [KubeKey provider] for more information.
 {{#/tab }}
 {{#tab KubeVirt}}
 
-In this example, we'll use the image for Kubernetes v1.32.1: 
+In this example, we'll use the image for Kubernetes v1.32.1:
 ```bash
 export NODE_VM_IMAGE_TEMPLATE="quay.io/capk/ubuntu-2404-container-disk:v1.32.1"
-export CAPK_GUEST_K8S_VERSION="${NODE_VM_IMAGE_TEMPLATE/:*/}"
+export CAPK_GUEST_K8S_VERSION="${NODE_VM_IMAGE_TEMPLATE/*:/}"
 export CRI_PATH="unix:///var/run/containerd/containerd.sock"
 ```
 Please visit the [KubeVirt project][KubeVirt provider] for more information.
@@ -1207,8 +1266,8 @@ Please visit the [KubeVirt project][KubeVirt provider] for more information.
 
 <h1>Note</h1>
 
-Find additional images under [quay.io/capk/ubuntu-2404-container-disk](https://quay.io/capk/ubuntu-2404-container-disk), 
-[quay.io/capk/ubuntu-2204-container-disk](https://quay.io/capk/ubuntu-2204-container-disk), 
+Find additional images under [quay.io/capk/ubuntu-2404-container-disk](https://quay.io/capk/ubuntu-2404-container-disk),
+[quay.io/capk/ubuntu-2204-container-disk](https://quay.io/capk/ubuntu-2204-container-disk),
 or [quay.io/capk/ubuntu-2004-container-disk](https://quay.io/capk/ubuntu-2004-container-disk).
 
 Alternatively, create your own image; see [here](https://github.com/kubernetes-sigs/image-builder).
@@ -1245,6 +1304,25 @@ export IRONIC_INSPECTOR_NO_BASIC_AUTH=true
 Please visit the [Metal3 getting started guide] for more details.
 
 {{#/tab }}
+{{#tab metal-stack}}
+
+```bash
+export METAL_PARTITION=<metal-stack-partition>
+export METAL_PROJECT_ID=<metal-stack-project-id>
+export CONTROL_PLANE_IP=<metal-stack-control-plane-ip>
+
+export FIREWALL_MACHINE_IMAGE=<firewall-os-image>
+export FIREWALL_MACHINE_SIZE=<firewall-size>
+
+export CONTROL_PLANE_MACHINE_IMAGE=<machine-os-image>
+export CONTROL_PLANE_MACHINE_SIZE=<machine-size>
+export WORKER_MACHINE_IMAGE=<machine-os-image>
+export WORKER_MACHINE_SIZE=<machine-size>
+```
+
+Please visit the [metal-stack getting started guide](https://metal-stack.io/docs/references/cluster-api-provider-metal-stack#getting-started) for more details.
+
+{{#/tab }}
 {{#tab Nutanix}}
 
 A ClusterAPI compatible image must be available in your Nutanix image library. For instructions on how to build a compatible image
@@ -1254,6 +1332,35 @@ To see all required Nutanix environment variables execute:
 ```bash
 clusterctl generate cluster --infrastructure nutanix --list-variables capi-quickstart
 ```
+
+{{#/tab }}
+{{#tab OpenNebula}}
+
+```bash
+# OpenNebula API endpoint and credentials
+export ONE_XMLRPC='http://10.2.11.40:2633/RPC2'
+export ONE_AUTH='oneadmin:opennebula'
+
+# VM and VR templates to construct workload clusters from
+export MACHINE_TEMPLATE_NAME='capone131'
+export ROUTER_TEMPLATE_NAME='capone131-vr'
+
+# VNs to deploy workload clusters into
+export PUBLIC_NETWORK_NAME='service'
+export PRIVATE_NETWORK_NAME='private'
+
+# Name of the new workload cluster
+export CLUSTER_NAME='one'
+
+# Cloud-Provider image to deploy inside the new workload cluster
+export CCM_IMG='ghcr.io/opennebula/cloud-provider-opennebula:latest'
+
+# Initial size of the new workload cluster
+export CONTROL_PLANE_MACHINE_COUNT='1'
+export WORKER_MACHINE_COUNT='1'
+```
+
+Please visit [OpenNebula Cluster API Provider Wiki][CAPONE Wiki].
 
 {{#/tab }}
 {{#tab OpenStack}}
@@ -1355,6 +1462,23 @@ export ALLOWED_NODES="[pve1,pve2,pve3]"
 For more information about prerequisites and advanced setups for Proxmox, see the [Proxmox getting started guide].
 
 {{#/tab }}
+{{#tab Scaleway}}
+
+```bash
+# Scaleway credentials, project ID and region.
+export SCW_ACCESS_KEY="<ACCESS_KEY>"
+export SCW_SECRET_KEY="<SECRET_KEY>"
+export SCW_PROJECT_ID="<PROJECT_ID>"
+export SCW_REGION="fr-par"
+
+# Scaleway Instance image names that will be used to provision servers.
+export CONTROL_PLANE_MACHINE_IMAGE="<IMAGE_NAME>"
+export WORKER_MACHINE_IMAGE="<IMAGE_NAME>"
+```
+
+For more information about prerequisites and advanced setups for CAPS, see the [CAPS getting started guide].
+
+{{#/tab }}
 {{#tab Tinkerbell}}
 
 ```bash
@@ -1380,6 +1504,7 @@ clusterctl generate cluster --infrastructure vcd --list-variables capi-quickstar
 ```bash
 export CLUSTER_NAME=kind
 export CLUSTER_NAMESPACE=vcluster
+export VCLUSTER_YAML=""
 export KUBERNETES_VERSION=1.23.4
 export HELM_VALUES="service:\n  type: NodePort"
 ```
@@ -1467,11 +1592,13 @@ The Docker provider is not designed for production use and is intended for devel
 
 ```bash
 clusterctl generate cluster capi-quickstart --flavor development \
-  --kubernetes-version v1.32.0 \
+  --kubernetes-version v1.36.1 \
   --control-plane-machine-count=3 \
   --worker-machine-count=3 \
   > capi-quickstart.yaml
 ```
+
+Note: If you want to use MachinePools use flavor `development-mp`.
 
 {{#/tab }}
 {{#tab vcluster}}
@@ -1479,6 +1606,7 @@ clusterctl generate cluster capi-quickstart --flavor development \
 ```bash
 export CLUSTER_NAME=kind
 export CLUSTER_NAMESPACE=vcluster
+export VCLUSTER_YAML=""
 export KUBERNETES_VERSION=1.31.2
 export HELM_VALUES="service:\n  type: NodePort"
 
@@ -1486,7 +1614,7 @@ kubectl create namespace ${CLUSTER_NAMESPACE}
 clusterctl generate cluster ${CLUSTER_NAME} \
     --infrastructure vcluster \
     --kubernetes-version ${KUBERNETES_VERSION} \
-    --target-namespace ${CLUSTER_NAMESPACE} | kubectl apply -f -
+    --target-namespace ${CLUSTER_NAMESPACE} > capi-quickstart.yaml
 ```
 
 {{#/tab }}
@@ -1511,7 +1639,7 @@ clusterctl generate cluster capi-quickstart \
 ```bash
 clusterctl generate cluster capi-quickstart \
   --infrastructure azure \
-  --kubernetes-version v1.32.0 \
+  --kubernetes-version v1.36.1 \
   --control-plane-machine-count=3 \
   --worker-machine-count=3 \
   > capi-quickstart.yaml
@@ -1526,7 +1654,7 @@ yq -i "with(. | select(.kind == \"AzureClusterIdentity\"); .spec.type |= \"Servi
 
 ```bash
 clusterctl generate cluster capi-quickstart \
-  --kubernetes-version v1.32.0 \
+  --kubernetes-version v1.36.1 \
   --control-plane-machine-count=3 \
   --worker-machine-count=3 \
   > capi-quickstart.yaml
@@ -1580,7 +1708,7 @@ and see an output similar to this:
 
 ```bash
 NAME              PHASE         AGE   VERSION
-capi-quickstart   Provisioned   8s    v1.32.0
+capi-quickstart   Provisioned   8s    v1.36.1
 ```
 
 To verify the first control plane is up:
@@ -1593,7 +1721,7 @@ You should see an output is similar to this:
 
 ```bash
 NAME                    CLUSTER           INITIALIZED   API SERVER AVAILABLE   REPLICAS   READY   UPDATED   UNAVAILABLE   AGE    VERSION
-capi-quickstart-g2trk   capi-quickstart   true                                 3                  3         3             4m7s   v1.32.0
+capi-quickstart-g2trk   capi-quickstart   true                                 3                  3         3             4m7s   v1.36.1
 ```
 
 <aside class="note warning">
@@ -1637,7 +1765,7 @@ Note: To use the default clusterctl method to retrieve kubeconfig for a workload
 
 The Kubernetes in-tree cloud provider implementations are being [removed](https://github.com/kubernetes/enhancements/tree/master/keps/sig-cloud-provider/2395-removing-in-tree-cloud-providers) in favor of external cloud providers (also referred to as "out-of-tree"). This requires deploying a new component called the cloud-controller-manager which is responsible for running all the cloud specific controllers that were previously run in the kube-controller-manager. To learn more, see [this blog post](https://kubernetes.io/blog/2019/04/17/the-future-of-cloud-providers-in-kubernetes/).
 
-{{#tabs name:"tab-install-cloud-provider" tabs:"Azure,OpenStack"}}
+{{#tabs name:"tab-install-cloud-provider" tabs:"Azure,OpenStack,Scaleway"}}
 {{#tab Azure}}
 
 Install the official cloud-provider-azure Helm chart on the workload cluster:
@@ -1684,6 +1812,45 @@ kubectl apply --kubeconfig=./capi-quickstart.kubeconfig -f https://raw.githubuse
 Alternatively, refer to the [helm chart](https://github.com/kubernetes/cloud-provider-openstack/tree/master/charts/openstack-cloud-controller-manager).
 
 {{#/tab }}
+{{#tab Scaleway}}
+
+Before deploying the Scaleway external cloud provider, you will need:
+
+- Your Scaleway credentials (access key and secret key)
+- Your Scaleway project ID
+- The Scaleway region where your workload cluster is deployed
+- The Private Network ID of your cluster (optional)
+
+First, create the Secret named `scaleway-secret` in your workload cluster:
+
+```bash
+kubectl apply -f - <<EOF
+apiVersion: v1
+kind: Secret
+metadata:
+  name: scaleway-secret
+  namespace: kube-system
+type: Opaque
+stringData:
+  SCW_ACCESS_KEY: "xxxxxxxxxxxxxxxx"
+  SCW_SECRET_KEY: "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+  SCW_DEFAULT_PROJECT_ID: "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxx"
+  SCW_DEFAULT_REGION: "fr-par"
+  SCW_DEFAULT_ZONE: "fr-par-1"
+  PN_ID: "" # If your have a private network on your cluster, you may set its ID here.
+EOF
+```
+
+Finally, you can deploy the `scaleway-cloud-controller-manager`:
+
+```bash
+kubectl apply -f https://raw.githubusercontent.com/scaleway/scaleway-cloud-controller-manager/master/examples/k8s-scaleway-ccm-latest.yml
+```
+
+For more detailed information on configuring and using the Scaleway external cloud
+provider, see the [scaleway-cloud-controller-manager repository](https://github.com/scaleway/scaleway-cloud-controller-manager).
+
+{{#/tab }}
 {{#/tabs }}
 
 ### Deploy a CNI solution
@@ -1708,12 +1875,12 @@ kubectl --kubeconfig=./capi-quickstart.kubeconfig get nodes
 ```
 ```bash
 NAME                                          STATUS   ROLES           AGE    VERSION
-capi-quickstart-vs89t-gmbld                   Ready    control-plane   5m33s  v1.32.0
-capi-quickstart-vs89t-kf9l5                   Ready    control-plane   6m20s  v1.32.0
-capi-quickstart-vs89t-t8cfn                   Ready    control-plane   7m10s  v1.32.0
-capi-quickstart-md-0-55x6t-5649968bd7-8tq9v   Ready    <none>          6m5s   v1.32.0
-capi-quickstart-md-0-55x6t-5649968bd7-glnjd   Ready    <none>          6m9s   v1.32.0
-capi-quickstart-md-0-55x6t-5649968bd7-sfzp6   Ready    <none>          6m9s   v1.32.0
+capi-quickstart-vs89t-gmbld                   Ready    control-plane   5m33s  v1.36.1
+capi-quickstart-vs89t-kf9l5                   Ready    control-plane   6m20s  v1.36.1
+capi-quickstart-vs89t-t8cfn                   Ready    control-plane   7m10s  v1.36.1
+capi-quickstart-md-0-55x6t-5649968bd7-8tq9v   Ready    <none>          6m5s   v1.36.1
+capi-quickstart-md-0-55x6t-5649968bd7-glnjd   Ready    <none>          6m9s   v1.36.1
+capi-quickstart-md-0-55x6t-5649968bd7-sfzp6   Ready    <none>          6m9s   v1.36.1
 ```
 
 {{#/tab }}
@@ -1797,12 +1964,12 @@ kubectl --kubeconfig=./capi-quickstart.kubeconfig get nodes
 ```
 ```bash
 NAME                                          STATUS   ROLES           AGE    VERSION
-capi-quickstart-vs89t-gmbld                   Ready    control-plane   5m33s  v1.32.0
-capi-quickstart-vs89t-kf9l5                   Ready    control-plane   6m20s  v1.32.0
-capi-quickstart-vs89t-t8cfn                   Ready    control-plane   7m10s  v1.32.0
-capi-quickstart-md-0-55x6t-5649968bd7-8tq9v   Ready    <none>          6m5s   v1.32.0
-capi-quickstart-md-0-55x6t-5649968bd7-glnjd   Ready    <none>          6m9s   v1.32.0
-capi-quickstart-md-0-55x6t-5649968bd7-sfzp6   Ready    <none>          6m9s   v1.32.0
+capi-quickstart-vs89t-gmbld                   Ready    control-plane   5m33s  v1.36.1
+capi-quickstart-vs89t-kf9l5                   Ready    control-plane   6m20s  v1.36.1
+capi-quickstart-vs89t-t8cfn                   Ready    control-plane   7m10s  v1.36.1
+capi-quickstart-md-0-55x6t-5649968bd7-8tq9v   Ready    <none>          6m5s   v1.36.1
+capi-quickstart-md-0-55x6t-5649968bd7-glnjd   Ready    <none>          6m9s   v1.36.1
+capi-quickstart-md-0-55x6t-5649968bd7-sfzp6   Ready    <none>          6m9s   v1.36.1
 ```
 
 {{#/tab }}
@@ -1894,7 +2061,7 @@ kind delete cluster
 [Akamai (Linode) provider]: https://linode.github.io/cluster-api-provider-linode/introduction.html
 [AWS provider prerequisites]: https://cluster-api-aws.sigs.k8s.io/topics/using-clusterawsadm-to-fulfill-prerequisites.html
 [AWS provider releases]: https://github.com/kubernetes-sigs/cluster-api-provider-aws/releases
-[Azure Provider Prerequisites]: https://capz.sigs.k8s.io/getting-started.html#prerequisites
+[Azure Provider Prerequisites]: https://capz.sigs.k8s.io/getting-started-with-aks.html#prerequisites
 [bootstrap cluster]: ../reference/glossary.md#bootstrap-cluster
 [capa]: https://cluster-api-aws.sigs.k8s.io
 [capv-upload-images]: https://github.com/kubernetes-sigs/cluster-api-provider-vsphere/blob/master/docs/getting_started.md#uploading-the-machine-images
@@ -1908,6 +2075,7 @@ kind delete cluster
 [Harvester provider]: https://github.com/rancher-sandbox/cluster-api-provider-harvester
 [Hetzner provider]: https://github.com/syself/cluster-api-provider-hetzner
 [Hivelocity provider]: https://github.com/hivelocity/cluster-api-provider-hivelocity
+[Huawei Cloud provider]: https://github.com/HuaweiCloudDeveloper/cluster-api-provider-huawei
 [IBM Cloud provider]: https://github.com/kubernetes-sigs/cluster-api-provider-ibmcloud
 [infrastructure provider]: ../reference/glossary.md#infrastructure-provider
 [ionoscloud provider]: https://github.com/ionos-cloud/cluster-api-provider-ionoscloud
@@ -1915,15 +2083,15 @@ kind delete cluster
 [KubeadmControlPlane]: ../developer/core/controllers/control-plane.md
 [kubectl]: https://kubernetes.io/docs/tasks/tools/install-kubectl/
 [management cluster]: ../reference/glossary.md#management-cluster
-[Metal3 getting started guide]: https://github.com/metal3-io/cluster-api-provider-metal3/blob/master/docs/getting-started.md
+[Metal3 getting started guide]: https://github.com/metal3-io/cluster-api-provider-metal3/blob/main/docs/getting-started.md
 [Metal3 provider]: https://github.com/metal3-io/cluster-api-provider-metal3/
+[metal-stack provider]: https://github.com/metal-stack/cluster-api-provider-metal-stack/
 [K0smotron provider]: https://github.com/k0sproject/k0smotron
 [KubeKey provider]: https://github.com/kubesphere/kubekey
 [KubeVirt provider]: https://github.com/kubernetes-sigs/cluster-api-provider-kubevirt/
 [KubeVirt]: https://kubevirt.io/
 [oci-provider]: https://oracle.github.io/cluster-api-provider-oci/#getting-started
 [openstack-resource-controller]: https://k-orc.cloud/
-[Equinix Metal getting started guide]: https://github.com/kubernetes-sigs/cluster-api-provider-packet#using
 [provider]:../reference/providers.md
 [provider components]: ../reference/glossary.md#provider-components
 [vSphere getting started guide]: https://github.com/kubernetes-sigs/cluster-api-provider-vsphere/blob/master/docs/getting_started.md
@@ -1931,3 +2099,6 @@ kind delete cluster
 [CAPI Operator quickstart]: ./quick-start-operator.md
 [Proxmox getting started guide]: https://github.com/ionos-cloud/cluster-api-provider-proxmox/blob/main/docs/Usage.md
 [Tinkerbell getting started guide]: https://github.com/tinkerbell/cluster-api-provider-tinkerbell/blob/main/docs/QUICK-START.md
+[CAPONE Wiki]: https://github.com/OpenNebula/cluster-api-provider-opennebula/wiki
+[CAPS getting started guide]: https://github.com/scaleway/cluster-api-provider-scaleway/blob/main/docs/getting-started.md
+[cloudscale getting started guide]: https://github.com/cloudscale-ch/cluster-api-provider-cloudscale/blob/main/README.md

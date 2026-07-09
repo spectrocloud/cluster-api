@@ -25,8 +25,8 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	kerrors "k8s.io/apimachinery/pkg/util/errors"
 
-	runtimev1 "sigs.k8s.io/cluster-api/exp/runtime/api/v1alpha1"
-	runtimecatalog "sigs.k8s.io/cluster-api/exp/runtime/catalog"
+	runtimecatalog "sigs.k8s.io/cluster-api/api/runtime/catalog"
+	runtimev1 "sigs.k8s.io/cluster-api/api/runtime/v1beta2"
 )
 
 // ExtensionRegistry defines the funcs of a RuntimeExtension registry.
@@ -77,10 +77,10 @@ type ExtensionRegistration struct {
 	ClientConfig runtimev1.ClientConfig
 
 	// TimeoutSeconds is the timeout duration used for calls to the RuntimeExtension.
-	TimeoutSeconds *int32
+	TimeoutSeconds int32
 
 	// FailurePolicy defines how failures in calls to the RuntimeExtension should be handled by a client.
-	FailurePolicy *runtimev1.FailurePolicy
+	FailurePolicy runtimev1.FailurePolicy
 
 	// Settings captures additional information sent in call to the RuntimeExtensions.
 	Settings map[string]string

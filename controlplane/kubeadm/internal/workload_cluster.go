@@ -20,7 +20,6 @@ import (
 	"context"
 	"crypto"
 	"crypto/rand"
-	"crypto/rsa"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
@@ -35,55 +34,27 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/util/retry"
-	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/yaml"
+	"k8s.io/utils/ptr"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
-	bootstrapv1 "sigs.k8s.io/cluster-api/bootstrap/kubeadm/api/v1beta1"
+	bootstrapv1 "sigs.k8s.io/cluster-api/api/bootstrap/kubeadm/v1beta2"
+	controlplanev1 "sigs.k8s.io/cluster-api/api/controlplane/kubeadm/v1beta2"
 	kubeadmtypes "sigs.k8s.io/cluster-api/bootstrap/kubeadm/types"
-	controlplanev1 "sigs.k8s.io/cluster-api/controlplane/kubeadm/api/v1beta1"
+	"sigs.k8s.io/cluster-api/controlplane/kubeadm/internal/desiredstate"
 	"sigs.k8s.io/cluster-api/controlplane/kubeadm/internal/etcd"
 	"sigs.k8s.io/cluster-api/controlplane/kubeadm/internal/proxy"
-	"sigs.k8s.io/cluster-api/internal/util/kubeadm"
-	"sigs.k8s.io/cluster-api/util"
 	"sigs.k8s.io/cluster-api/util/certs"
 	containerutil "sigs.k8s.io/cluster-api/util/container"
-	"sigs.k8s.io/cluster-api/util/patch"
 )
 
 const (
 	kubeProxyKey                   = "kube-proxy"
 	kubeadmConfigKey               = "kubeadm-config"
 	kubeadmAPIServerCertCommonName = "kube-apiserver"
-	kubeletConfigKey               = "kubelet"
-	cgroupDriverKey                = "cgroupDriver"
-	labelNodeRoleOldControlPlane   = "node-role.kubernetes.io/master" // Deprecated: https://github.com/kubernetes/kubeadm/issues/2200
 	labelNodeRoleControlPlane      = "node-role.kubernetes.io/control-plane"
-	clusterStatusKey               = "ClusterStatus"
 	clusterConfigurationKey        = "ClusterConfiguration"
-)
-
-var (
-	// Starting from v1.24.0 kubeadm uses "kubelet-config" a ConfigMap name for KubeletConfiguration,
-	// Dropping the X-Y suffix.
-	//
-	// NOTE: The following assumes that kubeadm version equals to Kubernetes version.
-	minVerUnversionedKubeletConfig = semver.MustParse("1.24.0")
-
-	// minKubernetesVersionControlPlaneKubeletLocalMode is the min version from which
-	// we will enable the ControlPlaneKubeletLocalMode kubeadm feature gate.
-	// Note: We have to do this with Kubernetes 1.31. Because with that version we encountered
-	// a case where it's not okay anymore to ignore the Kubernetes version skew (kubelet 1.31 uses
-	// the spec.clusterIP field selector that is only implemented in kube-apiserver >= 1.31.0).
-	minKubernetesVersionControlPlaneKubeletLocalMode = semver.MustParse("1.31.0")
-
-	// ErrControlPlaneMinNodes signals that a cluster doesn't meet the minimum required nodes
-	// to remove an etcd member.
-	ErrControlPlaneMinNodes = errors.New("cluster has fewer than 2 control plane nodes; removing an etcd member is not supported")
 )
 
 // WorkloadCluster defines all behaviors necessary to upgrade kubernetes on a workload cluster
@@ -91,39 +62,32 @@ var (
 // TODO: Add a detailed description to each of these method definitions.
 type WorkloadCluster interface {
 	// Basic health and status checks.
-	ClusterStatus(ctx context.Context) (ClusterStatus, error)
+	HasKubeadmConfig(ctx context.Context) (bool, error)
 	UpdateStaticPodConditions(ctx context.Context, controlPlane *ControlPlane)
 	UpdateEtcdConditions(ctx context.Context, controlPlane *ControlPlane)
-	EtcdMembers(ctx context.Context) ([]string, error)
 	GetAPIServerCertificateExpiry(ctx context.Context, kubeadmConfig *bootstrapv1.KubeadmConfig, nodeName string) (*time.Time, error)
 
 	// Upgrade related tasks.
-	ReconcileKubeletRBACBinding(ctx context.Context, version semver.Version) error
-	ReconcileKubeletRBACRole(ctx context.Context, version semver.Version) error
-	UpdateKubernetesVersionInKubeadmConfigMap(version semver.Version) func(*bootstrapv1.ClusterConfiguration)
 	UpdateImageRepositoryInKubeadmConfigMap(imageRepository string) func(*bootstrapv1.ClusterConfiguration)
 	UpdateFeatureGatesInKubeadmConfigMap(kubeadmConfigSpec bootstrapv1.KubeadmConfigSpec, kubernetesVersion semver.Version) func(*bootstrapv1.ClusterConfiguration)
-	UpdateEtcdLocalInKubeadmConfigMap(localEtcd *bootstrapv1.LocalEtcd) func(*bootstrapv1.ClusterConfiguration)
-	UpdateEtcdExternalInKubeadmConfigMap(externalEtcd *bootstrapv1.ExternalEtcd) func(*bootstrapv1.ClusterConfiguration)
+	UpdateEtcdLocalInKubeadmConfigMap(localEtcd bootstrapv1.LocalEtcd) func(*bootstrapv1.ClusterConfiguration)
+	UpdateEtcdExternalInKubeadmConfigMap(externalEtcd bootstrapv1.ExternalEtcd) func(*bootstrapv1.ClusterConfiguration)
 	UpdateAPIServerInKubeadmConfigMap(apiServer bootstrapv1.APIServer) func(*bootstrapv1.ClusterConfiguration)
-	UpdateControllerManagerInKubeadmConfigMap(controllerManager bootstrapv1.ControlPlaneComponent) func(*bootstrapv1.ClusterConfiguration)
-	UpdateSchedulerInKubeadmConfigMap(scheduler bootstrapv1.ControlPlaneComponent) func(*bootstrapv1.ClusterConfiguration)
-	UpdateKubeletConfigMap(ctx context.Context, version semver.Version) error
-	UpdateKubeProxyImageInfo(ctx context.Context, kcp *controlplanev1.KubeadmControlPlane, version semver.Version) error
-	UpdateCoreDNS(ctx context.Context, kcp *controlplanev1.KubeadmControlPlane, version semver.Version) error
-	RemoveEtcdMemberForMachine(ctx context.Context, machine *clusterv1.Machine) error
-	ForwardEtcdLeadership(ctx context.Context, machine *clusterv1.Machine, leaderCandidate *clusterv1.Machine) error
-	AllowBootstrapTokensToGetNodes(ctx context.Context) error
-	AllowClusterAdminPermissions(ctx context.Context, version semver.Version) error
+	UpdateControllerManagerInKubeadmConfigMap(controllerManager bootstrapv1.ControllerManager) func(*bootstrapv1.ClusterConfiguration)
+	UpdateSchedulerInKubeadmConfigMap(scheduler bootstrapv1.Scheduler) func(*bootstrapv1.ClusterConfiguration)
+	UpdateCertificateValidityPeriodDays(certificateValidityPeriodDays int32) func(*bootstrapv1.ClusterConfiguration)
+	UpdateEncryptionAlgorithm(encryptionAlgorithm bootstrapv1.EncryptionAlgorithmType) func(*bootstrapv1.ClusterConfiguration)
+	UpdateKubeProxyImageInfo(ctx context.Context, kcp *controlplanev1.KubeadmControlPlane) error
+	UpdateCoreDNS(ctx context.Context, kcp *controlplanev1.KubeadmControlPlane) error
+	RemoveEtcdMember(ctx context.Context, m *etcd.Member, nodes []*Node) error
+	ForwardEtcdLeadership(ctx context.Context, fromMember, toMember string) error
+	EnsureKubeadmPermissions(ctx context.Context, version semver.Version) error
 	UpdateClusterConfiguration(ctx context.Context, version semver.Version, mutators ...func(*bootstrapv1.ClusterConfiguration)) error
-
-	// State recovery tasks.
-	ReconcileEtcdMembersAndControlPlaneNodes(ctx context.Context, members []*etcd.Member, nodeNames []string) ([]string, error)
 }
 
 // Workload defines operations on workload clusters.
 type Workload struct {
-	Client              ctrlclient.Client
+	Client              client.Client
 	CoreDNSMigrator     coreDNSMigrator
 	etcdClientGenerator etcdClientFor
 	restConfig          *rest.Config
@@ -131,35 +95,13 @@ type Workload struct {
 
 var _ WorkloadCluster = &Workload{}
 
-func (w *Workload) getControlPlaneNodes(ctx context.Context) (*corev1.NodeList, error) {
-	controlPlaneNodes := &corev1.NodeList{}
-	controlPlaneNodeNames := sets.Set[string]{}
-
-	for _, label := range []string{labelNodeRoleOldControlPlane, labelNodeRoleControlPlane} {
-		nodes := &corev1.NodeList{}
-		if err := w.Client.List(ctx, nodes, ctrlclient.MatchingLabels(map[string]string{
-			label: "",
-		})); err != nil {
-			return nil, err
-		}
-
-		for i := range nodes.Items {
-			node := nodes.Items[i]
-
-			// Continue if we already added that node.
-			if controlPlaneNodeNames.Has(node.Name) {
-				continue
-			}
-
-			controlPlaneNodeNames.Insert(node.Name)
-			controlPlaneNodes.Items = append(controlPlaneNodes.Items, node)
-		}
-	}
-
-	return controlPlaneNodes, nil
+func (w *Workload) getNodesWithControlPlaneLabel(ctx context.Context) ([]*Node, error) {
+	return ListTransformedNodes(ctx, w.Client, client.MatchingLabels(map[string]string{
+		labelNodeRoleControlPlane: "",
+	}))
 }
 
-func (w *Workload) getConfigMap(ctx context.Context, configMap ctrlclient.ObjectKey) (*corev1.ConfigMap, error) {
+func (w *Workload) getConfigMap(ctx context.Context, configMap client.ObjectKey) (*corev1.ConfigMap, error) {
 	original := &corev1.ConfigMap{}
 	if err := w.Client.Get(ctx, configMap, original); err != nil {
 		return nil, errors.Wrapf(err, "error getting %s/%s configmap from target cluster", configMap.Namespace, configMap.Name)
@@ -183,122 +125,12 @@ func (w *Workload) UpdateFeatureGatesInKubeadmConfigMap(kubeadmConfigSpec bootst
 	return func(c *bootstrapv1.ClusterConfiguration) {
 		// We use DeepCopy here to avoid modifying the KCP object in the apiserver.
 		kubeadmConfigSpec := kubeadmConfigSpec.DeepCopy()
-		DefaultFeatureGates(kubeadmConfigSpec, kubernetesVersion)
+		desiredstate.DefaultFeatureGates(kubeadmConfigSpec, kubernetesVersion)
 
 		// Even if featureGates is nil, reset it to ClusterConfiguration
 		// to override any previously set feature gates.
 		c.FeatureGates = kubeadmConfigSpec.ClusterConfiguration.FeatureGates
 	}
-}
-
-const (
-	// ControlPlaneKubeletLocalMode is a feature gate of kubeadm that ensures
-	// kubelets only communicate with the local apiserver.
-	ControlPlaneKubeletLocalMode = "ControlPlaneKubeletLocalMode"
-)
-
-// DefaultFeatureGates defaults the feature gates field.
-func DefaultFeatureGates(kubeadmConfigSpec *bootstrapv1.KubeadmConfigSpec, kubernetesVersion semver.Version) {
-	if kubernetesVersion.LT(minKubernetesVersionControlPlaneKubeletLocalMode) {
-		return
-	}
-
-	if kubeadmConfigSpec.ClusterConfiguration == nil {
-		kubeadmConfigSpec.ClusterConfiguration = &bootstrapv1.ClusterConfiguration{}
-	}
-
-	if kubeadmConfigSpec.ClusterConfiguration.FeatureGates == nil {
-		kubeadmConfigSpec.ClusterConfiguration.FeatureGates = map[string]bool{}
-	}
-
-	if _, ok := kubeadmConfigSpec.ClusterConfiguration.FeatureGates[ControlPlaneKubeletLocalMode]; !ok {
-		kubeadmConfigSpec.ClusterConfiguration.FeatureGates[ControlPlaneKubeletLocalMode] = true
-	}
-}
-
-// UpdateKubernetesVersionInKubeadmConfigMap updates the kubernetes version in the kubeadm config map.
-func (w *Workload) UpdateKubernetesVersionInKubeadmConfigMap(version semver.Version) func(*bootstrapv1.ClusterConfiguration) {
-	return func(c *bootstrapv1.ClusterConfiguration) {
-		c.KubernetesVersion = fmt.Sprintf("v%s", version.String())
-	}
-}
-
-// UpdateKubeletConfigMap will create a new kubelet-config-1.x config map for a new version of the kubelet.
-// This is a necessary process for upgrades.
-func (w *Workload) UpdateKubeletConfigMap(ctx context.Context, version semver.Version) error {
-	// Check if the desired configmap already exists
-	desiredKubeletConfigMapName := generateKubeletConfigName(version)
-	configMapKey := ctrlclient.ObjectKey{Name: desiredKubeletConfigMapName, Namespace: metav1.NamespaceSystem}
-	_, err := w.getConfigMap(ctx, configMapKey)
-	if err == nil {
-		// Nothing to do, the configmap already exists
-		return nil
-	}
-	if !apierrors.IsNotFound(errors.Cause(err)) {
-		return errors.Wrapf(err, "error determining if kubelet configmap %s exists", desiredKubeletConfigMapName)
-	}
-
-	previousMinorVersionKubeletConfigMapName := generateKubeletConfigName(semver.Version{Major: version.Major, Minor: version.Minor - 1})
-
-	// If desired and previous ConfigMap name are the same it means we already completed the transition
-	// to the unified KubeletConfigMap name in the previous upgrade; no additional operations are required.
-	if desiredKubeletConfigMapName == previousMinorVersionKubeletConfigMapName {
-		return nil
-	}
-
-	configMapKey = ctrlclient.ObjectKey{Name: previousMinorVersionKubeletConfigMapName, Namespace: metav1.NamespaceSystem}
-	// Returns a copy
-	cm, err := w.getConfigMap(ctx, configMapKey)
-	if apierrors.IsNotFound(errors.Cause(err)) {
-		return errors.Errorf("unable to find kubelet configmap %s", previousMinorVersionKubeletConfigMapName)
-	}
-	if err != nil {
-		return err
-	}
-
-	// In order to avoid using two cgroup drivers on the same machine,
-	// (cgroupfs and systemd cgroup drivers), starting from
-	// 1.21 image builder is going to configure containerd for using the
-	// systemd driver, and the Kubelet configuration must be aligned to this change.
-	// NOTE: It is considered safe to update the kubelet-config-1.21 ConfigMap
-	// because only new nodes using v1.21 images will pick up the change during
-	// kubeadm join.
-	data, ok := cm.Data[kubeletConfigKey]
-	if !ok {
-		return errors.Errorf("unable to find %q key in %s", kubeletConfigKey, cm.Name)
-	}
-	kubeletConfig, err := yamlToUnstructured([]byte(data))
-	if err != nil {
-		return errors.Wrapf(err, "unable to decode kubelet ConfigMap's %q content to Unstructured object", kubeletConfigKey)
-	}
-	cgroupDriver, _, err := unstructured.NestedString(kubeletConfig.UnstructuredContent(), cgroupDriverKey)
-	if err != nil {
-		return errors.Wrapf(err, "unable to extract %q from Kubelet ConfigMap's %q", cgroupDriverKey, cm.Name)
-	}
-
-	// If the value is not already explicitly set by the user, change according to kubeadm/image builder new requirements.
-	if cgroupDriver == "" {
-		cgroupDriver = "systemd"
-
-		if err := unstructured.SetNestedField(kubeletConfig.UnstructuredContent(), cgroupDriver, cgroupDriverKey); err != nil {
-			return errors.Wrapf(err, "unable to update %q on Kubelet ConfigMap's %q", cgroupDriverKey, cm.Name)
-		}
-		updated, err := yaml.Marshal(kubeletConfig)
-		if err != nil {
-			return errors.Wrapf(err, "unable to encode Kubelet ConfigMap's %q to YAML", cm.Name)
-		}
-		cm.Data[kubeletConfigKey] = string(updated)
-	}
-
-	// Update the name to the new name
-	cm.Name = desiredKubeletConfigMapName
-	// Clear the resource version. Is this necessary since this cm is actually a DeepCopy()?
-	cm.ResourceVersion = ""
-
-	if err := w.Client.Create(ctx, cm); err != nil && !apierrors.IsAlreadyExists(err) {
-		return errors.Wrapf(err, "error creating configmap %s", desiredKubeletConfigMapName)
-	}
-	return nil
 }
 
 // UpdateAPIServerInKubeadmConfigMap updates api server configuration in kubeadm config map.
@@ -309,56 +141,31 @@ func (w *Workload) UpdateAPIServerInKubeadmConfigMap(apiServer bootstrapv1.APISe
 }
 
 // UpdateControllerManagerInKubeadmConfigMap updates controller manager configuration in kubeadm config map.
-func (w *Workload) UpdateControllerManagerInKubeadmConfigMap(controllerManager bootstrapv1.ControlPlaneComponent) func(*bootstrapv1.ClusterConfiguration) {
+func (w *Workload) UpdateControllerManagerInKubeadmConfigMap(controllerManager bootstrapv1.ControllerManager) func(*bootstrapv1.ClusterConfiguration) {
 	return func(c *bootstrapv1.ClusterConfiguration) {
 		c.ControllerManager = controllerManager
 	}
 }
 
 // UpdateSchedulerInKubeadmConfigMap updates scheduler configuration in kubeadm config map.
-func (w *Workload) UpdateSchedulerInKubeadmConfigMap(scheduler bootstrapv1.ControlPlaneComponent) func(*bootstrapv1.ClusterConfiguration) {
+func (w *Workload) UpdateSchedulerInKubeadmConfigMap(scheduler bootstrapv1.Scheduler) func(*bootstrapv1.ClusterConfiguration) {
 	return func(c *bootstrapv1.ClusterConfiguration) {
 		c.Scheduler = scheduler
 	}
 }
 
-// updateClusterStatus gets the ClusterStatus kubeadm-config ConfigMap, converts it to the
-// Cluster API representation, and then applies a mutation func; if changes are detected, the
-// data are converted back into the Kubeadm API version in use for the target Kubernetes version and the
-// kubeadm-config ConfigMap updated.
-func (w *Workload) updateClusterStatus(ctx context.Context, mutator func(status *bootstrapv1.ClusterStatus), version semver.Version) error {
-	return retry.RetryOnConflict(retry.DefaultBackoff, func() error {
-		key := ctrlclient.ObjectKey{Name: kubeadmConfigKey, Namespace: metav1.NamespaceSystem}
-		configMap, err := w.getConfigMap(ctx, key)
-		if err != nil {
-			return errors.Wrap(err, "failed to get kubeadmConfigMap")
-		}
+// UpdateCertificateValidityPeriodDays updates CertificateValidityPeriodDays in kubeadm config map.
+func (w *Workload) UpdateCertificateValidityPeriodDays(certificateValidityPeriodDays int32) func(*bootstrapv1.ClusterConfiguration) {
+	return func(c *bootstrapv1.ClusterConfiguration) {
+		c.CertificateValidityPeriodDays = certificateValidityPeriodDays
+	}
+}
 
-		currentData, ok := configMap.Data[clusterStatusKey]
-		if !ok {
-			return errors.Errorf("unable to find %q in the kubeadm-config ConfigMap", clusterStatusKey)
-		}
-
-		currentClusterStatus, err := kubeadmtypes.UnmarshalClusterStatus(currentData)
-		if err != nil {
-			return errors.Wrapf(err, "unable to decode %q in the kubeadm-config ConfigMap's from YAML", clusterStatusKey)
-		}
-
-		updatedClusterStatus := currentClusterStatus.DeepCopy()
-		mutator(updatedClusterStatus)
-
-		if !reflect.DeepEqual(currentClusterStatus, updatedClusterStatus) {
-			updatedData, err := kubeadmtypes.MarshalClusterStatusForVersion(updatedClusterStatus, version)
-			if err != nil {
-				return errors.Wrapf(err, "unable to encode %q kubeadm-config ConfigMap's to YAML", clusterStatusKey)
-			}
-			configMap.Data[clusterStatusKey] = updatedData
-			if err := w.Client.Update(ctx, configMap); err != nil {
-				return errors.Wrap(err, "failed to upgrade the kubeadmConfigMap")
-			}
-		}
-		return nil
-	})
+// UpdateEncryptionAlgorithm updates EncryptionAlgorithmType in kubeadm config map.
+func (w *Workload) UpdateEncryptionAlgorithm(encryptionAlgorithm bootstrapv1.EncryptionAlgorithmType) func(*bootstrapv1.ClusterConfiguration) {
+	return func(c *bootstrapv1.ClusterConfiguration) {
+		c.EncryptionAlgorithm = encryptionAlgorithm
+	}
 }
 
 // UpdateClusterConfiguration gets the ClusterConfiguration kubeadm-config ConfigMap, converts it to the
@@ -367,7 +174,7 @@ func (w *Workload) updateClusterStatus(ctx context.Context, mutator func(status 
 // kubeadm-config ConfigMap updated.
 func (w *Workload) UpdateClusterConfiguration(ctx context.Context, version semver.Version, mutators ...func(*bootstrapv1.ClusterConfiguration)) error {
 	return retry.RetryOnConflict(retry.DefaultBackoff, func() error {
-		key := ctrlclient.ObjectKey{Name: kubeadmConfigKey, Namespace: metav1.NamespaceSystem}
+		key := client.ObjectKey{Name: kubeadmConfigKey, Namespace: metav1.NamespaceSystem}
 		configMap, err := w.getConfigMap(ctx, key)
 		if err != nil {
 			return errors.Wrap(err, "failed to get kubeadmConfigMap")
@@ -378,7 +185,7 @@ func (w *Workload) UpdateClusterConfiguration(ctx context.Context, version semve
 			return errors.Errorf("unable to find %q in the kubeadm-config ConfigMap", clusterConfigurationKey)
 		}
 
-		currentObj, err := kubeadmtypes.UnmarshalClusterConfiguration(currentData)
+		currentObj, currentUpstreamData, err := kubeadmtypes.UnmarshalClusterConfiguration(currentData)
 		if err != nil {
 			return errors.Wrapf(err, "unable to decode %q in the kubeadm-config ConfigMap's from YAML", clusterConfigurationKey)
 		}
@@ -388,8 +195,16 @@ func (w *Workload) UpdateClusterConfiguration(ctx context.Context, version semve
 			mutators[i](updatedObj)
 		}
 
-		if !reflect.DeepEqual(currentObj, updatedObj) {
-			updatedData, err := kubeadmtypes.MarshalClusterConfigurationForVersion(updatedObj, version)
+		updatedUpstreamData := currentUpstreamData.Clone()
+
+		desiredKubernetesVersion := fmt.Sprintf("v%s", version.String())
+		currentKubernetesVersion := ptr.Deref(currentUpstreamData.KubernetesVersion, "")
+		if currentKubernetesVersion != desiredKubernetesVersion {
+			updatedUpstreamData.KubernetesVersion = ptr.To(desiredKubernetesVersion)
+		}
+
+		if !reflect.DeepEqual(currentObj, updatedObj) || !reflect.DeepEqual(currentUpstreamData, updatedUpstreamData) {
+			updatedData, err := kubeadmtypes.MarshalClusterConfigurationForVersion(updatedObj, version, updatedUpstreamData)
 			if err != nil {
 				return errors.Wrapf(err, "unable to encode %q kubeadm-config ConfigMap's to YAML", clusterConfigurationKey)
 			}
@@ -402,48 +217,25 @@ func (w *Workload) UpdateClusterConfiguration(ctx context.Context, version semve
 	})
 }
 
-// ClusterStatus holds stats information about the cluster.
-type ClusterStatus struct {
-	// Nodes are a total count of nodes
-	Nodes int32
-	// ReadyNodes are the count of nodes that are reporting ready
-	ReadyNodes int32
-	// HasKubeadmConfig will be true if the kubeadm config map has been uploaded, false otherwise.
-	HasKubeadmConfig bool
-}
-
-// ClusterStatus returns the status of the cluster.
-func (w *Workload) ClusterStatus(ctx context.Context) (ClusterStatus, error) {
-	status := ClusterStatus{}
-
-	// count the control plane nodes
-	nodes, err := w.getControlPlaneNodes(ctx)
-	if err != nil {
-		return status, err
-	}
-
-	for _, node := range nodes.Items {
-		nodeCopy := node
-		status.Nodes++
-		if util.IsNodeReady(&nodeCopy) {
-			status.ReadyNodes++
-		}
-	}
-
+// HasKubeadmConfig returns if the cluster has the kubeadm-config ConfigMap.
+func (w *Workload) HasKubeadmConfig(ctx context.Context) (bool, error) {
 	// find the kubeadm conifg
-	key := ctrlclient.ObjectKey{
+	key := client.ObjectKey{
 		Name:      kubeadmConfigKey,
 		Namespace: metav1.NamespaceSystem,
 	}
-	err = w.Client.Get(ctx, key, &corev1.ConfigMap{})
+	err := w.Client.Get(ctx, key, &corev1.ConfigMap{})
 	// TODO: Consider if this should only return false if the error is IsNotFound.
 	// TODO: Consider adding a third state of 'unknown' when there is an error retrieving the config map.
-	status.HasKubeadmConfig = err == nil
-	return status, nil
+	return err == nil, nil
 }
 
 // GetAPIServerCertificateExpiry returns the certificate expiry of the apiserver on the given node.
 func (w *Workload) GetAPIServerCertificateExpiry(ctx context.Context, kubeadmConfig *bootstrapv1.KubeadmConfig, nodeName string) (*time.Time, error) {
+	// Create a context with 15 second timeout
+	ctx, cancel := context.WithTimeoutCause(ctx, 15*time.Second, errors.New("timeout getting API server certificate expiry"))
+	defer cancel()
+
 	// Create a proxy.
 	p := proxy.Proxy{
 		Kind:       "pods",
@@ -481,7 +273,7 @@ func (w *Workload) GetAPIServerCertificateExpiry(ctx context.Context, kubeadmCon
 		}
 	}
 	if kubeAPIServerCert == nil {
-		return nil, errors.Wrapf(err, "unable to get certificate expiry for kube-apiserver on Node/%s: couldn't get peer certificate with cn=%q", nodeName, kubeadmAPIServerCertCommonName)
+		return nil, errors.Errorf("unable to get certificate expiry for kube-apiserver on Node/%s: couldn't get peer certificate with cn=%q", nodeName, kubeadmAPIServerCertCommonName)
 	}
 	return &kubeAPIServerCert.NotAfter, nil
 }
@@ -489,13 +281,11 @@ func (w *Workload) GetAPIServerCertificateExpiry(ctx context.Context, kubeadmCon
 // calculateAPIServerPort calculates the kube-apiserver bind port based
 // on a KubeadmConfig.
 func calculateAPIServerPort(config *bootstrapv1.KubeadmConfig) int32 {
-	if config.Spec.InitConfiguration != nil &&
-		config.Spec.InitConfiguration.LocalAPIEndpoint.BindPort != 0 {
+	if config.Spec.InitConfiguration.LocalAPIEndpoint.BindPort != 0 {
 		return config.Spec.InitConfiguration.LocalAPIEndpoint.BindPort
 	}
 
-	if config.Spec.JoinConfiguration != nil &&
-		config.Spec.JoinConfiguration.ControlPlane != nil &&
+	if config.Spec.JoinConfiguration.ControlPlane != nil &&
 		config.Spec.JoinConfiguration.ControlPlane.LocalAPIEndpoint.BindPort != 0 {
 		return config.Spec.JoinConfiguration.ControlPlane.LocalAPIEndpoint.BindPort
 	}
@@ -503,7 +293,7 @@ func calculateAPIServerPort(config *bootstrapv1.KubeadmConfig) int32 {
 	return 6443
 }
 
-func generateClientCert(caCertEncoded, caKeyEncoded []byte, clientKey *rsa.PrivateKey) (tls.Certificate, error) {
+func generateClientCert(caCertEncoded, caKeyEncoded []byte, keyEncryptionAlgorithm bootstrapv1.EncryptionAlgorithmType) (tls.Certificate, error) {
 	caCert, err := certs.DecodeCertPEM(caCertEncoded)
 	if err != nil {
 		return tls.Certificate{}, err
@@ -512,14 +302,24 @@ func generateClientCert(caCertEncoded, caKeyEncoded []byte, clientKey *rsa.Priva
 	if err != nil {
 		return tls.Certificate{}, err
 	}
+
+	clientKey, err := certs.NewSigner(keyEncryptionAlgorithm)
+	if err != nil {
+		return tls.Certificate{}, err
+	}
 	x509Cert, err := newClientCert(caCert, clientKey, caKey)
 	if err != nil {
 		return tls.Certificate{}, err
 	}
-	return tls.X509KeyPair(certs.EncodeCertPEM(x509Cert), certs.EncodePrivateKeyPEM(clientKey))
+	encodedClientKey, err := certs.EncodePrivateKeyPEMFromSigner(clientKey)
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+
+	return tls.X509KeyPair(certs.EncodeCertPEM(x509Cert), encodedClientKey)
 }
 
-func newClientCert(caCert *x509.Certificate, key *rsa.PrivateKey, caKey crypto.Signer) (*x509.Certificate, error) {
+func newClientCert(caCert *x509.Certificate, key crypto.Signer, caKey crypto.Signer) (*x509.Certificate, error) {
 	cfg := certs.Config{
 		CommonName: "cluster-api.x-k8s.io",
 	}
@@ -552,7 +352,7 @@ func staticPodName(component, nodeName string) string {
 }
 
 // UpdateKubeProxyImageInfo updates kube-proxy image in the kube-proxy DaemonSet.
-func (w *Workload) UpdateKubeProxyImageInfo(ctx context.Context, kcp *controlplanev1.KubeadmControlPlane, version semver.Version) error {
+func (w *Workload) UpdateKubeProxyImageInfo(ctx context.Context, kcp *controlplanev1.KubeadmControlPlane) error {
 	// Return early if we've been asked to skip kube-proxy upgrades entirely.
 	if _, ok := kcp.Annotations[controlplanev1.SkipKubeProxyAnnotation]; ok {
 		return nil
@@ -560,7 +360,7 @@ func (w *Workload) UpdateKubeProxyImageInfo(ctx context.Context, kcp *controlpla
 
 	ds := &appsv1.DaemonSet{}
 
-	if err := w.Client.Get(ctx, ctrlclient.ObjectKey{Name: kubeProxyKey, Namespace: metav1.NamespaceSystem}, ds); err != nil {
+	if err := w.Client.Get(ctx, client.ObjectKey{Name: kubeProxyKey, Namespace: metav1.NamespaceSystem}, ds); err != nil {
 		if apierrors.IsNotFound(err) {
 			// if kube-proxy is missing, return without errors
 			return nil
@@ -579,7 +379,7 @@ func (w *Workload) UpdateKubeProxyImageInfo(ctx context.Context, kcp *controlpla
 	}
 
 	// Modify the image repository if a value was explicitly set or an upgrade is required.
-	imageRepository := ImageRepositoryFromClusterConfig(kcp.Spec.KubeadmConfigSpec.ClusterConfiguration, version)
+	imageRepository := ImageRepositoryFromClusterConfig(kcp.Spec.KubeadmConfigSpec.ClusterConfiguration)
 	if imageRepository != "" {
 		newImageName, err = containerutil.ModifyImageRepository(newImageName, imageRepository)
 		if err != nil {
@@ -588,12 +388,9 @@ func (w *Workload) UpdateKubeProxyImageInfo(ctx context.Context, kcp *controlpla
 	}
 
 	if container.Image != newImageName {
-		helper, err := patch.NewHelper(ds, w.Client)
-		if err != nil {
-			return err
-		}
+		original := ds.DeepCopy()
 		patchKubeProxyImage(ds, newImageName)
-		return helper.Patch(ctx, ds)
+		return w.Client.Patch(ctx, ds, client.MergeFrom(original))
 	}
 	return nil
 }
@@ -617,36 +414,11 @@ func patchKubeProxyImage(ds *appsv1.DaemonSet, image string) {
 	}
 }
 
-// yamlToUnstructured looks inside a config map for a specific key and extracts the embedded YAML into an
-// *unstructured.Unstructured.
-func yamlToUnstructured(rawYAML []byte) (*unstructured.Unstructured, error) {
-	unst := &unstructured.Unstructured{}
-	err := yaml.Unmarshal(rawYAML, unst)
-	return unst, err
-}
-
-// ImageRepositoryFromClusterConfig returns the image repository to use. It returns:
-//   - clusterConfig.ImageRepository if set.
-//   - else either k8s.gcr.io or registry.k8s.io depending on the default registry of the kubeadm
-//     binary of the given kubernetes version. This is only done for Kubernetes versions >= v1.22.0
-//     and < v1.26.0 because in this version range the default registry was changed.
-//
-// Note: Please see the following issue for more context: https://github.com/kubernetes-sigs/cluster-api/issues/7833
-// tl;dr is that the imageRepository must be in sync with the default registry of kubeadm.
-// Otherwise kubeadm preflight checks will fail because kubeadm is trying to pull the CoreDNS image
-// from the wrong repository (<registry>/coredns instead of <registry>/coredns/coredns).
-func ImageRepositoryFromClusterConfig(clusterConfig *bootstrapv1.ClusterConfiguration, kubernetesVersion semver.Version) string {
+// ImageRepositoryFromClusterConfig returns the image repository to use.
+func ImageRepositoryFromClusterConfig(clusterConfig bootstrapv1.ClusterConfiguration) string {
 	// If ImageRepository is explicitly specified, return early.
-	if clusterConfig != nil &&
-		clusterConfig.ImageRepository != "" {
+	if clusterConfig.ImageRepository != "" {
 		return clusterConfig.ImageRepository
-	}
-
-	// If v1.22.0 <= version < v1.26.0 return the default registry of the
-	// corresponding kubeadm binary.
-	if kubernetesVersion.GTE(kubeadm.MinKubernetesVersionImageRegistryMigration) &&
-		kubernetesVersion.LT(kubeadm.NextKubernetesVersionImageRegistryMigration) {
-		return kubeadm.GetDefaultRegistry(kubernetesVersion)
 	}
 
 	// Use defaulting or current values otherwise.

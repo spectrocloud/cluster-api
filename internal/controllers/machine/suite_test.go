@@ -26,20 +26,19 @@ import (
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
-	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/selection"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
-	"sigs.k8s.io/cluster-api/api/v1beta1/index"
+	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
+	runtimecatalog "sigs.k8s.io/cluster-api/api/runtime/catalog"
 	"sigs.k8s.io/cluster-api/controllers/clustercache"
-	"sigs.k8s.io/cluster-api/controllers/remote"
+	fakeruntimeclient "sigs.k8s.io/cluster-api/internal/runtime/client/fake"
+	"sigs.k8s.io/cluster-api/internal/setup"
 	"sigs.k8s.io/cluster-api/internal/test/envtest"
+	"sigs.k8s.io/cluster-api/util/index"
 )
 
 const (
@@ -67,21 +66,15 @@ func TestMain(m *testing.M) {
 	}
 
 	setupReconcilers := func(ctx context.Context, mgr ctrl.Manager) {
+		secretCachingClient, err := setup.CreateSecretCachingClient(mgr)
+		if err != nil {
+			panic(fmt.Sprintf("Unable to create secret caching client: %s", err))
+		}
+
 		clusterCache, err := clustercache.SetupWithManager(ctx, mgr, clustercache.Options{
-			SecretClient: mgr.GetClient(),
-			Cache: clustercache.CacheOptions{
-				Indexes: []clustercache.CacheOptionsIndex{clustercache.NodeProviderIDIndex},
-			},
-			Client: clustercache.ClientOptions{
-				UserAgent: remote.DefaultClusterAPIUserAgent("test-controller-manager"),
-				Cache: clustercache.ClientCacheOptions{
-					DisableFor: []client.Object{
-						// Don't cache ConfigMaps & Secrets.
-						&corev1.ConfigMap{},
-						&corev1.Secret{},
-					},
-				},
-			},
+			SecretClient: secretCachingClient,
+			Cache:        setup.ClusterCacheCacheOptions(),
+			Client:       setup.ClusterCacheClientOptions("test-controller-manager", 20, 30),
 		}, controller.Options{MaxConcurrentReconciles: 10})
 		if err != nil {
 			panic(fmt.Sprintf("Failed to create ClusterCache: %v", err))
@@ -97,11 +90,14 @@ func TestMain(m *testing.M) {
 			SetConnectionCreationRetryInterval(2 * time.Second)
 
 		if err := (&Reconciler{
-			Client:                      mgr.GetClient(),
-			APIReader:                   mgr.GetAPIReader(),
-			ClusterCache:                clusterCache,
-			RemoteConditionsGracePeriod: 5 * time.Minute,
-			AdditionalSyncMachineLabels: nil,
+			Client:    mgr.GetClient(),
+			APIReader: mgr.GetAPIReader(),
+			// Just adding a minimal RuntimeClient to avoid panics in tests.
+			RuntimeClient:                    fakeruntimeclient.NewRuntimeClientBuilder().WithCatalog(runtimecatalog.New()).Build(),
+			ClusterCache:                     clusterCache,
+			RemoteConditionsGracePeriod:      5 * time.Minute,
+			AdditionalSyncMachineLabels:      nil,
+			AdditionalSyncMachineAnnotations: nil,
 		}).SetupWithManager(ctx, mgr, controller.Options{MaxConcurrentReconciles: 1}); err != nil {
 			panic(fmt.Sprintf("Failed to start MachineReconciler: %v", err))
 		}
@@ -110,26 +106,14 @@ func TestMain(m *testing.M) {
 	SetDefaultEventuallyPollingInterval(100 * time.Millisecond)
 	SetDefaultEventuallyTimeout(timeout)
 
-	req, _ := labels.NewRequirement(clusterv1.ClusterNameLabel, selection.Exists, nil)
-	clusterSecretCacheSelector := labels.NewSelector().Add(*req)
-
 	os.Exit(envtest.Run(ctx, envtest.RunInput{
 		M: m,
-		ManagerCacheOptions: cache.Options{
-			ByObject: map[client.Object]cache.ByObject{
-				// Only cache Secrets with the cluster name label.
-				// This is similar to the real world.
-				&corev1.Secret{}: {
-					Label: clusterSecretCacheSelector,
-				},
-			},
+		SetupManagerCacheOptions: func(scheme *runtime.Scheme) cache.Options {
+			return setup.ManagerCacheOptions(scheme, "test-controller-manager", "", 10*time.Minute)
 		},
-		ManagerUncachedObjs: []client.Object{
-			&corev1.ConfigMap{},
-			&corev1.Secret{},
-		},
-		SetupEnv:         func(e *envtest.Environment) { env = e },
-		SetupIndexes:     setupIndexes,
-		SetupReconcilers: setupReconcilers,
+		ManagerClientOptions: setup.ManagerClientOptions(),
+		SetupEnv:             func(e *envtest.Environment) { env = e },
+		SetupIndexes:         setupIndexes,
+		SetupReconcilers:     setupReconcilers,
 	}))
 }

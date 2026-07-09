@@ -19,11 +19,13 @@ package builder
 import (
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+
+	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 )
 
 var (
 	// BootstrapGroupVersion is group version used for bootstrap objects.
-	BootstrapGroupVersion = schema.GroupVersion{Group: "bootstrap.cluster.x-k8s.io", Version: "v1beta1"}
+	BootstrapGroupVersion = clusterv1.GroupVersionBootstrap
 
 	// GenericBootstrapConfigKind is the Kind for the GenericBootstrapConfig.
 	GenericBootstrapConfigKind = "GenericBootstrapConfig"
@@ -82,7 +84,12 @@ func testBootstrapConfigCRD(gvk schema.GroupVersionKind) *apiextensionsv1.Custom
 			Type: "object",
 			Properties: map[string]apiextensionsv1.JSONSchemaProps{
 				// mandatory field from the Cluster API contract
-				"ready":          {Type: "boolean"},
+				"initialization": {
+					Type: "object",
+					Properties: map[string]apiextensionsv1.JSONSchemaProps{
+						"dataSecretCreated": {Type: "boolean"},
+					},
+				},
 				"dataSecretName": {Type: "string"},
 				// General purpose fields to be used in different test scenario.
 				"foo": {Type: "string"},

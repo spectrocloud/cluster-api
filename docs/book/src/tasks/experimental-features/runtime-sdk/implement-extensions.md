@@ -50,8 +50,8 @@ import (
 	"k8s.io/klog/v2"
 	ctrl "sigs.k8s.io/controller-runtime"
 
+	runtimehooksv1 "sigs.k8s.io/cluster-api/api/runtime/hooks/v1alpha1"
 	runtimecatalog "sigs.k8s.io/cluster-api/exp/runtime/catalog"
-	runtimehooksv1 "sigs.k8s.io/cluster-api/exp/runtime/hooks/api/v1alpha1"
 	"sigs.k8s.io/cluster-api/exp/runtime/server"
 )
 
@@ -107,6 +107,10 @@ func main() {
 		setupLog.Error(err, "Unable to start extension")
 		os.Exit(1)
 	}
+
+	pflag.CommandLine.VisitAll(func(flag *pflag.Flag) {
+		klog.V(1).Infof("FLAG: --%s=%q", flag.Name, flag.Value)
+	})
 
 	// Add the klog logger in the context.
 	ctrl.SetLogger(klog.Background())
@@ -195,7 +199,7 @@ Developers are fully responsible for all other elements of the design of a Runti
 When using Golang the Runtime Extension developer can benefit from the following packages (provided by the
 `sigs.k8s.io/cluster-api` module) as shown in the example above:
 
-- `exp/runtime/hooks/api/v1alpha1` contains the Runtime Hook Golang API types, which are also used to generate the
+- `api/runtime/hooks/v1alpha1` contains the Runtime Hook Golang API types, which are also used to generate the
   OpenAPI specification.
 - `exp/runtime/catalog` provides the `Catalog` object to register Runtime Hook definitions. The `Catalog` is then
   used by the `server` package to handle requests. `Catalog` is similar to the `runtime.Scheme` of the
@@ -279,7 +283,7 @@ well with practices like unit testing and generally makes the entire system more
 
 ### Error messages
 
-RuntimeExtension authors should be aware that error messages are surfaced as a conditions in Kubernetes resources
+RuntimeExtension authors should be aware that error messages might be surfaced as conditions in Kubernetes resources
 and recorded in Cluster API controller's logs. As a consequence:
 
 - Error message must not contain any sensitive information.
@@ -304,7 +308,7 @@ created, the extension will detect the associated service and discover the assoc
 check the status of the ExtensionConfig. Below is an example of `ExtensionConfig` -
 
 ```yaml
-apiVersion: runtime.cluster.x-k8s.io/v1alpha1
+apiVersion: runtime.cluster.x-k8s.io/v1beta2
 kind: ExtensionConfig
 metadata:
   annotations:

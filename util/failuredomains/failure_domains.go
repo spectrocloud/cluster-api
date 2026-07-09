@@ -22,10 +22,9 @@ import (
 	"fmt"
 	"sort"
 
-	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
+	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/cluster-api/util/collections"
 )
 
@@ -73,16 +72,16 @@ func (f failureDomainAggregations) Swap(i, j int) {
 }
 
 // PickMost returns the failure domain from which we have to delete a control plane machine, which is the failure domain with most machines and at least one eligible machine in it.
-func PickMost(ctx context.Context, failureDomains clusterv1.FailureDomains, allMachines, eligibleMachines collections.Machines) *string {
+func PickMost(ctx context.Context, failureDomains []clusterv1.FailureDomain, allMachines, eligibleMachines collections.Machines) string {
 	aggregations := countByFailureDomain(ctx, failureDomains, allMachines, eligibleMachines)
 	if len(aggregations) == 0 {
-		return nil
+		return ""
 	}
 	sort.Sort(sort.Reverse(aggregations))
 	if len(aggregations) > 0 && aggregations[0].countPriority > 0 {
-		return ptr.To(aggregations[0].id)
+		return aggregations[0].id
 	}
-	return nil
+	return ""
 }
 
 // PickFewest returns the failure domain that will be used for placement of a new control plane machine, which is the failure domain with the fewest
@@ -93,19 +92,19 @@ func PickMost(ctx context.Context, failureDomains clusterv1.FailureDomains, allM
 //
 // In case of tie (more failure domain with the same number of up-to-date, not deleted machines) the failure domain with the fewest number of
 // machine overall is picked to ensure a better spreading of machines while the rollout is performed.
-func PickFewest(ctx context.Context, failureDomains clusterv1.FailureDomains, allMachines, upToDateMachines collections.Machines) *string {
+func PickFewest(ctx context.Context, failureDomains []clusterv1.FailureDomain, allMachines, upToDateMachines collections.Machines) string {
 	aggregations := countByFailureDomain(ctx, failureDomains, allMachines, upToDateMachines)
 	if len(aggregations) == 0 {
-		return nil
+		return ""
 	}
 	sort.Sort(aggregations)
-	return ptr.To(aggregations[0].id)
+	return aggregations[0].id
 }
 
 // countByFailureDomain returns failure domains with the number of machines in it.
 // Note: countByFailureDomain computes both the number of machines as well as the number of a subset of machines with higher priority.
 // E.g. for deletion out of date machines have higher priority vs other machines.
-func countByFailureDomain(ctx context.Context, failureDomains clusterv1.FailureDomains, allMachines, priorityMachines collections.Machines) failureDomainAggregations {
+func countByFailureDomain(ctx context.Context, failureDomains []clusterv1.FailureDomain, allMachines, priorityMachines collections.Machines) failureDomainAggregations {
 	log := ctrl.LoggerFrom(ctx)
 
 	if len(failureDomains) == 0 {
@@ -115,9 +114,9 @@ func countByFailureDomain(ctx context.Context, failureDomains clusterv1.FailureD
 	counters := map[string]failureDomainAggregation{}
 
 	// Initialize the known failure domain keys to find out if an existing machine is in an unsupported failure domain.
-	for id := range failureDomains {
-		counters[id] = failureDomainAggregation{
-			id:            id,
+	for _, fd := range failureDomains {
+		counters[fd.Name] = failureDomainAggregation{
+			id:            fd.Name,
 			countPriority: 0,
 			countAll:      0,
 		}
@@ -125,14 +124,14 @@ func countByFailureDomain(ctx context.Context, failureDomains clusterv1.FailureD
 
 	// Count how many machines are in each failure domain.
 	for _, m := range allMachines {
-		if m.Spec.FailureDomain == nil {
+		if m.Spec.FailureDomain == "" {
 			continue
 		}
-		id := *m.Spec.FailureDomain
-		if _, ok := failureDomains[id]; !ok {
+		id := m.Spec.FailureDomain
+		if _, ok := counters[id]; !ok {
 			var knownFailureDomains []string
-			for failureDomainID := range failureDomains {
-				knownFailureDomains = append(knownFailureDomains, failureDomainID)
+			for _, fd := range failureDomains {
+				knownFailureDomains = append(knownFailureDomains, fd.Name)
 			}
 			log.Info(fmt.Sprintf("Unknown failure domain %q for Machine %s (known failure domains: %v)", id, m.GetName(), knownFailureDomains))
 			continue
@@ -143,11 +142,11 @@ func countByFailureDomain(ctx context.Context, failureDomains clusterv1.FailureD
 	}
 
 	for _, m := range priorityMachines {
-		if m.Spec.FailureDomain == nil {
+		if m.Spec.FailureDomain == "" {
 			continue
 		}
-		id := *m.Spec.FailureDomain
-		if _, ok := failureDomains[id]; !ok {
+		id := m.Spec.FailureDomain
+		if _, ok := counters[id]; !ok {
 			continue
 		}
 		a := counters[id]

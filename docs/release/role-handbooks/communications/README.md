@@ -180,8 +180,9 @@ The goal of this task is to inform all providers that a new beta.0 version a rel
 
 We should inform at least the following providers via a new issue on their respective repos that a new version of CAPI is being released (provide the release date) and that the beta.0 version is ready for them to test.
 
-* Addon provider fleet: https://github.com/rancher-sandbox/cluster-api-addon-provider-fleet/issues/new
+* Addon provider fleet: https://github.com/rancher/cluster-api-addon-provider-fleet/issues/new
 * Addon provider helm: https://github.com/kubernetes-sigs/cluster-api-addon-provider-helm/issues/new
+* Addon provider cdk8s: https://github.com/eitco/cluster-api-addon-provider-cdk8s/issues/new
 * AWS: https://github.com/kubernetes-sigs/cluster-api-provider-aws/issues/new
 * Azure: https://github.com/kubernetes-sigs/cluster-api-provider-azure/issues/new
 * Cloudstack: https://github.com/kubernetes-sigs/cluster-api-provider-cloudstack/issues/new
@@ -191,11 +192,10 @@ We should inform at least the following providers via a new issue on their respe
 * Kubevirt: https://github.com/kubernetes-sigs/cluster-api-provider-kubevirt/issues/new
 * IBMCloud: https://github.com/kubernetes-sigs/cluster-api-provider-ibmcloud/issues/new
 * Metal3: https://github.com/metal3-io/cluster-api-provider-metal3/issues/new
-* Nested: https://github.com/kubernetes-sigs/cluster-api-provider-nested/issues/new
+* Nested (read-only): https://github.com/kubernetes-retired/cluster-api-provider-nested/issues
 * OCI: https://github.com/oracle/cluster-api-provider-oci/issues/new
 * Openstack: https://github.com/kubernetes-sigs/cluster-api-provider-openstack/issues/new
 * Operator: https://github.com/kubernetes-sigs/cluster-api-operator/issues/new
-* Packet: https://github.com/kubernetes-sigs/cluster-api-provider-packet/issues/new
 * vSphere: https://github.com/kubernetes-sigs/cluster-api-provider-vsphere/issues/new
 
 To create GitHub issues at the Cluster API providers repositories and inform about a new minor beta release, use ["provider_issues.go"](../../../../hack/tools/release/internal/update_providers/provider_issues.go) go utility.

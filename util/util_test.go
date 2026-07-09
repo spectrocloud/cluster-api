@@ -23,7 +23,6 @@ import (
 
 	"github.com/blang/semver/v4"
 	. "github.com/onsi/gomega"
-	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -35,7 +34,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
+	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/cluster-api/util/labels/format"
 )
 
@@ -52,7 +51,7 @@ func TestMachineToInfrastructureMapFunc(t *testing.T) {
 			name: "should reconcile infra-1",
 			input: schema.GroupVersionKind{
 				Group:   "foo.cluster.x-k8s.io",
-				Version: "v1alpha4",
+				Version: "vx",
 				Kind:    "TestMachine",
 			},
 			request: &clusterv1.Machine{
@@ -61,10 +60,10 @@ func TestMachineToInfrastructureMapFunc(t *testing.T) {
 					Name:      "test-1",
 				},
 				Spec: clusterv1.MachineSpec{
-					InfrastructureRef: corev1.ObjectReference{
-						APIVersion: "foo.cluster.x-k8s.io/v1beta1",
-						Kind:       "TestMachine",
-						Name:       "infra-1",
+					InfrastructureRef: clusterv1.ContractVersionedObjectReference{
+						APIGroup: "foo.cluster.x-k8s.io",
+						Kind:     "TestMachine",
+						Name:     "infra-1",
 					},
 				},
 			},
@@ -81,7 +80,7 @@ func TestMachineToInfrastructureMapFunc(t *testing.T) {
 			name: "should return no matching reconcile requests",
 			input: schema.GroupVersionKind{
 				Group:   "foo.cluster.x-k8s.io",
-				Version: "v1beta1",
+				Version: "vx",
 				Kind:    "TestMachine",
 			},
 			request: &clusterv1.Machine{
@@ -90,10 +89,10 @@ func TestMachineToInfrastructureMapFunc(t *testing.T) {
 					Name:      "test-1",
 				},
 				Spec: clusterv1.MachineSpec{
-					InfrastructureRef: corev1.ObjectReference{
-						APIVersion: "bar.cluster.x-k8s.io/v1beta1",
-						Kind:       "TestMachine",
-						Name:       "bar-1",
+					InfrastructureRef: clusterv1.ContractVersionedObjectReference{
+						APIGroup: "bar.cluster.x-k8s.io",
+						Kind:     "TestMachine",
+						Name:     "bar-1",
 					},
 				},
 			},
@@ -122,7 +121,7 @@ func TestClusterToInfrastructureMapFunc(t *testing.T) {
 			name: "should reconcile infra-1",
 			input: schema.GroupVersionKind{
 				Group:   "foo.cluster.x-k8s.io",
-				Version: "v1alpha4",
+				Version: "vx",
 				Kind:    "TestCluster",
 			},
 			request: &clusterv1.Cluster{
@@ -131,15 +130,15 @@ func TestClusterToInfrastructureMapFunc(t *testing.T) {
 					Name:      "test-1",
 				},
 				Spec: clusterv1.ClusterSpec{
-					InfrastructureRef: &corev1.ObjectReference{
-						APIVersion: "foo.cluster.x-k8s.io/v1beta1",
-						Kind:       "TestCluster",
-						Name:       "infra-1",
+					InfrastructureRef: clusterv1.ContractVersionedObjectReference{
+						APIGroup: "foo.cluster.x-k8s.io",
+						Kind:     "TestCluster",
+						Name:     "infra-1",
 					},
 				},
 			},
 			infrastructure: &unstructured.Unstructured{Object: map[string]interface{}{
-				"apiVersion": "foo.cluster.x-k8s.io/v1beta1",
+				"apiVersion": "foo.cluster.x-k8s.io/vx",
 				"kind":       "TestCluster",
 				"metadata": map[string]interface{}{
 					"namespace": metav1.NamespaceDefault,
@@ -159,7 +158,7 @@ func TestClusterToInfrastructureMapFunc(t *testing.T) {
 			name: "should return no matching reconcile requests",
 			input: schema.GroupVersionKind{
 				Group:   "foo.cluster.x-k8s.io",
-				Version: "v1beta1",
+				Version: "vx",
 				Kind:    "TestCluster",
 			},
 			request: &clusterv1.Cluster{
@@ -168,10 +167,10 @@ func TestClusterToInfrastructureMapFunc(t *testing.T) {
 					Name:      "test-1",
 				},
 				Spec: clusterv1.ClusterSpec{
-					InfrastructureRef: &corev1.ObjectReference{
-						APIVersion: "bar.cluster.x-k8s.io/v1beta1",
-						Kind:       "TestCluster",
-						Name:       "bar-1",
+					InfrastructureRef: clusterv1.ContractVersionedObjectReference{
+						APIGroup: "bar.cluster.x-k8s.io",
+						Kind:     "TestCluster",
+						Name:     "bar-1",
 					},
 				},
 			},
@@ -181,7 +180,7 @@ func TestClusterToInfrastructureMapFunc(t *testing.T) {
 			name: "Externally managed provider cluster is excluded",
 			input: schema.GroupVersionKind{
 				Group:   "foo.cluster.x-k8s.io",
-				Version: "v1alpha4",
+				Version: "vx",
 				Kind:    "TestCluster",
 			},
 			request: &clusterv1.Cluster{
@@ -190,15 +189,15 @@ func TestClusterToInfrastructureMapFunc(t *testing.T) {
 					Name:      "test-1",
 				},
 				Spec: clusterv1.ClusterSpec{
-					InfrastructureRef: &corev1.ObjectReference{
-						APIVersion: "foo.cluster.x-k8s.io/v1beta1",
-						Kind:       "TestCluster",
-						Name:       "infra-1",
+					InfrastructureRef: clusterv1.ContractVersionedObjectReference{
+						APIGroup: "foo.cluster.x-k8s.io",
+						Kind:     "TestCluster",
+						Name:     "infra-1",
 					},
 				},
 			},
 			infrastructure: &unstructured.Unstructured{Object: map[string]interface{}{
-				"apiVersion": "foo.cluster.x-k8s.io/v1beta1",
+				"apiVersion": "foo.cluster.x-k8s.io/vx",
 				"kind":       "TestCluster",
 				"metadata": map[string]interface{}{
 					"namespace": metav1.NamespaceDefault,
@@ -222,8 +221,7 @@ func TestClusterToInfrastructureMapFunc(t *testing.T) {
 			// Unstructured simplifies testing but should not be used in real usage, because it will
 			// likely result in a duplicate cache in an unstructured projection.
 			referenceObject := &unstructured.Unstructured{}
-			referenceObject.SetAPIVersion(tc.request.Spec.InfrastructureRef.APIVersion)
-			referenceObject.SetKind(tc.request.Spec.InfrastructureRef.Kind)
+			referenceObject.SetGroupVersionKind(tc.input)
 
 			fn := ClusterToInfrastructureMapFunc(context.Background(), tc.input, clientBuilder.Build(), referenceObject)
 			out := fn(ctx, tc.request)
@@ -347,12 +345,8 @@ func TestIsOwnedByObject(t *testing.T) {
 	targetName := "fri3ndsh1p"
 
 	meta := fakeMeta{
-		metav1.ObjectMeta{
+		ObjectMeta: metav1.ObjectMeta{
 			Name: targetName,
-		},
-		metav1.TypeMeta{
-			APIVersion: "ponies.info/v1",
-			Kind:       targetKind,
 		},
 	}
 
@@ -439,7 +433,7 @@ func TestIsOwnedByObject(t *testing.T) {
 				OwnerReferences: test.refs,
 			}
 
-			g.Expect(IsOwnedByObject(pointer, &meta)).To(Equal(test.expected), "Could not find a ref to %+v in %+v", meta, test.refs)
+			g.Expect(IsOwnedByObject(pointer, &meta, schema.GroupKind{Group: "ponies.info", Kind: targetKind})).To(Equal(test.expected), "Could not find a ref to %+v in %+v", meta, test.refs)
 		})
 	}
 }
@@ -999,7 +993,7 @@ func TestRemoveOwnerRef(t *testing.T) {
 				Name:       "m4g1c",
 			},
 			{
-				APIVersion: "bar.cluster.x-k8s.io/v1beta1",
+				APIVersion: "bar.cluster.x-k8s.io/vx",
 				Kind:       "TestCluster",
 				Name:       "bar-1",
 			},
@@ -1057,6 +1051,130 @@ func TestUnstructuredUnmarshalField(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if err := UnstructuredUnmarshalField(tt.obj, tt.v, tt.fields...); (err != nil) != tt.wantErr {
 				t.Errorf("UnstructuredUnmarshalField() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestGetMachinePoolByLabels(t *testing.T) {
+	g := NewWithT(t)
+
+	longMachinePoolName := "this-is-a-very-long-machinepool-name-that-will-turned-into-a-hash-because-it-is-longer-than-63-characters"
+	namespace := "default"
+
+	testcases := []struct {
+		name                    string
+		labels                  map[string]string
+		machinePools            []client.Object
+		expectedMachinePoolName string
+		expectedError           string
+	}{
+		{
+			name: "returns a MachinePool with matching labels",
+			labels: map[string]string{
+				clusterv1.MachinePoolNameLabel: "test-pool",
+			},
+			machinePools: []client.Object{
+				&clusterv1.MachinePool{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "test-pool",
+						Namespace: "default",
+					},
+				},
+				&clusterv1.MachinePool{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "other-pool",
+						Namespace: "default",
+					},
+				},
+			},
+			expectedMachinePoolName: "test-pool",
+		},
+		{
+			name: "returns a MachinePool with matching labels and cluster name is included",
+			labels: map[string]string{
+				clusterv1.MachinePoolNameLabel: "test-pool",
+				clusterv1.ClusterNameLabel:     "test-cluster",
+			},
+			machinePools: []client.Object{
+				&clusterv1.MachinePool{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "test-pool",
+						Namespace: "default",
+						Labels: map[string]string{
+							clusterv1.ClusterNameLabel: "test-cluster",
+						},
+					},
+				},
+				&clusterv1.MachinePool{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "other-pool",
+						Namespace: "default",
+						Labels: map[string]string{
+							clusterv1.ClusterNameLabel: "test-cluster",
+						},
+					},
+				},
+			},
+			expectedMachinePoolName: "test-pool",
+		},
+		{
+			name: "returns a MachinePool where label is a hash",
+			labels: map[string]string{
+				clusterv1.MachinePoolNameLabel: format.MustFormatValue(longMachinePoolName),
+			},
+			machinePools: []client.Object{
+				&clusterv1.MachinePool{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      longMachinePoolName,
+						Namespace: "default",
+					},
+				},
+				&clusterv1.MachinePool{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "other-pool",
+						Namespace: "default",
+					},
+				},
+			},
+			expectedMachinePoolName: longMachinePoolName,
+		},
+		{
+			name:          "missing required key",
+			labels:        map[string]string{},
+			expectedError: fmt.Sprintf("labels missing required key `%s`", clusterv1.MachinePoolNameLabel),
+		},
+		{
+			name: "returns nil when no machine pool matches",
+			labels: map[string]string{
+				clusterv1.MachinePoolNameLabel: "test-pool",
+			},
+			machinePools:            []client.Object{},
+			expectedMachinePoolName: "",
+		},
+	}
+
+	for _, tc := range testcases {
+		t.Run(tc.name, func(*testing.T) {
+			fakeScheme := runtime.NewScheme()
+			_ = clusterv1.AddToScheme(fakeScheme)
+			clientFake := fake.NewClientBuilder().
+				WithScheme(fakeScheme).
+				WithObjects(
+					tc.machinePools...,
+				).Build()
+
+			mp, err := GetMachinePoolByLabels(ctx, clientFake, namespace, tc.labels)
+			if tc.expectedError != "" {
+				g.Expect(err).To(MatchError(tc.expectedError))
+			} else {
+				g.Expect(err).NotTo(HaveOccurred())
+				if tc.expectedMachinePoolName != "" {
+					g.Expect(mp).ToNot(BeNil())
+					g.Expect(mp.Name).To(Equal(tc.expectedMachinePoolName))
+				} else {
+					g.Expect(mp).To(BeNil())
+				}
 			}
 		})
 	}

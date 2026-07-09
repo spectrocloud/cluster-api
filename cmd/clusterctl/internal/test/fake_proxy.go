@@ -30,15 +30,14 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
+	addonsv1 "sigs.k8s.io/cluster-api/api/addons/v1beta2"
+	controlplanev1 "sigs.k8s.io/cluster-api/api/controlplane/kubeadm/v1beta2"
+	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	clusterctlv1 "sigs.k8s.io/cluster-api/cmd/clusterctl/api/v1alpha3"
 	fakebootstrap "sigs.k8s.io/cluster-api/cmd/clusterctl/internal/test/providers/bootstrap"
 	fakecontrolplane "sigs.k8s.io/cluster-api/cmd/clusterctl/internal/test/providers/controlplane"
 	fakeexternal "sigs.k8s.io/cluster-api/cmd/clusterctl/internal/test/providers/external"
 	fakeinfrastructure "sigs.k8s.io/cluster-api/cmd/clusterctl/internal/test/providers/infrastructure"
-	controlplanev1 "sigs.k8s.io/cluster-api/controlplane/kubeadm/api/v1beta1"
-	addonsv1 "sigs.k8s.io/cluster-api/exp/addons/api/v1beta1"
-	expv1 "sigs.k8s.io/cluster-api/exp/api/v1beta1"
 )
 
 type FakeProxy struct {
@@ -56,7 +55,6 @@ func init() {
 	_ = clientgoscheme.AddToScheme(FakeScheme)
 	_ = clusterctlv1.AddToScheme(FakeScheme)
 	_ = clusterv1.AddToScheme(FakeScheme)
-	_ = expv1.AddToScheme(FakeScheme)
 	_ = addonsv1.AddToScheme(FakeScheme)
 	_ = apiextensionsv1.AddToScheme(FakeScheme)
 	_ = controlplanev1.AddToScheme(FakeScheme)
@@ -98,7 +96,7 @@ func (f *FakeProxy) CheckClusterAvailable(_ context.Context) error {
 
 // ListResources returns all the resources known by the FakeProxy.
 func (f *FakeProxy) ListResources(_ context.Context, labels map[string]string, namespaces ...string) ([]unstructured.Unstructured, error) {
-	var ret []unstructured.Unstructured //nolint:prealloc
+	var ret []unstructured.Unstructured
 	for _, o := range f.objs {
 		u := unstructured.Unstructured{}
 		err := FakeScheme.Convert(o, &u, nil)
@@ -191,36 +189,7 @@ func (f *FakeProxy) WithProviderInventory(name string, providerType clusterctlv1
 	return f
 }
 
-// WithFakeCAPISetup adds required objects in order to make kubeadm pass checks
-// ensuring that management cluster has a proper release of Cluster API installed.
-// NOTE: When using the fake client it is not required to install CRDs, given that type information are
-// derived from the schema. However, CheckCAPIContract looks for CRDs to be installed, so this
-// helper provide a way to get around to this difference between fake client and a real API server.
-func (f *FakeProxy) WithFakeCAPISetup() *FakeProxy {
-	f.objs = append(f.objs, FakeCAPISetupObjects()...)
-
-	return f
-}
-
 func (f *FakeProxy) WithClusterAvailable(available bool) *FakeProxy {
 	f.available = ptr.To(available)
 	return f
-}
-
-// FakeCAPISetupObjects return required objects in order to make kubeadm pass checks
-// ensuring that management cluster has a proper release of Cluster API installed.
-func FakeCAPISetupObjects() []client.Object {
-	return []client.Object{
-		&apiextensionsv1.CustomResourceDefinition{
-			ObjectMeta: metav1.ObjectMeta{Name: "clusters.cluster.x-k8s.io"},
-			Spec: apiextensionsv1.CustomResourceDefinitionSpec{
-				Versions: []apiextensionsv1.CustomResourceDefinitionVersion{
-					{
-						Name:    clusterv1.GroupVersion.Version, // Current Cluster API contract
-						Storage: true,
-					},
-				},
-			},
-		},
-	}
 }

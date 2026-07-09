@@ -22,7 +22,7 @@ import (
 	. "github.com/onsi/gomega"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
+	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	clusterctlv1 "sigs.k8s.io/cluster-api/cmd/clusterctl/api/v1alpha3"
 	"sigs.k8s.io/cluster-api/cmd/clusterctl/client/config"
 )
@@ -241,8 +241,7 @@ func Test_fixTargetNamespace(t *testing.T) {
 							"annotations": map[string]interface{}{
 								"cert-manager.io/inject-ca-from": "bar/capm3-serving-cert",
 							},
-							"creationTimestamp": nil,
-							"name":              "capm3-mutating-webhook-configuration",
+							"name": "capm3-mutating-webhook-configuration",
 						},
 						"webhooks": []interface{}{
 							map[string]interface{}{
@@ -329,8 +328,7 @@ func Test_fixTargetNamespace(t *testing.T) {
 							"annotations": map[string]interface{}{
 								"cert-manager.io/inject-ca-from": "bar/capm3-serving-cert",
 							},
-							"creationTimestamp": nil,
-							"name":              "capm3-mutating-webhook-configuration",
+							"name": "capm3-mutating-webhook-configuration",
 						},
 						"webhooks": []interface{}{
 							map[string]interface{}{
@@ -390,8 +388,7 @@ func Test_fixTargetNamespace(t *testing.T) {
 							"annotations": map[string]interface{}{
 								"cert-manager.io/inject-ca-from": "bar/capm3-serving-cert",
 							},
-							"creationTimestamp": nil,
-							"name":              "aCoolName",
+							"name": "aCoolName",
 						},
 						"spec": map[string]interface{}{
 							"group": "",
@@ -491,8 +488,7 @@ func Test_fixTargetNamespace(t *testing.T) {
 							"annotations": map[string]interface{}{
 								"cert-manager.io/inject-ca-from": "bar/capm3-serving-cert",
 							},
-							"creationTimestamp": nil,
-							"name":              "aCoolName",
+							"name": "aCoolName",
 						},
 						"spec": map[string]interface{}{
 							"group":    "",

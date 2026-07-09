@@ -29,7 +29,7 @@ import (
 	"k8s.io/client-go/util/workqueue"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	cloudv1 "sigs.k8s.io/cluster-api/test/infrastructure/inmemory/internal/cloud/api/v1alpha1"
+	cloudv1 "sigs.k8s.io/cluster-api/test/infrastructure/inmemory/pkg/cloud/api/v1alpha1"
 )
 
 func Test_cache_client(t *testing.T) {
@@ -274,6 +274,49 @@ func Test_cache_client(t *testing.T) {
 			g.Expect(obj.GetResourceVersion()).To(Equal("2"), "resourceVersion must be set")
 			g.Expect(obj.GetCreationTimestamp()).ToNot(BeZero(), "creation timestamp must be set")
 			g.Expect(obj.GetAnnotations()).To(HaveKey(lastSyncTimeAnnotation), "last sync annotation must be set")
+		})
+	})
+
+	t.Run("Get bookmark resourceVersion", func(t *testing.T) {
+		c := NewCache(scheme).(*cache)
+		c.AddResourceGroup("foo")
+
+		t.Run("fails if resourceGroup is empty", func(t *testing.T) {
+			g := NewWithT(t)
+
+			_, err := c.GetBookmarkResourceVersion("")
+			g.Expect(err).To(HaveOccurred())
+			g.Expect(apierrors.IsBadRequest(err)).To(BeTrue())
+		})
+
+		t.Run("fails if resourceGroup doesn't exist", func(t *testing.T) {
+			g := NewWithT(t)
+
+			_, err := c.GetBookmarkResourceVersion("bar")
+			g.Expect(err).To(HaveOccurred())
+			g.Expect(apierrors.IsBadRequest(err)).To(BeTrue())
+		})
+
+		t.Run("get when no objects exists", func(t *testing.T) {
+			g := NewWithT(t)
+
+			v, err := c.GetBookmarkResourceVersion("foo")
+			g.Expect(err).ToNot(HaveOccurred())
+
+			// Check all the computed fields are as expected.
+			g.Expect(v).To(Equal("0"), "resourceVersion must be set")
+		})
+
+		t.Run("get when objects exists", func(t *testing.T) {
+			g := NewWithT(t)
+
+			createMachine(t, c, "foo", "bar")
+
+			v, err := c.GetBookmarkResourceVersion("foo")
+			g.Expect(err).ToNot(HaveOccurred())
+
+			// Check all the computed fields are as expected.
+			g.Expect(v).To(Equal("1"), "resourceVersion must be set")
 		})
 	})
 

@@ -18,12 +18,13 @@ package controllers
 
 import (
 	"testing"
+	"time"
 
 	. "github.com/onsi/gomega"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	bootstrapv1 "sigs.k8s.io/cluster-api/bootstrap/kubeadm/api/v1beta1"
+	bootstrapv1 "sigs.k8s.io/cluster-api/api/bootstrap/kubeadm/v1beta2"
 	"sigs.k8s.io/cluster-api/util/test/builder"
 )
 
@@ -35,7 +36,10 @@ func TestKubeadmConfigReconciler(t *testing.T) {
 			ns, err := env.CreateNamespace(ctx, "test-kubeadm-config-reconciler")
 			g.Expect(err).ToNot(HaveOccurred())
 
-			cluster := builder.Cluster(ns.Name, "cluster1").Build()
+			cluster := builder.Cluster(ns.Name, "cluster1").
+				WithControlPlane(
+					builder.ControlPlane(ns.Name, "cp1").Build()).
+				Build()
 			g.Expect(env.Create(ctx, cluster)).To(Succeed())
 			machine := newWorkerMachineForCluster(cluster)
 			g.Expect(env.Create(ctx, machine)).To(Succeed())
@@ -58,7 +62,7 @@ func TestKubeadmConfigReconciler(t *testing.T) {
 				},
 			})
 			g.Expect(err).To(Succeed())
-			g.Expect(result.Requeue).To(BeFalse())
+			g.Expect(result.RequeueAfter).To(Equal(time.Duration(0)))
 		})
 	})
 }

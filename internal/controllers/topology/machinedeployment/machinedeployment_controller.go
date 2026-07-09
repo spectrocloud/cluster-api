@@ -31,10 +31,11 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
+	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/cluster-api/internal/controllers/topology/machineset"
 	"sigs.k8s.io/cluster-api/util"
 	"sigs.k8s.io/cluster-api/util/annotations"
+	capicontrollerutil "sigs.k8s.io/cluster-api/util/controller"
 	"sigs.k8s.io/cluster-api/util/finalizers"
 	"sigs.k8s.io/cluster-api/util/labels"
 	"sigs.k8s.io/cluster-api/util/patch"
@@ -69,12 +70,11 @@ func (r *Reconciler) SetupWithManager(ctx context.Context, mgr ctrl.Manager, opt
 		return err
 	}
 
-	err = ctrl.NewControllerManagedBy(mgr).
+	err = capicontrollerutil.NewControllerManagedBy(mgr, predicateLog).
 		For(&clusterv1.MachineDeployment{},
 			builder.WithPredicates(
-				predicates.All(mgr.GetScheme(), predicateLog,
-					predicates.ResourceIsTopologyOwned(mgr.GetScheme(), predicateLog),
-					predicates.ResourceNotPaused(mgr.GetScheme(), predicateLog)),
+				predicates.ResourceIsTopologyOwned(mgr.GetScheme(), predicateLog),
+				predicates.ResourceNotPaused(mgr.GetScheme(), predicateLog),
 			),
 		).
 		Named("topology/machinedeployment").
@@ -83,15 +83,10 @@ func (r *Reconciler) SetupWithManager(ctx context.Context, mgr ctrl.Manager, opt
 		Watches(
 			&clusterv1.Cluster{},
 			handler.EnqueueRequestsFromMapFunc(clusterToMachineDeployments),
-			builder.WithPredicates(
-				predicates.All(mgr.GetScheme(), predicateLog,
-					predicates.ResourceIsChanged(mgr.GetScheme(), predicateLog),
-					predicates.ClusterUnpaused(mgr.GetScheme(), predicateLog),
-					predicates.ClusterHasTopology(mgr.GetScheme(), predicateLog),
-				),
-			),
+			predicates.ClusterUnpaused(mgr.GetScheme(), predicateLog),
+			predicates.ClusterHasTopology(mgr.GetScheme(), predicateLog),
 		).
-		Complete(r)
+		Complete(ctx, r)
 	if err != nil {
 		return errors.Wrap(err, "failed setting up with a controller manager")
 	}
@@ -124,7 +119,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (_ ctrl.Re
 			return ctrl.Result{}, nil
 		}
 		// Error reading the object - requeue the request.
-		return ctrl.Result{}, errors.Wrapf(err, "failed to get MachineDeployment/%s", req.NamespacedName.Name)
+		return ctrl.Result{}, errors.Wrapf(err, "failed to get MachineDeployment/%s", req.Name)
 	}
 
 	log = log.WithValues("Cluster", klog.KRef(md.Namespace, md.Spec.ClusterName))
@@ -136,13 +131,13 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (_ ctrl.Re
 		return ctrl.Result{}, nil
 	}
 
-	// Add finalizer first if not set to avoid the race condition between init and delete.
-	if finalizerAdded, err := finalizers.EnsureFinalizer(ctx, r.Client, md, clusterv1.MachineDeploymentTopologyFinalizer); err != nil || finalizerAdded {
+	cluster, err := util.GetClusterByName(ctx, r.Client, md.Namespace, md.Spec.ClusterName)
+	if err != nil {
 		return ctrl.Result{}, err
 	}
 
-	cluster, err := util.GetClusterByName(ctx, r.Client, md.Namespace, md.Spec.ClusterName)
-	if err != nil {
+	// Add finalizer first if not set to avoid the race condition between init and delete.
+	if finalizerAdded, err := finalizers.EnsureFinalizer(ctx, r.Client, md, clusterv1.MachineDeploymentTopologyFinalizer); err != nil || finalizerAdded {
 		return ctrl.Result{}, err
 	}
 
@@ -164,7 +159,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (_ ctrl.Re
 	}()
 
 	// Handle deletion reconciliation loop.
-	if !md.ObjectMeta.DeletionTimestamp.IsZero() {
+	if !md.DeletionTimestamp.IsZero() {
 		return ctrl.Result{}, r.reconcileDelete(ctx, md)
 	}
 
@@ -188,12 +183,12 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, md *clusterv1.MachineD
 
 	// Delete unused templates.
 	ref := md.Spec.Template.Spec.Bootstrap.ConfigRef
-	if err := machineset.DeleteTemplateIfUnused(ctx, r.Client, templatesInUse, ref); err != nil {
-		return errors.Wrapf(err, "failed to delete %s %s for MachineDeployment %s", ref.Kind, klog.KRef(ref.Namespace, ref.Name), klog.KObj(md))
+	if err := machineset.DeleteTemplateIfUnused(ctx, r.Client, templatesInUse, ref, md.Namespace); err != nil {
+		return errors.Wrapf(err, "failed to delete %s %s for MachineDeployment %s", ref.Kind, klog.KRef(md.Namespace, ref.Name), klog.KObj(md))
 	}
-	ref = &md.Spec.Template.Spec.InfrastructureRef
-	if err := machineset.DeleteTemplateIfUnused(ctx, r.Client, templatesInUse, ref); err != nil {
-		return errors.Wrapf(err, "failed to delete %s %s for MachineDeployment %s", ref.Kind, klog.KRef(ref.Namespace, ref.Name), klog.KObj(md))
+	ref = md.Spec.Template.Spec.InfrastructureRef
+	if err := machineset.DeleteTemplateIfUnused(ctx, r.Client, templatesInUse, ref, md.Namespace); err != nil {
+		return errors.Wrapf(err, "failed to delete %s %s for MachineDeployment %s", ref.Kind, klog.KRef(md.Namespace, ref.Name), klog.KObj(md))
 	}
 
 	// If the MachineDeployment has a MachineHealthCheck delete it.

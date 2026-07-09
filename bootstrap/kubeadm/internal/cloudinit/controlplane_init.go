@@ -35,6 +35,7 @@ const (
     owner: root:root
     permissions: '0640'
     content: "This placeholder file is used to create the /run/cluster-api sub directory in a way that is compatible with both Linux and Windows (mkdir -p /run/cluster-api does not work with Windows)"
+{{- template "boot_commands" .BootCommands }}
 runcmd:
 {{- template "commands" .PreKubeadmCommands }}
   - 'kubeadm init --config /run/kubeadm/kubeadm.yaml {{.KubeadmVerbosity}} && {{ .SentinelFileCommand }}'
@@ -59,7 +60,7 @@ type ControlPlaneInput struct {
 // NewInitControlPlane returns the user data string to be used on a controlplane instance.
 func NewInitControlPlane(input *ControlPlaneInput) ([]byte, error) {
 	input.Header = cloudConfigHeader
-	input.WriteFiles = input.Certificates.AsFiles()
+	input.WriteFiles = input.AsFiles()
 	input.WriteFiles = append(input.WriteFiles, input.AdditionalFiles...)
 	input.SentinelFileCommand = sentinelFileCommand
 	userData, err := generate("InitControlplane", controlPlaneCloudInit, input)

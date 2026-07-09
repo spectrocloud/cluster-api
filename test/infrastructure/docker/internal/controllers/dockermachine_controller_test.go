@@ -21,13 +21,12 @@ import (
 	"testing"
 
 	. "github.com/onsi/gomega"
-	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
-	infrav1 "sigs.k8s.io/cluster-api/test/infrastructure/docker/api/v1beta1"
+	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
+	infrav1 "sigs.k8s.io/cluster-api/test/infrastructure/docker/api/v1beta2"
 )
 
 var (
@@ -57,7 +56,7 @@ func TestDockerMachineReconciler_DockerClusterToDockerMachines(t *testing.T) {
 	r := DockerMachineReconciler{
 		Client: c,
 	}
-	out := r.DockerClusterToDockerMachines(context.Background(), dockerCluster)
+	out := r.dockerClusterToDockerMachines(context.Background(), dockerCluster)
 	machineNames := make([]string, len(out))
 	for i := range out {
 		machineNames[i] = out[i].Name
@@ -68,17 +67,15 @@ func TestDockerMachineReconciler_DockerClusterToDockerMachines(t *testing.T) {
 
 func newCluster(clusterName string, dockerCluster *infrav1.DockerCluster) *clusterv1.Cluster {
 	cluster := &clusterv1.Cluster{
-		TypeMeta: metav1.TypeMeta{},
 		ObjectMeta: metav1.ObjectMeta{
 			Name: clusterName,
 		},
 	}
 	if dockerCluster != nil {
-		cluster.Spec.InfrastructureRef = &corev1.ObjectReference{
-			APIVersion: infrav1.GroupVersion.String(),
-			Kind:       "DockerCluster",
-			Name:       dockerCluster.Name,
-			Namespace:  dockerCluster.Namespace,
+		cluster.Spec.InfrastructureRef = clusterv1.ContractVersionedObjectReference{
+			APIGroup: infrav1.GroupVersion.Group,
+			Kind:     "DockerCluster",
+			Name:     dockerCluster.Name,
 		}
 	}
 	return cluster
@@ -86,7 +83,6 @@ func newCluster(clusterName string, dockerCluster *infrav1.DockerCluster) *clust
 
 func newDockerCluster(clusterName, dockerName string) *infrav1.DockerCluster {
 	return &infrav1.DockerCluster{
-		TypeMeta: metav1.TypeMeta{},
 		ObjectMeta: metav1.ObjectMeta{
 			Name: dockerName,
 			OwnerReferences: []metav1.OwnerReference{
@@ -110,11 +106,10 @@ func newMachine(clusterName, machineName string, dockerMachine *infrav1.DockerMa
 		},
 	}
 	if dockerMachine != nil {
-		machine.Spec.InfrastructureRef = corev1.ObjectReference{
-			APIVersion: infrav1.GroupVersion.String(),
-			Kind:       "DockerMachine",
-			Name:       dockerMachine.Name,
-			Namespace:  dockerMachine.Namespace,
+		machine.Spec.InfrastructureRef = clusterv1.ContractVersionedObjectReference{
+			APIGroup: infrav1.GroupVersion.Group,
+			Kind:     "DockerMachine",
+			Name:     dockerMachine.Name,
 		}
 	}
 	return machine
@@ -122,7 +117,6 @@ func newMachine(clusterName, machineName string, dockerMachine *infrav1.DockerMa
 
 func newDockerMachine(dockerMachineName, machineName string) *infrav1.DockerMachine {
 	return &infrav1.DockerMachine{
-		TypeMeta: metav1.TypeMeta{},
 		ObjectMeta: metav1.ObjectMeta{
 			Name:            dockerMachineName,
 			ResourceVersion: "999",

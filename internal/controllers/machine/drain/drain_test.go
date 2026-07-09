@@ -35,7 +35,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
+	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 )
 
 func TestRunCordonOrUncordon(t *testing.T) {
@@ -2041,7 +2041,7 @@ After above Pods have been removed from the Node, waiting for the following Pods
 		t.Run(tt.name, func(t *testing.T) {
 			g := NewWithT(t)
 
-			g.Expect(tt.evictionResult.ConditionMessage(&metav1.Time{Time: nodeDrainStartTime})).To(BeComparableTo(tt.wantConditionMessage))
+			g.Expect(tt.evictionResult.ConditionMessage(metav1.Time{Time: nodeDrainStartTime})).To(BeComparableTo(tt.wantConditionMessage))
 		})
 	}
 }

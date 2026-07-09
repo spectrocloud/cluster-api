@@ -32,15 +32,22 @@ import (
 	"github.com/onsi/ginkgo/v2"
 	"github.com/pkg/errors"
 	admissionv1 "k8s.io/api/admissionregistration/v1"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
+	storagev1 "k8s.io/api/storage/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	kerrors "k8s.io/apimachinery/pkg/util/errors"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
+	"k8s.io/client-go/util/retry"
 	"k8s.io/component-base/logs"
 	logsv1 "k8s.io/component-base/logs/api/v1"
 	"k8s.io/klog/v2"
@@ -48,33 +55,40 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
 	"sigs.k8s.io/controller-runtime/pkg/config"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/metrics"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
+	"sigs.k8s.io/yaml"
 
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
-	bootstrapv1 "sigs.k8s.io/cluster-api/bootstrap/kubeadm/api/v1beta1"
+	addonsv1beta1 "sigs.k8s.io/cluster-api/api/addons/v1beta1"
+	addonsv1 "sigs.k8s.io/cluster-api/api/addons/v1beta2"
+	bootstrapv1beta1 "sigs.k8s.io/cluster-api/api/bootstrap/kubeadm/v1beta1"
+	bootstrapv1 "sigs.k8s.io/cluster-api/api/bootstrap/kubeadm/v1beta2"
+	controlplanev1beta1 "sigs.k8s.io/cluster-api/api/controlplane/kubeadm/v1beta1"
+	controlplanev1 "sigs.k8s.io/cluster-api/api/controlplane/kubeadm/v1beta2"
+	clusterv1beta1 "sigs.k8s.io/cluster-api/api/core/v1beta1"
+	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
+	ipamv1alpha1 "sigs.k8s.io/cluster-api/api/ipam/v1alpha1"
+	ipamv1beta1 "sigs.k8s.io/cluster-api/api/ipam/v1beta1"
+	ipamv1 "sigs.k8s.io/cluster-api/api/ipam/v1beta2"
+	runtimev1alpha1 "sigs.k8s.io/cluster-api/api/runtime/v1alpha1"
+	runtimev1 "sigs.k8s.io/cluster-api/api/runtime/v1beta2"
 	bootstrapwebhooks "sigs.k8s.io/cluster-api/bootstrap/kubeadm/webhooks"
 	"sigs.k8s.io/cluster-api/cmd/clusterctl/log"
-	controlplanev1 "sigs.k8s.io/cluster-api/controlplane/kubeadm/api/v1beta1"
 	controlplanewebhooks "sigs.k8s.io/cluster-api/controlplane/kubeadm/webhooks"
-	addonsv1 "sigs.k8s.io/cluster-api/exp/addons/api/v1beta1"
-	addonswebhooks "sigs.k8s.io/cluster-api/exp/addons/webhooks"
-	expv1 "sigs.k8s.io/cluster-api/exp/api/v1beta1"
-	ipamv1 "sigs.k8s.io/cluster-api/exp/ipam/api/v1beta1"
-	expipamwebhooks "sigs.k8s.io/cluster-api/exp/ipam/webhooks"
-	runtimev1 "sigs.k8s.io/cluster-api/exp/runtime/api/v1alpha1"
-	expapiwebhooks "sigs.k8s.io/cluster-api/exp/webhooks"
+	controlplaneconversion "sigs.k8s.io/cluster-api/controlplane/kubeadm/webhooks/conversion"
 	"sigs.k8s.io/cluster-api/feature"
+	"sigs.k8s.io/cluster-api/internal/contract"
 	internalwebhooks "sigs.k8s.io/cluster-api/internal/webhooks"
-	runtimewebhooks "sigs.k8s.io/cluster-api/internal/webhooks/runtime"
 	"sigs.k8s.io/cluster-api/util/kubeconfig"
 	"sigs.k8s.io/cluster-api/util/test/builder"
 	"sigs.k8s.io/cluster-api/version"
 	"sigs.k8s.io/cluster-api/webhooks"
+	"sigs.k8s.io/cluster-api/webhooks/conversion"
 )
 
 func init() {
@@ -105,29 +119,40 @@ func init() {
 	// Add logger for ginkgo.
 	klog.SetOutput(ginkgo.GinkgoWriter)
 
-	// Calculate the scheme.
-	utilruntime.Must(apiextensionsv1.AddToScheme(scheme.Scheme))
-	utilruntime.Must(admissionv1.AddToScheme(scheme.Scheme))
-	utilruntime.Must(clusterv1.AddToScheme(scheme.Scheme))
-	utilruntime.Must(bootstrapv1.AddToScheme(scheme.Scheme))
-	utilruntime.Must(expv1.AddToScheme(scheme.Scheme))
-	utilruntime.Must(addonsv1.AddToScheme(scheme.Scheme))
-	utilruntime.Must(controlplanev1.AddToScheme(scheme.Scheme))
-	utilruntime.Must(admissionv1.AddToScheme(scheme.Scheme))
-	utilruntime.Must(runtimev1.AddToScheme(scheme.Scheme))
-	utilruntime.Must(ipamv1.AddToScheme(scheme.Scheme))
-	utilruntime.Must(builder.AddTransitionV1Beta2ToScheme(scheme.Scheme))
+	// Calculate the global scheme used by fakeclients.
+	registerSchemes(scheme.Scheme)
+}
+
+func registerSchemes(s *runtime.Scheme) {
+	utilruntime.Must(admissionv1.AddToScheme(s))
+	utilruntime.Must(apiextensionsv1.AddToScheme(s))
+
+	utilruntime.Must(addonsv1.AddToScheme(s))
+	utilruntime.Must(addonsv1beta1.AddToScheme(s))
+	utilruntime.Must(bootstrapv1.AddToScheme(s))
+	utilruntime.Must(bootstrapv1beta1.AddToScheme(s))
+	utilruntime.Must(clusterv1.AddToScheme(s))
+	utilruntime.Must(clusterv1beta1.AddToScheme(s))
+	utilruntime.Must(controlplanev1.AddToScheme(s))
+	utilruntime.Must(controlplanev1beta1.AddToScheme(s))
+	utilruntime.Must(ipamv1.AddToScheme(s))
+	utilruntime.Must(ipamv1alpha1.AddToScheme(s))
+	utilruntime.Must(ipamv1beta1.AddToScheme(s))
+	utilruntime.Must(runtimev1.AddToScheme(s))
+	utilruntime.Must(runtimev1alpha1.AddToScheme(s))
 }
 
 // RunInput is the input for Run.
 type RunInput struct {
-	M                   *testing.M
-	ManagerUncachedObjs []client.Object
-	ManagerCacheOptions cache.Options
-	SetupIndexes        func(ctx context.Context, mgr ctrl.Manager)
-	SetupReconcilers    func(ctx context.Context, mgr ctrl.Manager)
-	SetupEnv            func(e *Environment)
-	MinK8sVersion       string
+	M                           *testing.M
+	SetupManagerCacheOptions    func(scheme *runtime.Scheme) cache.Options
+	ManagerClientOptions        client.Options
+	SetupIndexes                func(ctx context.Context, mgr ctrl.Manager)
+	SetupReconcilers            func(ctx context.Context, mgr ctrl.Manager)
+	SetupEnv                    func(e *Environment)
+	MinK8sVersion               string
+	AdditionalSchemeBuilder     runtime.SchemeBuilder
+	AdditionalCRDDirectoryPaths []string
 }
 
 // Run executes the tests of the given testing.M in a test environment.
@@ -148,8 +173,25 @@ func Run(ctx context.Context, input RunInput) int {
 		return input.M.Run()
 	}
 
+	// Calculate the scheme.
+	scheme := runtime.NewScheme()
+	registerSchemes(scheme)
+	// Register additional schemes from k8s APIs.
+	utilruntime.Must(appsv1.AddToScheme(scheme))
+	utilruntime.Must(corev1.AddToScheme(scheme))
+	utilruntime.Must(rbacv1.AddToScheme(scheme))
+	utilruntime.Must(storagev1.AddToScheme(scheme))
+	// Register additionally passed schemes.
+	if input.AdditionalSchemeBuilder != nil {
+		utilruntime.Must(input.AdditionalSchemeBuilder.AddToScheme(scheme))
+	}
+
 	// Bootstrapping test environment
-	env := newEnvironment(input.ManagerCacheOptions, input.ManagerUncachedObjs...)
+	var cacheOptions cache.Options
+	if input.SetupManagerCacheOptions != nil {
+		cacheOptions = input.SetupManagerCacheOptions(scheme)
+	}
+	env := newEnvironment(ctx, scheme, input.AdditionalCRDDirectoryPaths, cacheOptions, input.ManagerClientOptions)
 
 	ctx, cancel := context.WithCancelCause(ctx)
 	env.cancelManager = cancel
@@ -169,7 +211,7 @@ func Run(ctx context.Context, input RunInput) int {
 		config := kubeconfig.FromEnvTestConfig(env.Config, &clusterv1.Cluster{
 			ObjectMeta: metav1.ObjectMeta{Name: "test"},
 		})
-		if err := os.WriteFile(kubeconfigPath, config, 0o600); err != nil {
+		if err := os.WriteFile(kubeconfigPath, config, 0o600); err != nil { //nolint:gosec // G703: kubeconfigPath is constructed internally.
 			panic(errors.Wrapf(err, "failed to write the test env kubeconfig"))
 		}
 	}
@@ -234,20 +276,25 @@ type Environment struct {
 //
 // This function should be called only once for each package you're running tests within,
 // usually the environment is initialized in a suite_test.go file within a `BeforeSuite` ginkgo block.
-func newEnvironment(managerCacheOptions cache.Options, uncachedObjs ...client.Object) *Environment {
+func newEnvironment(_ context.Context, scheme *runtime.Scheme, additionalCRDDirectoryPaths []string, managerCacheOptions cache.Options, managerClientOptions client.Options) *Environment {
 	// Get the root of the current file to use in CRD paths.
 	_, filename, _, _ := goruntime.Caller(0) //nolint:dogsled
 	root := path.Join(path.Dir(filename), "..", "..", "..")
 
+	crdDirectoryPaths := make([]string, 0, 3+len(additionalCRDDirectoryPaths))
+	crdDirectoryPaths = append(crdDirectoryPaths,
+		filepath.Join(root, "config", "crd", "bases"),
+		filepath.Join(root, "controlplane", "kubeadm", "config", "crd", "bases"),
+		filepath.Join(root, "bootstrap", "kubeadm", "config", "crd", "bases"),
+	)
+	for _, path := range additionalCRDDirectoryPaths {
+		crdDirectoryPaths = append(crdDirectoryPaths, filepath.Join(root, path))
+	}
+
 	// Create the test environment.
 	env := &envtest.Environment{
 		ErrorIfCRDPathMissing: true,
-		CRDDirectoryPaths: []string{
-			filepath.Join(root, "config", "crd", "bases"),
-			filepath.Join(root, "controlplane", "kubeadm", "config", "crd", "bases"),
-			filepath.Join(root, "bootstrap", "kubeadm", "config", "crd", "bases"),
-			filepath.Join(root, "util", "test", "builder", "crd"),
-		},
+		CRDDirectoryPaths:     crdDirectoryPaths,
 		CRDs: []*apiextensionsv1.CustomResourceDefinition{
 			builder.GenericBootstrapConfigCRD.DeepCopy(),
 			builder.GenericBootstrapConfigTemplateCRD.DeepCopy(),
@@ -277,6 +324,37 @@ func newEnvironment(managerCacheOptions cache.Options, uncachedObjs ...client.Ob
 		WebhookInstallOptions: initWebhookInstallOptions(),
 	}
 
+	// if ARTIFACTS is setup, configure apiserver audit logs to log to ARTIFACTS dir
+	if os.Getenv("ARTIFACTS") != "" {
+		_, packageFileName, _, _ := goruntime.Caller(2)
+		relativePathPackageCallerFile, err := filepath.Rel(root, packageFileName)
+		if err != nil {
+			klog.Fatalf("unable to get relative path of calling package %+v", err)
+		}
+
+		relativePathPackageCallerDir := filepath.Dir(relativePathPackageCallerFile)
+		auditLogsDir := filepath.Join(os.Getenv("ARTIFACTS"), relativePathPackageCallerDir)
+		auditLogsFilePath := filepath.Join(auditLogsDir, "apiserver-audit-logs")
+
+		if err = os.MkdirAll(auditLogsDir, 0750); err != nil { //nolint:gosec // G703: auditLogsDir is constructed from ARTIFACTS env var.
+			klog.Fatalf("failed to create audit logs dir: %+v", err)
+		}
+
+		auditPolicyPath, err := writeAuditPolicy(auditLogsDir)
+		if err != nil {
+			klog.Fatalf("failed to write audit logs policy file: %+v", err)
+		}
+
+		env.ControlPlane = envtest.ControlPlane{}
+		env.ControlPlane.APIServer = &envtest.APIServer{}
+		env.ControlPlane.APIServer.Configure().Set("audit-log-path", auditLogsFilePath)
+		env.ControlPlane.APIServer.Configure().Set("audit-log-format", "json")
+		env.ControlPlane.APIServer.Configure().Set("audit-policy-file", auditPolicyPath)
+		env.ControlPlane.APIServer.Configure().Set("audit-log-maxage", "0")
+		env.ControlPlane.APIServer.Configure().Set("audit-log-maxbackup", "0")
+		env.ControlPlane.APIServer.Configure().Set("audit-log-maxsize", "0")
+	}
+
 	if _, err := env.Start(); err != nil {
 		err = kerrors.NewAggregate([]error{err, env.Stop()})
 		panic(err)
@@ -297,17 +375,12 @@ func newEnvironment(managerCacheOptions cache.Options, uncachedObjs ...client.Ob
 		Controller: config.Controller{
 			UsePriorityQueue: ptr.To[bool](feature.Gates.Enabled(feature.PriorityQueue)),
 		},
-		Scheme: scheme.Scheme,
+		Scheme: scheme,
 		Metrics: metricsserver.Options{
 			BindAddress: "0",
 		},
-		Client: client.Options{
-			Cache: &client.CacheOptions{
-				DisableFor: uncachedObjs,
-				// Use the cache for all Unstructured get/list calls.
-				Unstructured: true,
-			},
-		},
+		Cache:  managerCacheOptions,
+		Client: managerClientOptions,
 		WebhookServer: webhook.NewServer(
 			webhook.Options{
 				Port:    env.WebhookInstallOptions.LocalServingPort,
@@ -315,7 +388,9 @@ func newEnvironment(managerCacheOptions cache.Options, uncachedObjs ...client.Ob
 				Host:    host,
 			},
 		),
-		Cache: managerCacheOptions,
+		// Increase GracefulShutdownTimeout to 90s from the 30s default to tolerate if tests like
+		// TestClusterCacheConcurrency need more time because informers are stuck.
+		GracefulShutdownTimeout: ptr.To(90 * time.Second),
 	}
 
 	mgr, err := ctrl.NewManager(env.Config, options)
@@ -324,7 +399,15 @@ func newEnvironment(managerCacheOptions cache.Options, uncachedObjs ...client.Ob
 	}
 
 	// Set minNodeStartupTimeout for Test, so it does not need to be at least 30s
-	internalwebhooks.SetMinNodeStartupTimeout(metav1.Duration{Duration: 1 * time.Millisecond})
+	internalwebhooks.SetMinNodeStartupTimeoutSeconds(0)
+
+	// Setup the func to retrieve apiVersion for a GroupKind for conversion webhooks.
+	controlplaneconversion.SetAPIVersionGetter(func(ctx context.Context, gk schema.GroupKind) (string, error) {
+		return contract.GetAPIVersion(ctx, mgr.GetClient(), gk)
+	})
+	conversion.SetAPIVersionGetter(func(ctx context.Context, gk schema.GroupKind) (string, error) {
+		return contract.GetAPIVersion(ctx, mgr.GetClient(), gk)
+	})
 
 	if err := (&webhooks.Cluster{Client: mgr.GetClient()}).SetupWebhookWithManager(mgr); err != nil {
 		klog.Fatalf("unable to create webhook: %+v", err)
@@ -359,22 +442,22 @@ func newEnvironment(managerCacheOptions cache.Options, uncachedObjs ...client.Ob
 	if err := (&controlplanewebhooks.KubeadmControlPlane{}).SetupWebhookWithManager(mgr); err != nil {
 		klog.Fatalf("unable to create webhook: %+v", err)
 	}
-	if err := (&addonswebhooks.ClusterResourceSet{}).SetupWebhookWithManager(mgr); err != nil {
+	if err := (&webhooks.ClusterResourceSet{}).SetupWebhookWithManager(mgr); err != nil {
 		klog.Fatalf("unable to create webhook for crs: %+v", err)
 	}
-	if err := (&addonswebhooks.ClusterResourceSetBinding{}).SetupWebhookWithManager(mgr); err != nil {
+	if err := (&webhooks.ClusterResourceSetBinding{}).SetupWebhookWithManager(mgr); err != nil {
 		klog.Fatalf("unable to create webhook for ClusterResourceSetBinding: %+v", err)
 	}
-	if err := (&expapiwebhooks.MachinePool{}).SetupWebhookWithManager(mgr); err != nil {
+	if err := (&webhooks.MachinePool{}).SetupWebhookWithManager(mgr); err != nil {
 		klog.Fatalf("unable to create webhook for machinepool: %+v", err)
 	}
-	if err := (&runtimewebhooks.ExtensionConfig{}).SetupWebhookWithManager(mgr); err != nil {
+	if err := (&webhooks.ExtensionConfig{}).SetupWebhookWithManager(mgr); err != nil {
 		klog.Fatalf("unable to create webhook for extensionconfig: %+v", err)
 	}
-	if err := (&expipamwebhooks.IPAddress{}).SetupWebhookWithManager(mgr); err != nil {
+	if err := (&webhooks.IPAddress{}).SetupWebhookWithManager(mgr); err != nil {
 		klog.Fatalf("unable to create webhook for ipaddress: %v", err)
 	}
-	if err := (&expipamwebhooks.IPAddressClaim{}).SetupWebhookWithManager(mgr); err != nil {
+	if err := (&webhooks.IPAddressClaim{}).SetupWebhookWithManager(mgr); err != nil {
 		klog.Fatalf("unable to create webhook for ipaddressclaim: %v", err)
 	}
 
@@ -386,16 +469,45 @@ func newEnvironment(managerCacheOptions cache.Options, uncachedObjs ...client.Ob
 	}
 }
 
+func writeAuditPolicy(dir string) (string, error) {
+	policyFile := filepath.Join(dir, "audit-policy.yaml")
+
+	policyYAML := []byte(`
+apiVersion: audit.k8s.io/v1
+kind: Policy
+rules:
+  - level: RequestResponse
+    resources:
+      - group: ""
+      - group: "cluster.x-k8s.io"
+      - group: "infrastructure.cluster.x-k8s.io"
+      - group: "controlplane.cluster.x-k8s.io"
+      - group: "addons.cluster.x-k8s.io"
+      - group: "bootstrap.cluster.x-k8s.io"
+      - group: "runtime.cluster.x-k8s.io"
+`)
+
+	if err := os.WriteFile(policyFile, policyYAML, 0600); err != nil { //nolint:gosec // G703: policyFile is constructed internally.
+		return "", err
+	}
+	return policyFile, nil
+}
+
 // start starts the manager.
 func (e *Environment) start(ctx context.Context) {
 	go func() {
 		fmt.Println("Starting the test environment manager")
-		if err := e.Manager.Start(ctx); err != nil {
+		if err := e.Start(ctx); err != nil {
+			// Print all goroutines to enable debugging in case the manager timed out during shutdown
+			buf := make([]byte, 1<<20)
+			stackLen := goruntime.Stack(buf, true)
+			_, _ = os.Stdout.Write(buf[:stackLen])
+
 			panic(fmt.Sprintf("Failed to start the test environment manager: %v", err))
 		}
 	}()
-	<-e.Manager.Elected()
-	e.waitForWebhooks()
+	<-e.Elected()
+	e.waitForWebhooks(ctx)
 }
 
 // stop stops the test environment.
@@ -406,14 +518,17 @@ func (e *Environment) stop() error {
 }
 
 // waitForWebhooks waits for the webhook server to be available.
-func (e *Environment) waitForWebhooks() {
+func (e *Environment) waitForWebhooks(ctx context.Context) {
 	port := e.env.WebhookInstallOptions.LocalServingPort
 
 	klog.V(2).Infof("Waiting for webhook port %d to be open prior to running tests", port)
 	timeout := 1 * time.Second
 	for {
 		time.Sleep(1 * time.Second)
-		conn, err := net.DialTimeout("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)), timeout)
+		dialer := &net.Dialer{
+			Timeout: timeout,
+		}
+		conn, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
 		if err != nil {
 			klog.V(2).Infof("Webhook port is not ready, will retry in %v: %s", timeout, err)
 			continue
@@ -435,7 +550,7 @@ func (e *Environment) CreateKubeconfigSecret(ctx context.Context, cluster *clust
 func (e *Environment) Cleanup(ctx context.Context, objs ...client.Object) error {
 	errs := []error{}
 	for _, o := range objs {
-		err := e.Client.Delete(ctx, o)
+		err := e.Delete(ctx, o)
 		if apierrors.IsNotFound(err) {
 			continue
 		}
@@ -473,7 +588,8 @@ func (e *Environment) CleanupAndWait(ctx context.Context, objs ...client.Object)
 				}
 				return false, nil
 			})
-		errs = append(errs, errors.Wrapf(err, "key %s, %s is not being deleted from the testenv client cache", o.GetObjectKind().GroupVersionKind().String(), key))
+		oBytes, _ := yaml.Marshal(oCopy)
+		errs = append(errs, errors.Wrapf(err, "Object %s is not being deleted from the testenv client cache:\n%s", klog.KObj(o), oBytes))
 	}
 	return kerrors.NewAggregate(errs)
 }
@@ -482,7 +598,7 @@ func (e *Environment) CleanupAndWait(ctx context.Context, objs ...client.Object)
 //
 // NOTE: Waiting for the cache to be updated helps in preventing test flakes due to the cache sync delays.
 func (e *Environment) CreateAndWait(ctx context.Context, obj client.Object, opts ...client.CreateOption) error {
-	if err := e.Client.Create(ctx, obj, opts...); err != nil {
+	if err := e.Create(ctx, obj, opts...); err != nil {
 		return err
 	}
 
@@ -505,10 +621,49 @@ func (e *Environment) CreateAndWait(ctx context.Context, obj client.Object, opts
 	return nil
 }
 
+// DeleteAndWait deletes the given object and waits for the cache to be updated accordingly.
+//
+// NOTE: Waiting for the cache to be updated helps in preventing test flakes due to the cache sync delays.
+func (e *Environment) DeleteAndWait(ctx context.Context, obj client.Object, opts ...client.DeleteOption) error {
+	if err := e.Delete(ctx, obj, opts...); err != nil {
+		return err
+	}
+
+	// Makes sure the cache is updated with the new object
+	objCopy := obj.DeepCopyObject().(client.Object)
+	key := client.ObjectKeyFromObject(obj)
+	if err := wait.ExponentialBackoff(
+		cacheSyncBackoff,
+		func() (done bool, err error) {
+			if err := e.Get(ctx, key, objCopy); err != nil {
+				if apierrors.IsNotFound(err) {
+					// if not found possible no finalizer and delete just removed the object.
+					return true, nil
+				}
+				return false, err
+			}
+			if !objCopy.GetDeletionTimestamp().IsZero() {
+				return true, nil
+			}
+			return false, nil
+		}); err != nil {
+		return errors.Wrapf(err, "object %s, %s is not being added to the testenv client cache", obj.GetObjectKind().GroupVersionKind().String(), key)
+	}
+	return nil
+}
+
 // PatchAndWait creates or updates the given object using server-side apply and waits for the cache to be updated accordingly.
 //
 // NOTE: Waiting for the cache to be updated helps in preventing test flakes due to the cache sync delays.
-func (e *Environment) PatchAndWait(ctx context.Context, obj client.Object, opts ...client.PatchOption) error {
+func (e *Environment) PatchAndWait(ctx context.Context, obj client.Object, opts ...client.ApplyOption) error {
+	objGVK, err := apiutil.GVKForObject(obj, e.Scheme())
+	if err != nil {
+		return errors.Wrapf(err, "failed to get GVK to set GVK on object")
+	}
+	// Ensure that GVK is explicitly set because e.Patch below uses json.Marshal
+	// to serialize the object and the apiserver would complain if GVK is not sent.
+	obj.GetObjectKind().SetGroupVersionKind(objGVK)
+
 	key := client.ObjectKeyFromObject(obj)
 	objCopy := obj.DeepCopyObject().(client.Object)
 	if err := e.GetAPIReader().Get(ctx, key, objCopy); err != nil {
@@ -519,8 +674,24 @@ func (e *Environment) PatchAndWait(ctx context.Context, obj client.Object, opts 
 	// Store old resource version, empty string if not found.
 	oldResourceVersion := objCopy.GetResourceVersion()
 
-	if err := e.Client.Patch(ctx, obj, client.Apply, opts...); err != nil {
+	// Convert to Unstructured because Apply only works with ApplyConfigurations and Unstructured.
+	objUnstructured := &unstructured.Unstructured{}
+	switch obj.(type) {
+	case *unstructured.Unstructured:
+		objUnstructured = obj.DeepCopyObject().(*unstructured.Unstructured)
+	default:
+		if err := e.Scheme().Convert(obj, objUnstructured, nil); err != nil {
+			return errors.Wrap(err, "failed to convert object to Unstructured")
+		}
+	}
+
+	if err := e.Apply(ctx, client.ApplyConfigurationFromUnstructured(objUnstructured), opts...); err != nil {
 		return err
+	}
+
+	// Write back the modified object so callers can access the patched object.
+	if err := e.Scheme().Convert(objUnstructured, obj, ctx); err != nil {
+		return errors.Wrapf(err, "failed to write object")
 	}
 
 	// Makes sure the cache is updated with the new object
@@ -553,7 +724,7 @@ func (e *Environment) CreateNamespace(ctx context.Context, generateName string) 
 			},
 		},
 	}
-	if err := e.Client.Create(ctx, ns); err != nil {
+	if err := e.Create(ctx, ns); err != nil {
 		return nil, err
 	}
 
@@ -589,11 +760,76 @@ func verifyPanicMetrics() error {
 				}
 			}
 		}
+
+		if metricFamily.GetName() == "controller_runtime_conversion_webhook_panics_total" {
+			for _, webhookPanicMetric := range metricFamily.Metric {
+				if webhookPanicMetric.Counter != nil && webhookPanicMetric.Counter.Value != nil && *webhookPanicMetric.Counter.Value > 0 {
+					errs = append(errs, fmt.Errorf("%.0f panics occurred in conversion webhooks (check logs for more details)", *webhookPanicMetric.Counter.Value))
+				}
+			}
+		}
 	}
 
 	if len(errs) > 0 {
 		return kerrors.NewAggregate(errs)
 	}
 
+	return nil
+}
+
+// ApplyCRDs allows you to add or replace CRDs after test env has been started.
+func (e *Environment) ApplyCRDs(ctx context.Context, crdPath string) error {
+	installOpts := envtest.CRDInstallOptions{
+		Scheme:       e.GetScheme(),
+		MaxTime:      10 * time.Second,
+		PollInterval: 100 * time.Millisecond,
+		Paths: []string{
+			crdPath,
+		},
+		ErrorIfPathMissing: true,
+	}
+
+	// Read the CRD YAMLs into options.CRDs.
+	if err := envtest.ReadCRDFiles(&installOpts); err != nil {
+		return fmt.Errorf("unable to read CRD files: %w", err)
+	}
+
+	// Apply the CRDs.
+	if err := applyCRDs(ctx, e.GetClient(), installOpts.CRDs); err != nil {
+		return fmt.Errorf("unable to create CRD instances: %w", err)
+	}
+
+	// Wait for the CRDs to appear in discovery.
+	if err := envtest.WaitForCRDs(e.GetConfig(), installOpts.CRDs, installOpts); err != nil {
+		return fmt.Errorf("something went wrong waiting for CRDs to appear as API resources: %w", err)
+	}
+
+	return nil
+}
+
+func applyCRDs(ctx context.Context, c client.Client, crds []*apiextensionsv1.CustomResourceDefinition) error {
+	for _, crd := range crds {
+		existingCrd := crd.DeepCopy()
+		err := c.Get(ctx, client.ObjectKey{Name: crd.GetName()}, existingCrd)
+		switch {
+		case apierrors.IsNotFound(err):
+			if err := c.Create(ctx, crd); err != nil {
+				return fmt.Errorf("unable to create CRD %s: %w", crd.GetName(), err)
+			}
+		case err != nil:
+			return fmt.Errorf("unable to get CRD %s to check if it exists: %w", crd.GetName(), err)
+		default:
+			if err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+				if err := c.Get(ctx, client.ObjectKey{Name: crd.GetName()}, existingCrd); err != nil {
+					return err
+				}
+				// Note: Intentionally only overwriting spec and thus preserving metadata labels, annotations, etc.
+				existingCrd.Spec = crd.Spec
+				return c.Update(ctx, existingCrd)
+			}); err != nil {
+				return fmt.Errorf("unable to update CRD %s: %w", crd.GetName(), err)
+			}
+		}
+	}
 	return nil
 }

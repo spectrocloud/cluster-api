@@ -21,15 +21,12 @@ import (
 	"strings"
 	"testing"
 
-	. "github.com/onsi/gomega"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	"k8s.io/apimachinery/pkg/util/version"
-	"k8s.io/component-base/featuregate"
-	utilversion "k8s.io/component-base/version"
 	"k8s.io/utils/ptr"
 
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
+	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 )
 
 func Test_ValidateClusterClassVariables(t *testing.T) {
@@ -343,18 +340,13 @@ func Test_ValidateClusterClassVariables(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			g := NewWithT(t)
-
 			// Pin the compatibility version used in variable CEL validation to 1.29, so we don't have to continuously refactor
 			// the unit tests that verify that compatibility is handled correctly.
-			effectiveVer := featuregate.DefaultComponentGlobalsRegistry.EffectiveVersionFor(featuregate.DefaultKubeComponent)
-			if effectiveVer != nil {
-				g.Expect(effectiveVer.MinCompatibilityVersion()).To(Equal(version.MustParse("v1.29")))
-			} else {
-				v := utilversion.DefaultKubeEffectiveVersion()
-				v.SetMinCompatibilityVersion(version.MustParse("v1.29"))
-				g.Expect(featuregate.DefaultComponentGlobalsRegistry.Register(featuregate.DefaultKubeComponent, v, nil)).To(Succeed())
-			}
+			backupEnvSetVersion := GetEnvSetVersion()
+			defer func() {
+				SetEnvSetVersion(backupEnvSetVersion)
+			}()
+			SetEnvSetVersion(version.MustParse("1.29"))
 
 			gotErrs := ValidateClusterClassVariables(ctx,
 				tt.oldClusterClassVariables,
@@ -451,7 +443,7 @@ func Test_ValidateClusterClassVariable(t *testing.T) {
 			name: "Valid variable metadata",
 			clusterClassVariable: &clusterv1.ClusterClassVariable{
 				Name: "validVariable",
-				Metadata: clusterv1.ClusterClassVariableMetadata{
+				DeprecatedV1Beta1Metadata: clusterv1.ClusterClassVariableMetadata{
 					Labels: map[string]string{
 						"label-key": "label-value",
 					},
@@ -471,7 +463,7 @@ func Test_ValidateClusterClassVariable(t *testing.T) {
 			name: "fail on invalid variable label: key does not start with alphanumeric character",
 			clusterClassVariable: &clusterv1.ClusterClassVariable{
 				Name: "variable",
-				Metadata: clusterv1.ClusterClassVariableMetadata{
+				DeprecatedV1Beta1Metadata: clusterv1.ClusterClassVariableMetadata{
 					Labels: map[string]string{
 						".label-key": "label-value",
 					},
@@ -485,14 +477,14 @@ func Test_ValidateClusterClassVariable(t *testing.T) {
 			},
 			wantErrs: []validationMatch{
 				invalid("\".label-key\": name part must consist of alphanumeric characters",
-					"spec.variables[variable].metadata.labels"),
+					"spec.variables[variable].deprecatedV1Beta1Metadata.labels"),
 			},
 		},
 		{
 			name: "fail on invalid variable annotation: key does not start with alphanumeric character",
 			clusterClassVariable: &clusterv1.ClusterClassVariable{
 				Name: "variable",
-				Metadata: clusterv1.ClusterClassVariableMetadata{
+				DeprecatedV1Beta1Metadata: clusterv1.ClusterClassVariableMetadata{
 					Annotations: map[string]string{
 						".annotation-key": "annotation-value",
 					},
@@ -506,7 +498,7 @@ func Test_ValidateClusterClassVariable(t *testing.T) {
 			},
 			wantErrs: []validationMatch{
 				invalid("\".annotation-key\": name part must consist of alphanumeric characters",
-					"spec.variables[variable].metadata.annotations"),
+					"spec.variables[variable].deprecatedV1Beta1Metadata.annotations"),
 			},
 		},
 		// Defaults
@@ -518,7 +510,7 @@ func Test_ValidateClusterClassVariable(t *testing.T) {
 					OpenAPIV3Schema: clusterv1.JSONSchemaProps{
 						Type:      "string",
 						MinLength: ptr.To[int64](1),
-						XMetadata: &clusterv1.VariableSchemaMetadata{
+						XMetadata: clusterv1.VariableSchemaMetadata{
 							Labels: map[string]string{
 								"label-key": "label-value",
 							},
@@ -538,7 +530,7 @@ func Test_ValidateClusterClassVariable(t *testing.T) {
 					OpenAPIV3Schema: clusterv1.JSONSchemaProps{
 						Type:      "string",
 						MinLength: ptr.To[int64](1),
-						XMetadata: &clusterv1.VariableSchemaMetadata{
+						XMetadata: clusterv1.VariableSchemaMetadata{
 							Labels: map[string]string{
 								".label-key": "label-value",
 							},
@@ -559,7 +551,7 @@ func Test_ValidateClusterClassVariable(t *testing.T) {
 					OpenAPIV3Schema: clusterv1.JSONSchemaProps{
 						Type:      "string",
 						MinLength: ptr.To[int64](1),
-						XMetadata: &clusterv1.VariableSchemaMetadata{
+						XMetadata: clusterv1.VariableSchemaMetadata{
 							Annotations: map[string]string{
 								".annotation-key": "annotation-value",
 							},
@@ -581,7 +573,7 @@ func Test_ValidateClusterClassVariable(t *testing.T) {
 						Type: "object",
 						AdditionalProperties: &clusterv1.JSONSchemaProps{
 							Type: "string",
-							XMetadata: &clusterv1.VariableSchemaMetadata{
+							XMetadata: clusterv1.VariableSchemaMetadata{
 								Labels: map[string]string{
 									"label-key": "label-value",
 								},
@@ -603,7 +595,7 @@ func Test_ValidateClusterClassVariable(t *testing.T) {
 						Type: "object",
 						AdditionalProperties: &clusterv1.JSONSchemaProps{
 							Type: "string",
-							XMetadata: &clusterv1.VariableSchemaMetadata{
+							XMetadata: clusterv1.VariableSchemaMetadata{
 								Labels: map[string]string{
 									".label-key": "label-value",
 								},
@@ -626,7 +618,7 @@ func Test_ValidateClusterClassVariable(t *testing.T) {
 						Type: "object",
 						AdditionalProperties: &clusterv1.JSONSchemaProps{
 							Type: "string",
-							XMetadata: &clusterv1.VariableSchemaMetadata{
+							XMetadata: clusterv1.VariableSchemaMetadata{
 								Annotations: map[string]string{
 									".annotation-key": "annotation-value",
 								},
@@ -650,7 +642,7 @@ func Test_ValidateClusterClassVariable(t *testing.T) {
 						Properties: map[string]clusterv1.JSONSchemaProps{
 							"enabled": {
 								Type: "string",
-								XMetadata: &clusterv1.VariableSchemaMetadata{
+								XMetadata: clusterv1.VariableSchemaMetadata{
 									Labels: map[string]string{
 										"label-key": "label-value",
 									},
@@ -674,7 +666,7 @@ func Test_ValidateClusterClassVariable(t *testing.T) {
 						Properties: map[string]clusterv1.JSONSchemaProps{
 							"enabled": {
 								Type: "string",
-								XMetadata: &clusterv1.VariableSchemaMetadata{
+								XMetadata: clusterv1.VariableSchemaMetadata{
 									Labels: map[string]string{
 										".label-key": "label-value",
 									},
@@ -699,7 +691,7 @@ func Test_ValidateClusterClassVariable(t *testing.T) {
 						Properties: map[string]clusterv1.JSONSchemaProps{
 							"enabled": {
 								Type: "string",
-								XMetadata: &clusterv1.VariableSchemaMetadata{
+								XMetadata: clusterv1.VariableSchemaMetadata{
 									Annotations: map[string]string{
 										".annotation-key": "annotation-value",
 									},
@@ -723,7 +715,7 @@ func Test_ValidateClusterClassVariable(t *testing.T) {
 						Type: "array",
 						Items: &clusterv1.JSONSchemaProps{
 							Type: "string",
-							XMetadata: &clusterv1.VariableSchemaMetadata{
+							XMetadata: clusterv1.VariableSchemaMetadata{
 								Labels: map[string]string{
 									"label-key": "label-value",
 								},
@@ -745,7 +737,7 @@ func Test_ValidateClusterClassVariable(t *testing.T) {
 						Type: "array",
 						Items: &clusterv1.JSONSchemaProps{
 							Type: "string",
-							XMetadata: &clusterv1.VariableSchemaMetadata{
+							XMetadata: clusterv1.VariableSchemaMetadata{
 								Labels: map[string]string{
 									".label-key": "label-value",
 								},
@@ -768,7 +760,7 @@ func Test_ValidateClusterClassVariable(t *testing.T) {
 						Type: "array",
 						Items: &clusterv1.JSONSchemaProps{
 							Type: "string",
-							XMetadata: &clusterv1.VariableSchemaMetadata{
+							XMetadata: clusterv1.VariableSchemaMetadata{
 								Annotations: map[string]string{
 									".annotation-key": "annotation-value",
 								},
@@ -786,7 +778,7 @@ func Test_ValidateClusterClassVariable(t *testing.T) {
 			name: "Valid default value regular string",
 			clusterClassVariable: &clusterv1.ClusterClassVariable{
 				Name:     "var",
-				Required: true,
+				Required: ptr.To(true),
 				Schema: clusterv1.VariableSchema{
 					OpenAPIV3Schema: clusterv1.JSONSchemaProps{
 						Type: "string",
@@ -801,7 +793,7 @@ func Test_ValidateClusterClassVariable(t *testing.T) {
 			name: "fail on default value with invalid JSON",
 			clusterClassVariable: &clusterv1.ClusterClassVariable{
 				Name:     "var",
-				Required: true,
+				Required: ptr.To(true),
 				Schema: clusterv1.VariableSchema{
 					OpenAPIV3Schema: clusterv1.JSONSchemaProps{
 						Type: "object",
@@ -820,7 +812,7 @@ func Test_ValidateClusterClassVariable(t *testing.T) {
 			name: "fail on default value with invalid JSON (nested)",
 			clusterClassVariable: &clusterv1.ClusterClassVariable{
 				Name:     "var",
-				Required: true,
+				Required: ptr.To(true),
 				Schema: clusterv1.VariableSchema{
 					OpenAPIV3Schema: clusterv1.JSONSchemaProps{
 						Type: "array",
@@ -843,7 +835,7 @@ func Test_ValidateClusterClassVariable(t *testing.T) {
 			name: "Valid example value regular string",
 			clusterClassVariable: &clusterv1.ClusterClassVariable{
 				Name:     "var",
-				Required: true,
+				Required: ptr.To(true),
 				Schema: clusterv1.VariableSchema{
 					OpenAPIV3Schema: clusterv1.JSONSchemaProps{
 						Type: "string",
@@ -858,7 +850,7 @@ func Test_ValidateClusterClassVariable(t *testing.T) {
 			name: "fail on example value with invalid JSON",
 			clusterClassVariable: &clusterv1.ClusterClassVariable{
 				Name:     "var",
-				Required: true,
+				Required: ptr.To(true),
 				Schema: clusterv1.VariableSchema{
 					OpenAPIV3Schema: clusterv1.JSONSchemaProps{
 						Type: "object",
@@ -877,7 +869,7 @@ func Test_ValidateClusterClassVariable(t *testing.T) {
 			name: "fail on example value with invalid JSON (nested)",
 			clusterClassVariable: &clusterv1.ClusterClassVariable{
 				Name:     "var",
-				Required: true,
+				Required: ptr.To(true),
 				Schema: clusterv1.VariableSchema{
 					OpenAPIV3Schema: clusterv1.JSONSchemaProps{
 						Type: "array",
@@ -900,7 +892,7 @@ func Test_ValidateClusterClassVariable(t *testing.T) {
 			name: "Valid enum values",
 			clusterClassVariable: &clusterv1.ClusterClassVariable{
 				Name:     "var",
-				Required: true,
+				Required: ptr.To(true),
 				Schema: clusterv1.VariableSchema{
 					OpenAPIV3Schema: clusterv1.JSONSchemaProps{
 						Type: "string",
@@ -916,7 +908,7 @@ func Test_ValidateClusterClassVariable(t *testing.T) {
 			name: "fail on enum value with invalid JSON",
 			clusterClassVariable: &clusterv1.ClusterClassVariable{
 				Name:     "var",
-				Required: true,
+				Required: ptr.To(true),
 				Schema: clusterv1.VariableSchema{
 					OpenAPIV3Schema: clusterv1.JSONSchemaProps{
 						Type: "object",
@@ -935,7 +927,7 @@ func Test_ValidateClusterClassVariable(t *testing.T) {
 			name: "fail on enum value with invalid JSON (nested)",
 			clusterClassVariable: &clusterv1.ClusterClassVariable{
 				Name:     "var",
-				Required: true,
+				Required: ptr.To(true),
 				Schema: clusterv1.VariableSchema{
 					OpenAPIV3Schema: clusterv1.JSONSchemaProps{
 						Type: "array",
@@ -1061,7 +1053,7 @@ func Test_ValidateClusterClassVariable(t *testing.T) {
 			name: "Valid object schema",
 			clusterClassVariable: &clusterv1.ClusterClassVariable{
 				Name:     "httpProxy",
-				Required: true,
+				Required: ptr.To(true),
 				Schema: clusterv1.VariableSchema{
 					OpenAPIV3Schema: clusterv1.JSONSchemaProps{
 						Type: "object",
@@ -1085,7 +1077,7 @@ func Test_ValidateClusterClassVariable(t *testing.T) {
 			name: "fail on invalid object schema",
 			clusterClassVariable: &clusterv1.ClusterClassVariable{
 				Name:     "httpProxy",
-				Required: true,
+				Required: ptr.To(true),
 				Schema: clusterv1.VariableSchema{
 					OpenAPIV3Schema: clusterv1.JSONSchemaProps{
 						Type: "object",
@@ -1114,7 +1106,7 @@ func Test_ValidateClusterClassVariable(t *testing.T) {
 			name: "Valid map schema",
 			clusterClassVariable: &clusterv1.ClusterClassVariable{
 				Name:     "httpProxy",
-				Required: true,
+				Required: ptr.To(true),
 				Schema: clusterv1.VariableSchema{
 					OpenAPIV3Schema: clusterv1.JSONSchemaProps{
 						Type: "object",
@@ -1141,7 +1133,7 @@ func Test_ValidateClusterClassVariable(t *testing.T) {
 			name: "fail on invalid map schema",
 			clusterClassVariable: &clusterv1.ClusterClassVariable{
 				Name:     "httpProxy",
-				Required: true,
+				Required: ptr.To(true),
 				Schema: clusterv1.VariableSchema{
 					OpenAPIV3Schema: clusterv1.JSONSchemaProps{
 						Type: "object",
@@ -1172,7 +1164,7 @@ func Test_ValidateClusterClassVariable(t *testing.T) {
 			name: "fail on object (properties) and map (additionalProperties) both set",
 			clusterClassVariable: &clusterv1.ClusterClassVariable{
 				Name:     "httpProxy",
-				Required: true,
+				Required: ptr.To(true),
 				Schema: clusterv1.VariableSchema{
 					OpenAPIV3Schema: clusterv1.JSONSchemaProps{
 						Type: "object",
@@ -1204,7 +1196,7 @@ func Test_ValidateClusterClassVariable(t *testing.T) {
 			name: "Valid array schema",
 			clusterClassVariable: &clusterv1.ClusterClassVariable{
 				Name:     "arrayVariable",
-				Required: true,
+				Required: ptr.To(true),
 				Schema: clusterv1.VariableSchema{
 					OpenAPIV3Schema: clusterv1.JSONSchemaProps{
 						Type: "array",
@@ -1240,7 +1232,7 @@ func Test_ValidateClusterClassVariable(t *testing.T) {
 			name: "pass on variable with required set true with a default defined",
 			clusterClassVariable: &clusterv1.ClusterClassVariable{
 				Name:     "var",
-				Required: true,
+				Required: ptr.To(true),
 				Schema: clusterv1.VariableSchema{
 					OpenAPIV3Schema: clusterv1.JSONSchemaProps{
 						Type:    "string",
@@ -1955,7 +1947,7 @@ func Test_ValidateClusterClassVariable(t *testing.T) {
 				},
 			},
 			wantErrs: []validationMatch{
-				invalid("Invalid value: \"integer\": Expected integer greater or equal to 1, got 0",
+				invalid("Invalid value: 0: Expected integer greater or equal to 1, got 0",
 					"spec.variables[cpu].schema.openAPIV3Schema.default"),
 			},
 		},
@@ -2003,7 +1995,7 @@ func Test_ValidateClusterClassVariable(t *testing.T) {
 				},
 			},
 			wantErrs: []validationMatch{
-				invalid("Invalid value: \"integer\": failed rule: self >= 1",
+				invalid("Invalid value: 0: failed rule: self >= 1",
 					"spec.variables[cpu].schema.openAPIV3Schema.properties[nestedField].default"),
 			},
 		},
@@ -2027,7 +2019,7 @@ func Test_ValidateClusterClassVariable(t *testing.T) {
 				},
 			},
 			wantErrs: []validationMatch{
-				invalid("Invalid value: \"integer\": failed rule: self > oldSelf",
+				invalid("Invalid value: 0: failed rule: self > oldSelf",
 					"spec.variables[cpu].schema.openAPIV3Schema.default"),
 			},
 		},
@@ -2086,7 +2078,7 @@ func Test_ValidateClusterClassVariable(t *testing.T) {
 				},
 			},
 			wantErrs: []validationMatch{
-				invalid("Invalid value: \"integer\": failed rule: self >= 1",
+				invalid("Invalid value: 0: failed rule: self >= 1",
 					"spec.variables[cpu].schema.openAPIV3Schema.example"),
 			},
 		},
@@ -2134,7 +2126,7 @@ func Test_ValidateClusterClassVariable(t *testing.T) {
 				},
 			},
 			wantErrs: []validationMatch{
-				invalid("Invalid value: \"integer\": failed rule: self >= 1",
+				invalid("Invalid value: 0: failed rule: self >= 1",
 					"spec.variables[cpu].schema.openAPIV3Schema.properties[nestedField].example"),
 			},
 		},
@@ -2175,7 +2167,7 @@ func Test_ValidateClusterClassVariable(t *testing.T) {
 				},
 			},
 			wantErrs: []validationMatch{
-				invalid("Invalid value: \"integer\": failed rule: self >= 1",
+				invalid("Invalid value: 0: failed rule: self >= 1",
 					"spec.variables[cpu].schema.openAPIV3Schema.enum[0]"),
 			},
 		},
@@ -2225,7 +2217,7 @@ func Test_ValidateClusterClassVariable(t *testing.T) {
 				},
 			},
 			wantErrs: []validationMatch{
-				invalid("Invalid value: \"integer\": failed rule: self >= 1",
+				invalid("Invalid value: 0: failed rule: self >= 1",
 					"spec.variables[cpu].schema.openAPIV3Schema.properties[nestedField].enum[1]"),
 			},
 		},
@@ -2764,7 +2756,7 @@ func Test_ValidateClusterClassVariable(t *testing.T) {
 						Type: "object",
 						Properties: map[string]clusterv1.JSONSchemaProps{
 							"anyOfExampleField": { // Valid variant
-								XIntOrString: true,
+								XIntOrString: ptr.To(true),
 								AnyOf: []clusterv1.JSONSchemaProps{{
 									Type: "integer",
 								}, {
@@ -2772,7 +2764,7 @@ func Test_ValidateClusterClassVariable(t *testing.T) {
 								}},
 							},
 							"allOfExampleFieldWithAnyOf": { // Valid variant
-								XIntOrString: true,
+								XIntOrString: ptr.To(true),
 								AllOf: []clusterv1.JSONSchemaProps{{
 									AnyOf: []clusterv1.JSONSchemaProps{{
 										Type: "integer",

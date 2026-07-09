@@ -6,12 +6,11 @@ metadata:
 webhooks:
 - admissionReviewVersions:
   - v1
-  - v1beta1
   clientConfig:
     service:
       name: webhook-service
       namespace: system
-      path: /mutate-controlplane-cluster-x-k8s-io-v1beta1-kubeadmcontrolplane
+      path: /mutate-controlplane-cluster-x-k8s-io-v1beta2-kubeadmcontrolplane
   failurePolicy: Fail
   matchPolicy: Equivalent
   name: default.kubeadmcontrolplane.controlplane.cluster.x-k8s.io
@@ -19,33 +18,12 @@ webhooks:
   - apiGroups:
     - controlplane.cluster.x-k8s.io
     apiVersions:
-    - v1beta1
+    - v1beta2
     operations:
     - CREATE
     - UPDATE
     resources:
     - kubeadmcontrolplanes
-  sideEffects: None
-- admissionReviewVersions:
-  - v1
-  - v1beta1
-  clientConfig:
-    service:
-      name: webhook-service
-      namespace: system
-      path: /mutate-controlplane-cluster-x-k8s-io-v1beta1-kubeadmcontrolplanetemplate
-  failurePolicy: Fail
-  name: default.kubeadmcontrolplanetemplate.controlplane.cluster.x-k8s.io
-  rules:
-  - apiGroups:
-    - controlplane.cluster.x-k8s.io
-    apiVersions:
-    - v1beta1
-    operations:
-    - CREATE
-    - UPDATE
-    resources:
-    - kubeadmcontrolplanetemplates
   sideEffects: None
 ---
 apiVersion: admissionregistration.k8s.io/v1
@@ -55,12 +33,11 @@ metadata:
 webhooks:
 - admissionReviewVersions:
   - v1
-  - v1beta1
   clientConfig:
     service:
       name: webhook-service
       namespace: system
-      path: /validate-scale-controlplane-cluster-x-k8s-io-v1beta1-kubeadmcontrolplane
+      path: /validate-scale-controlplane-cluster-x-k8s-io-v1beta2-kubeadmcontrolplane
   failurePolicy: Fail
   matchPolicy: Equivalent
   name: validation-scale.kubeadmcontrolplane.controlplane.cluster.x-k8s.io
@@ -68,7 +45,7 @@ webhooks:
   - apiGroups:
     - controlplane.cluster.x-k8s.io
     apiVersions:
-    - v1beta1
+    - v1beta2
     operations:
     - UPDATE
     resources:
@@ -76,12 +53,11 @@ webhooks:
   sideEffects: None
 - admissionReviewVersions:
   - v1
-  - v1beta1
   clientConfig:
     service:
       name: webhook-service
       namespace: system
-      path: /validate-controlplane-cluster-x-k8s-io-v1beta1-kubeadmcontrolplane
+      path: /validate-controlplane-cluster-x-k8s-io-v1beta2-kubeadmcontrolplane
   failurePolicy: Fail
   matchPolicy: Equivalent
   name: validation.kubeadmcontrolplane.controlplane.cluster.x-k8s.io
@@ -89,7 +65,7 @@ webhooks:
   - apiGroups:
     - controlplane.cluster.x-k8s.io
     apiVersions:
-    - v1beta1
+    - v1beta2
     operations:
     - CREATE
     - UPDATE
@@ -98,19 +74,18 @@ webhooks:
   sideEffects: None
 - admissionReviewVersions:
   - v1
-  - v1beta1
   clientConfig:
     service:
       name: webhook-service
       namespace: system
-      path: /validate-controlplane-cluster-x-k8s-io-v1beta1-kubeadmcontrolplanetemplate
+      path: /validate-controlplane-cluster-x-k8s-io-v1beta2-kubeadmcontrolplanetemplate
   failurePolicy: Fail
   name: validation.kubeadmcontrolplanetemplate.controlplane.cluster.x-k8s.io
   rules:
   - apiGroups:
     - controlplane.cluster.x-k8s.io
     apiVersions:
-    - v1beta1
+    - v1beta2
     operations:
     - CREATE
     - UPDATE

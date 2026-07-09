@@ -22,7 +22,6 @@ import (
 	"github.com/go-logr/logr"
 	. "github.com/onsi/gomega"
 	"github.com/pkg/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/cache/informertest"
@@ -30,7 +29,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/source"
 
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
+	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 )
 
 var (
@@ -83,12 +82,7 @@ func TestWatchMultipleTimes(t *testing.T) {
 	ctrl := &watchCountController{}
 	tracker := ObjectTracker{Controller: ctrl, Scheme: runtime.NewScheme(), Cache: &informertest.FakeInformers{}, PredicateLogger: ptr.To(logr.New(log.NullLogSink{}))}
 
-	obj := &clusterv1.Cluster{
-		TypeMeta: metav1.TypeMeta{
-			Kind:       "Cluster",
-			APIVersion: clusterv1.GroupVersion.Version,
-		},
-	}
+	obj := &clusterv1.Cluster{}
 	err := tracker.Watch(logger, obj, nil)
 	g.Expect(err).ToNot(HaveOccurred())
 	g.Expect(ctrl.count).Should(Equal(1))

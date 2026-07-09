@@ -21,7 +21,7 @@ package ignition
 import (
 	"fmt"
 
-	bootstrapv1 "sigs.k8s.io/cluster-api/bootstrap/kubeadm/api/v1beta1"
+	bootstrapv1 "sigs.k8s.io/cluster-api/api/bootstrap/kubeadm/v1beta2"
 	"sigs.k8s.io/cluster-api/bootstrap/kubeadm/internal/cloudinit"
 	"sigs.k8s.io/cluster-api/bootstrap/kubeadm/internal/ignition/clc"
 )
@@ -79,7 +79,7 @@ func NewJoinControlPlane(input *ControlPlaneJoinInput) ([]byte, string, error) {
 		return nil, "", fmt.Errorf("controlplane join input can't be nil")
 	}
 
-	input.WriteFiles = input.Certificates.AsFiles()
+	input.WriteFiles = input.AsFiles()
 	input.WriteFiles = append(input.WriteFiles, input.AdditionalFiles...)
 	input.KubeadmCommand = fmt.Sprintf(kubeadmCommandTemplate, joinSubcommand, input.KubeadmVerbosity)
 
@@ -96,7 +96,7 @@ func NewInitControlPlane(input *ControlPlaneInput) ([]byte, string, error) {
 		return nil, "", fmt.Errorf("controlplane input can't be nil")
 	}
 
-	input.WriteFiles = input.Certificates.AsFiles()
+	input.WriteFiles = input.AsFiles()
 	input.WriteFiles = append(input.WriteFiles, input.AdditionalFiles...)
 	input.KubeadmCommand = fmt.Sprintf(kubeadmCommandTemplate, initSubcommand, input.KubeadmVerbosity)
 
@@ -107,8 +107,8 @@ func NewInitControlPlane(input *ControlPlaneInput) ([]byte, string, error) {
 
 func render(input *cloudinit.BaseUserData, ignitionConfig *bootstrapv1.IgnitionSpec, kubeadmConfig string) ([]byte, string, error) {
 	clcConfig := &bootstrapv1.ContainerLinuxConfig{}
-	if ignitionConfig != nil && ignitionConfig.ContainerLinuxConfig != nil {
-		clcConfig = ignitionConfig.ContainerLinuxConfig
+	if ignitionConfig != nil && ignitionConfig.ContainerLinuxConfig.IsDefined() {
+		clcConfig = &ignitionConfig.ContainerLinuxConfig
 	}
 
 	return clc.Render(input, clcConfig, kubeadmConfig)

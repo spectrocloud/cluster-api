@@ -27,6 +27,8 @@ import (
 	"sigs.k8s.io/cluster-api/controllers/clustercache"
 	"sigs.k8s.io/cluster-api/test/infrastructure/container"
 	dockercontrollers "sigs.k8s.io/cluster-api/test/infrastructure/docker/internal/controllers"
+	inmemoryruntime "sigs.k8s.io/cluster-api/test/infrastructure/inmemory/pkg/runtime"
+	inmemoryserver "sigs.k8s.io/cluster-api/test/infrastructure/inmemory/pkg/server"
 )
 
 // Following types provides access to reconcilers implemented in internal/controllers, thus
@@ -52,7 +54,7 @@ func (r *DockerMachineReconciler) SetupWithManager(ctx context.Context, mgr ctrl
 	}).SetupWithManager(ctx, mgr, options)
 }
 
-// DockerClusterReconciler reconciles a DockerMachine object.
+// DockerClusterReconciler reconciles a DevCluster object.
 type DockerClusterReconciler struct {
 	Client           client.Client
 	ContainerRuntime container.Runtime
@@ -64,6 +66,124 @@ type DockerClusterReconciler struct {
 // SetupWithManager sets up the reconciler with the Manager.
 func (r *DockerClusterReconciler) SetupWithManager(ctx context.Context, mgr ctrl.Manager, options controller.Options) error {
 	return (&dockercontrollers.DockerClusterReconciler{
+		Client:           r.Client,
+		ContainerRuntime: r.ContainerRuntime,
+		WatchFilterValue: r.WatchFilterValue,
+	}).SetupWithManager(ctx, mgr, options)
+}
+
+// DockerMachineTemplateReconciler reconciles a DockerMachineTemplate object.
+type DockerMachineTemplateReconciler struct {
+	Client           client.Client
+	ContainerRuntime container.Runtime
+
+	// WatchFilterValue is the label value used to filter events prior to reconciliation.
+	WatchFilterValue string
+}
+
+// SetupWithManager sets up the reconciler with the Manager.
+func (r *DockerMachineTemplateReconciler) SetupWithManager(ctx context.Context, mgr ctrl.Manager, options controller.Options) error {
+	return (&dockercontrollers.DockerMachineTemplateReconciler{
+		Client:           r.Client,
+		ContainerRuntime: r.ContainerRuntime,
+		WatchFilterValue: r.WatchFilterValue,
+	}).SetupWithManager(ctx, mgr, options)
+}
+
+// DevMachineReconciler reconciles a DevMachine object.
+type DevMachineReconciler struct {
+	Client           client.Client
+	ContainerRuntime container.Runtime
+	ClusterCache     clustercache.ClusterCache
+	InMemoryManager  inmemoryruntime.Manager
+	APIServerMux     *inmemoryserver.WorkloadClustersMux
+
+	// WatchFilterValue is the label value used to filter events prior to reconciliation.
+	WatchFilterValue string
+}
+
+// SetupWithManager sets up the reconciler with the Manager.
+func (r *DevMachineReconciler) SetupWithManager(ctx context.Context, mgr ctrl.Manager, options controller.Options) error {
+	return (&dockercontrollers.DevMachineReconciler{
+		Client:           r.Client,
+		WatchFilterValue: r.WatchFilterValue,
+		ContainerRuntime: r.ContainerRuntime,
+		ClusterCache:     r.ClusterCache,
+		InMemoryManager:  r.InMemoryManager,
+		APIServerMux:     r.APIServerMux,
+	}).SetupWithManager(ctx, mgr, options)
+}
+
+// DevClusterReconciler reconciles a DockerMachine object.
+type DevClusterReconciler struct {
+	Client           client.Client
+	ContainerRuntime container.Runtime
+	InMemoryManager  inmemoryruntime.Manager
+	APIServerMux     *inmemoryserver.WorkloadClustersMux
+
+	// WatchFilterValue is the label value used to filter events prior to reconciliation.
+	WatchFilterValue string
+}
+
+// SetupWithManager sets up the reconciler with the Manager.
+func (r *DevClusterReconciler) SetupWithManager(ctx context.Context, mgr ctrl.Manager, options controller.Options) error {
+	return (&dockercontrollers.DevClusterReconciler{
+		Client:           r.Client,
+		WatchFilterValue: r.WatchFilterValue,
+		ContainerRuntime: r.ContainerRuntime,
+		InMemoryManager:  r.InMemoryManager,
+		APIServerMux:     r.APIServerMux,
+	}).SetupWithManager(ctx, mgr, options)
+}
+
+// DevMachineTemplateReconciler reconciles a DevMachineTemplate object.
+type DevMachineTemplateReconciler struct {
+	Client           client.Client
+	ContainerRuntime container.Runtime
+
+	// WatchFilterValue is the label value used to filter events prior to reconciliation.
+	WatchFilterValue string
+}
+
+// SetupWithManager sets up the reconciler with the Manager.
+func (r *DevMachineTemplateReconciler) SetupWithManager(ctx context.Context, mgr ctrl.Manager, options controller.Options) error {
+	return (&dockercontrollers.DevMachineTemplateReconciler{
+		Client:           r.Client,
+		ContainerRuntime: r.ContainerRuntime,
+		WatchFilterValue: r.WatchFilterValue,
+	}).SetupWithManager(ctx, mgr, options)
+}
+
+// DockerMachinePoolReconciler reconciles a DockerMachinePool object.
+type DockerMachinePoolReconciler struct {
+	Client           client.Client
+	ContainerRuntime container.Runtime
+
+	// WatchFilterValue is the label value used to filter events prior to reconciliation.
+	WatchFilterValue string
+}
+
+// SetupWithManager will add watches for this controller.
+func (r *DockerMachinePoolReconciler) SetupWithManager(ctx context.Context, mgr ctrl.Manager, options controller.Options) error {
+	return (&dockercontrollers.DockerMachinePoolReconciler{
+		Client:           r.Client,
+		ContainerRuntime: r.ContainerRuntime,
+		WatchFilterValue: r.WatchFilterValue,
+	}).SetupWithManager(ctx, mgr, options)
+}
+
+// DevMachinePoolReconciler reconciles a DevMachinePool object.
+type DevMachinePoolReconciler struct {
+	Client           client.Client
+	ContainerRuntime container.Runtime
+
+	// WatchFilterValue is the label value used to filter events prior to reconciliation.
+	WatchFilterValue string
+}
+
+// SetupWithManager will add watches for this controller.
+func (r *DevMachinePoolReconciler) SetupWithManager(ctx context.Context, mgr ctrl.Manager, options controller.Options) error {
+	return (&dockercontrollers.DevMachinePoolReconciler{
 		Client:           r.Client,
 		ContainerRuntime: r.ContainerRuntime,
 		WatchFilterValue: r.WatchFilterValue,

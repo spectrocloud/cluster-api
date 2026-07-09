@@ -39,13 +39,16 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
+	bootstrapv1 "sigs.k8s.io/cluster-api/api/bootstrap/kubeadm/v1beta2"
+	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/cluster-api/controllers/clustercache"
-	"sigs.k8s.io/cluster-api/controllers/remote"
+	"sigs.k8s.io/cluster-api/controlplane/kubeadm/internal/setup"
+	"sigs.k8s.io/cluster-api/util/cache"
 	"sigs.k8s.io/cluster-api/util/certs"
 	"sigs.k8s.io/cluster-api/util/collections"
 	"sigs.k8s.io/cluster-api/util/kubeconfig"
 	"sigs.k8s.io/cluster-api/util/secret"
+	"sigs.k8s.io/cluster-api/util/test/builder"
 )
 
 func TestGetMachinesForCluster(t *testing.T) {
@@ -118,6 +121,13 @@ func TestGetWorkloadCluster(t *testing.T) {
 			Name:      "my-cluster",
 			Namespace: ns.Name,
 		},
+		Spec: clusterv1.ClusterSpec{
+			InfrastructureRef: clusterv1.ContractVersionedObjectReference{
+				APIGroup: builder.InfrastructureGroupVersion.Group,
+				Kind:     builder.GenericInfrastructureClusterKind,
+				Name:     "infracluster1",
+			},
+		},
 	}
 	g.Expect(env.CreateAndWait(ctx, cluster)).To(Succeed())
 	defer func(do client.Object) {
@@ -126,7 +136,7 @@ func TestGetWorkloadCluster(t *testing.T) {
 
 	// Set InfrastructureReady to true so ClusterCache creates the clusterAccessor.
 	patch := client.MergeFrom(cluster.DeepCopy())
-	cluster.Status.InfrastructureReady = true
+	cluster.Status.Initialization.InfrastructureProvisioned = ptr.To(true)
 	g.Expect(env.Status().Patch(ctx, cluster, patch)).To(Succeed())
 
 	// Create kubeconfig secret
@@ -151,10 +161,6 @@ func TestGetWorkloadCluster(t *testing.T) {
 			secret.KubeconfigDataName: testEnvKubeconfig,
 		},
 	}
-	clusterKey := client.ObjectKey{
-		Name:      "my-cluster",
-		Namespace: ns.Name,
-	}
 
 	tests := []struct {
 		name       string
@@ -163,40 +169,34 @@ func TestGetWorkloadCluster(t *testing.T) {
 		expectErr  bool
 	}{
 		{
-			name:       "returns a workload cluster",
-			clusterKey: clusterKey,
-			objs:       []client.Object{etcdSecret.DeepCopy(), kubeconfigSecret.DeepCopy()},
-			expectErr:  false,
+			name:      "returns a workload cluster",
+			objs:      []client.Object{etcdSecret.DeepCopy(), kubeconfigSecret.DeepCopy()},
+			expectErr: false,
 		},
 		{
-			name:       "returns error if cannot get rest.Config from kubeconfigSecret",
-			clusterKey: clusterKey,
-			objs:       []client.Object{etcdSecret.DeepCopy()},
-			expectErr:  true,
+			name:      "returns error if cannot get rest.Config from kubeconfigSecret",
+			objs:      []client.Object{etcdSecret.DeepCopy()},
+			expectErr: true,
 		},
 		{
-			name:       "returns error if unable to find the etcd secret",
-			clusterKey: clusterKey,
-			objs:       []client.Object{kubeconfigSecret.DeepCopy()},
-			expectErr:  true,
+			name:      "returns error if unable to find the etcd secret",
+			objs:      []client.Object{kubeconfigSecret.DeepCopy()},
+			expectErr: true,
 		},
 		{
-			name:       "returns error if unable to find the certificate in the etcd secret",
-			clusterKey: clusterKey,
-			objs:       []client.Object{emptyCrtEtcdSecret.DeepCopy(), kubeconfigSecret.DeepCopy()},
-			expectErr:  true,
+			name:      "returns error if unable to find the certificate in the etcd secret",
+			objs:      []client.Object{emptyCrtEtcdSecret.DeepCopy(), kubeconfigSecret.DeepCopy()},
+			expectErr: true,
 		},
 		{
-			name:       "returns error if unable to find the key in the etcd secret",
-			clusterKey: clusterKey,
-			objs:       []client.Object{emptyKeyEtcdSecret.DeepCopy(), kubeconfigSecret.DeepCopy()},
-			expectErr:  true,
+			name:      "returns error if unable to find the key in the etcd secret",
+			objs:      []client.Object{emptyKeyEtcdSecret.DeepCopy(), kubeconfigSecret.DeepCopy()},
+			expectErr: true,
 		},
 		{
-			name:       "returns error if unable to generate client cert",
-			clusterKey: clusterKey,
-			objs:       []client.Object{badCrtEtcdSecret.DeepCopy(), kubeconfigSecret.DeepCopy()},
-			expectErr:  true,
+			name:      "returns error if unable to generate client cert",
+			objs:      []client.Object{badCrtEtcdSecret.DeepCopy(), kubeconfigSecret.DeepCopy()},
+			expectErr: true,
 		},
 	}
 
@@ -211,18 +211,13 @@ func TestGetWorkloadCluster(t *testing.T) {
 				}(o)
 			}
 
+			secretCachingClient, err := setup.CreateSecretCachingClient(env.Manager)
+			g.Expect(err).ToNot(HaveOccurred())
+
 			clusterCache, err := clustercache.SetupWithManager(ctx, env.Manager, clustercache.Options{
-				SecretClient: env.Manager.GetClient(),
-				Client: clustercache.ClientOptions{
-					UserAgent: remote.DefaultClusterAPIUserAgent("test-controller-manager"),
-					Cache: clustercache.ClientCacheOptions{
-						DisableFor: []client.Object{
-							// Don't cache ConfigMaps & Secrets.
-							&corev1.ConfigMap{},
-							&corev1.Secret{},
-						},
-					},
-				},
+				SecretClient: secretCachingClient,
+				Cache:        setup.ClusterCacheCacheOptions(),
+				Client:       setup.ClusterCacheClientOptions("test-controller-manager", 20, 30),
 			}, controller.Options{MaxConcurrentReconciles: 10, SkipNameValidation: ptr.To(true)})
 			g.Expect(err).ToNot(HaveOccurred())
 			defer clusterCache.(interface{ Shutdown() }).Shutdown()
@@ -231,6 +226,7 @@ func TestGetWorkloadCluster(t *testing.T) {
 				Client:              env.GetClient(),
 				SecretCachingClient: secretCachingClient,
 				ClusterCache:        clusterCache,
+				ClientCertCache:     cache.New[ClientCertEntry](ctx, 24*time.Hour),
 			}
 
 			// Ensure the ClusterCache reconciled at least once (and if possible created a clusterAccessor).
@@ -239,7 +235,7 @@ func TestGetWorkloadCluster(t *testing.T) {
 			})
 			g.Expect(err).ToNot(HaveOccurred())
 
-			workloadCluster, err := m.GetWorkloadCluster(ctx, tt.clusterKey)
+			workloadCluster, err := m.GetWorkloadCluster(ctx, cluster, bootstrapv1.EncryptionAlgorithmRSA2048)
 			if tt.expectErr {
 				g.Expect(err).To(HaveOccurred())
 				g.Expect(workloadCluster).To(BeNil())
@@ -293,7 +289,6 @@ func machineListForTestGetMachinesForCluster() *clusterv1.MachineList {
 	}
 	machine := func(name string) clusterv1.Machine {
 		return clusterv1.Machine{
-			TypeMeta: metav1.TypeMeta{},
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      name,
 				Namespace: metav1.NamespaceDefault,
@@ -304,7 +299,7 @@ func machineListForTestGetMachinesForCluster() *clusterv1.MachineList {
 		}
 	}
 	controlPlaneMachine := machine("first-machine")
-	controlPlaneMachine.ObjectMeta.Labels[clusterv1.MachineControlPlaneLabel] = ""
+	controlPlaneMachine.Labels[clusterv1.MachineControlPlaneLabel] = ""
 	controlPlaneMachine.OwnerReferences = ownedRef
 
 	return &clusterv1.MachineList{
@@ -339,6 +334,8 @@ func (f *fakeClient) Get(_ context.Context, key client.ObjectKey, obj client.Obj
 	switch l := item.(type) {
 	case *corev1.Pod:
 		l.DeepCopyInto(obj.(*corev1.Pod))
+	case *corev1.Node:
+		l.DeepCopyInto(obj.(*corev1.Node))
 	case *rbacv1.RoleBinding:
 		l.DeepCopyInto(obj.(*rbacv1.RoleBinding))
 	case *rbacv1.Role:

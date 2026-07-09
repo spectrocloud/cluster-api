@@ -19,11 +19,10 @@ package cloudinit
 import (
 	"testing"
 
-	"github.com/blang/semver/v4"
 	. "github.com/onsi/gomega"
 	"k8s.io/utils/ptr"
 
-	bootstrapv1 "sigs.k8s.io/cluster-api/bootstrap/kubeadm/api/v1beta1"
+	bootstrapv1 "sigs.k8s.io/cluster-api/api/bootstrap/kubeadm/v1beta2"
 	"sigs.k8s.io/cluster-api/util/certs"
 	"sigs.k8s.io/cluster-api/util/secret"
 )
@@ -34,6 +33,7 @@ func TestNewInitControlPlaneAdditionalFileEncodings(t *testing.T) {
 	cpinput := &ControlPlaneInput{
 		BaseUserData: BaseUserData{
 			Header:              "test",
+			BootCommands:        nil,
 			PreKubeadmCommands:  nil,
 			PostKubeadmCommands: nil,
 			AdditionalFiles: []bootstrapv1.File{
@@ -48,7 +48,7 @@ func TestNewInitControlPlaneAdditionalFileEncodings(t *testing.T) {
 				},
 				{
 					Path:    "/tmp/existing-path",
-					Append:  true,
+					Append:  ptr.To(true),
 					Content: "hi",
 				},
 			},
@@ -95,8 +95,9 @@ func TestNewInitControlPlaneCommands(t *testing.T) {
 	cpinput := &ControlPlaneInput{
 		BaseUserData: BaseUserData{
 			Header:              "test",
-			PreKubeadmCommands:  []string{`"echo $(date) ': hello world!'"`},
-			PostKubeadmCommands: []string{"echo $(date) ': hello world!'"},
+			BootCommands:        []string{"echo $(date)", "echo 'hello BootCommands!'"},
+			PreKubeadmCommands:  []string{`"echo $(date) ': hello PreKubeadmCommands!'"`},
+			PostKubeadmCommands: []string{"echo $(date) ': hello PostKubeadmCommands!'"},
 			AdditionalFiles:     nil,
 			WriteFiles:          nil,
 			Users:               nil,
@@ -117,33 +118,38 @@ func TestNewInitControlPlaneCommands(t *testing.T) {
 	out, err := NewInitControlPlane(cpinput)
 	g.Expect(err).ToNot(HaveOccurred())
 
-	expectedCommands := []string{
-		`"\"echo $(date) ': hello world!'\""`,
-		`"echo $(date) ': hello world!'"`,
-	}
-	for _, f := range expectedCommands {
-		g.Expect(out).To(ContainSubstring(f))
-	}
+	expectedBootCmd := `bootcmd:
+  - "echo $(date)"
+  - "echo 'hello BootCommands!'"`
+
+	g.Expect(out).To(ContainSubstring(expectedBootCmd))
+
+	expectedRunCmd := `runcmd:
+  - "\"echo $(date) ': hello PreKubeadmCommands!'\""
+  - 'kubeadm init --config /run/kubeadm/kubeadm.yaml  && echo success > /run/cluster-api/bootstrap-success.complete'
+  - "echo $(date) ': hello PostKubeadmCommands!'"`
+
+	g.Expect(out).To(ContainSubstring(expectedRunCmd))
 }
 
-func TestNewInitControlPlaneDiskMounts(t *testing.T) {
-	g := NewWithT(t)
-
-	cpinput := &ControlPlaneInput{
-		BaseUserData: BaseUserData{
-			Header:              "test",
-			PreKubeadmCommands:  nil,
-			PostKubeadmCommands: nil,
-			WriteFiles:          nil,
-			Users:               nil,
-			NTP:                 nil,
-			DiskSetup: &bootstrapv1.DiskSetup{
+func TestNewInitControlPlaneDiskSetup(t *testing.T) {
+	tests := []struct {
+		name              string
+		diskSetup         *bootstrapv1.DiskSetup
+		mounts            []bootstrapv1.MountPoints
+		expectedDiskSetup string
+		expectedFSSetup   string
+		expectedMounts    string
+	}{
+		{
+			name: "Disk setup with partitions, filesystems and mounts",
+			diskSetup: &bootstrapv1.DiskSetup{
 				Partitions: []bootstrapv1.Partition{
 					{
 						Device:    "test-device",
-						Layout:    true,
+						Layout:    ptr.To(true),
 						Overwrite: ptr.To(false),
-						TableType: ptr.To("gpt"),
+						TableType: "gpt",
 					},
 				},
 				Filesystems: []bootstrapv1.Filesystem{
@@ -155,38 +161,132 @@ func TestNewInitControlPlaneDiskMounts(t *testing.T) {
 					},
 				},
 			},
-			Mounts: []bootstrapv1.MountPoints{
+			mounts: []bootstrapv1.MountPoints{
 				{"test_disk", "/var/lib/testdir"},
 			},
-		},
-		Certificates:         secret.Certificates{},
-		ClusterConfiguration: "my-cluster-config",
-		InitConfiguration:    "my-init-config",
-	}
-
-	out, err := NewInitControlPlane(cpinput)
-	g.Expect(err).ToNot(HaveOccurred())
-
-	expectedDiskSetup := `disk_setup:
+			expectedDiskSetup: `disk_setup:
   test-device:
     table_type: gpt
     layout: true
-    overwrite: false`
-	expectedFSSetup := `fs_setup:
+    overwrite: false`,
+			expectedFSSetup: `fs_setup:
   - label: test_disk
     filesystem: ext4
     device: test-device
     extra_opts:
       - -F
       - -E
-      - lazy_itable_init=1,lazy_journal_init=1`
-	expectedMounts := `mounts:
+      - lazy_itable_init=1,lazy_journal_init=1`,
+			expectedMounts: `mounts:
   - - test_disk
-    - /var/lib/testdir`
+    - /var/lib/testdir`,
+		},
+		{
+			name: "Disk setup with DiskLayout",
+			diskSetup: &bootstrapv1.DiskSetup{
+				Partitions: []bootstrapv1.Partition{
+					{
+						Device:    "test-device",
+						TableType: "gpt",
+						DiskLayout: []bootstrapv1.PartitionSpec{
+							{
+								Percentage:    30,
+								PartitionType: bootstrapv1.PartitionTypeLinux,
+							},
+							{
+								Percentage: 20,
+							},
+							{
+								Percentage:    50,
+								PartitionType: bootstrapv1.PartitionTypeLinuxRAID,
+							},
+						},
+					},
+				},
+			},
+			expectedDiskSetup: `disk_setup:
+  test-device:
+    table_type: gpt
+    layout:
+      - [30, 83]
+      - 20
+      - [50, fd]`,
+		},
+		{
+			name: "Disk setup with DiskLayout user-friendly partition type literal",
+			diskSetup: &bootstrapv1.DiskSetup{
+				Partitions: []bootstrapv1.Partition{
+					{
+						Device:    "test-device",
+						TableType: "gpt",
+						DiskLayout: []bootstrapv1.PartitionSpec{
+							{
+								Percentage:    100,
+								PartitionType: "LinuxSwap",
+							},
+						},
+					},
+				},
+			},
+			expectedDiskSetup: `disk_setup:
+  test-device:
+    table_type: gpt
+    layout:
+      - [100, 82]`,
+		},
+		{
+			name: "Disk setup with DiskLayout raw GPT partition GUID",
+			diskSetup: &bootstrapv1.DiskSetup{
+				Partitions: []bootstrapv1.Partition{
+					{
+						Device:    "test-device",
+						TableType: "gpt",
+						DiskLayout: []bootstrapv1.PartitionSpec{
+							{
+								Percentage:    100,
+								PartitionType: "0fc63daf-8483-4772-8e79-3d69d8477de4",
+							},
+						},
+					},
+				},
+			},
+			expectedDiskSetup: `disk_setup:
+  test-device:
+    table_type: gpt
+    layout:
+      - [100, 0fc63daf-8483-4772-8e79-3d69d8477de4]`,
+		},
+	}
 
-	g.Expect(string(out)).To(ContainSubstring(expectedDiskSetup))
-	g.Expect(string(out)).To(ContainSubstring(expectedFSSetup))
-	g.Expect(string(out)).To(ContainSubstring(expectedMounts))
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			g := NewWithT(t)
+
+			cpinput := &ControlPlaneInput{
+				BaseUserData: BaseUserData{
+					Header:    "test",
+					DiskSetup: tt.diskSetup,
+					Mounts:    tt.mounts,
+				},
+				Certificates:         secret.Certificates{},
+				ClusterConfiguration: "my-cluster-config",
+				InitConfiguration:    "my-init-config",
+			}
+
+			out, err := NewInitControlPlane(cpinput)
+			g.Expect(err).ToNot(HaveOccurred())
+
+			if tt.expectedDiskSetup != "" {
+				g.Expect(string(out)).To(ContainSubstring(tt.expectedDiskSetup))
+			}
+			if tt.expectedFSSetup != "" {
+				g.Expect(string(out)).To(ContainSubstring(tt.expectedFSSetup))
+			}
+			if tt.expectedMounts != "" {
+				g.Expect(string(out)).To(ContainSubstring(tt.expectedMounts))
+			}
+		})
+	}
 }
 
 func TestNewJoinControlPlaneAdditionalFileEncodings(t *testing.T) {
@@ -194,6 +294,7 @@ func TestNewJoinControlPlaneAdditionalFileEncodings(t *testing.T) {
 
 	cpinput := &ControlPlaneJoinInput{
 		BaseUserData: BaseUserData{
+			BootCommands:        nil,
 			Header:              "test",
 			PreKubeadmCommands:  nil,
 			PostKubeadmCommands: nil,
@@ -241,21 +342,21 @@ func TestNewJoinControlPlaneAdditionalFileEncodings(t *testing.T) {
 	}
 }
 
-func TestNewJoinControlPlaneExperimentalRetry(t *testing.T) {
+func TestNewJoinControlPlaneCommands(t *testing.T) {
 	g := NewWithT(t)
 
 	cpinput := &ControlPlaneJoinInput{
 		BaseUserData: BaseUserData{
-			Header:               "test",
-			PreKubeadmCommands:   nil,
-			PostKubeadmCommands:  nil,
-			UseExperimentalRetry: true,
-			WriteFiles:           nil,
-			Users:                nil,
-			NTP:                  nil,
+			Header:              "test",
+			BootCommands:        []string{"echo $(date)", "echo 'hello BootCommands!'"},
+			PreKubeadmCommands:  []string{`"echo $(date) ': hello PreKubeadmCommands!'"`},
+			PostKubeadmCommands: []string{"echo $(date) ': hello PostKubeadmCommands!'"},
+			AdditionalFiles:     nil,
+			WriteFiles:          nil,
+			Users:               nil,
+			NTP:                 nil,
 		},
 		Certificates:      secret.Certificates{},
-		BootstrapToken:    "my-bootstrap-token",
 		JoinConfiguration: "my-join-config",
 	}
 
@@ -269,49 +370,211 @@ func TestNewJoinControlPlaneExperimentalRetry(t *testing.T) {
 	out, err := NewJoinControlPlane(cpinput)
 	g.Expect(err).ToNot(HaveOccurred())
 
-	expectedFiles := []string{
-		`-   path: ` + retriableJoinScriptName + `
-    owner: ` + retriableJoinScriptOwner + `
-    permissions: '` + retriableJoinScriptPermissions + `'
-    `,
-	}
-	for _, f := range expectedFiles {
-		g.Expect(out).To(ContainSubstring(f))
-	}
+	expectedBootCmd := `bootcmd:
+  - "echo $(date)"
+  - "echo 'hello BootCommands!'"`
+
+	g.Expect(out).To(ContainSubstring(expectedBootCmd))
+
+	expectedRunCmd := `runcmd:
+  - "\"echo $(date) ': hello PreKubeadmCommands!'\""
+  - kubeadm join --config /run/kubeadm/kubeadm-join-config.yaml  && echo success > /run/cluster-api/bootstrap-success.complete
+  - "echo $(date) ': hello PostKubeadmCommands!'"`
+
+	g.Expect(out).To(ContainSubstring(expectedRunCmd))
 }
 
-func Test_useKubeadmBootstrapScriptPre1_31(t *testing.T) {
+func TestNewJoinNodeCommands(t *testing.T) {
+	g := NewWithT(t)
+
+	nodeinput := &NodeInput{
+		BaseUserData: BaseUserData{
+			Header:              "test",
+			BootCommands:        []string{"echo $(date)", "echo 'hello BootCommands!'"},
+			PreKubeadmCommands:  []string{`"echo $(date) ': hello PreKubeadmCommands!'"`},
+			PostKubeadmCommands: []string{"echo $(date) ': hello PostKubeadmCommands!'"},
+			AdditionalFiles:     nil,
+			WriteFiles:          nil,
+			Users:               nil,
+			NTP:                 nil,
+		},
+		JoinConfiguration: "my-join-config",
+	}
+
+	out, err := NewNode(nodeinput)
+	g.Expect(err).ToNot(HaveOccurred())
+
+	expectedBootCmd := `bootcmd:
+  - "echo $(date)"
+  - "echo 'hello BootCommands!'"`
+
+	g.Expect(out).To(ContainSubstring(expectedBootCmd))
+
+	expectedRunCmd := `runcmd:
+  - "\"echo $(date) ': hello PreKubeadmCommands!'\""
+  - kubeadm join --config /run/kubeadm/kubeadm-join-config.yaml  && echo success > /run/cluster-api/bootstrap-success.complete
+  - "echo $(date) ': hello PostKubeadmCommands!'"`
+
+	g.Expect(out).To(ContainSubstring(expectedRunCmd))
+}
+
+func TestOmittableFields(t *testing.T) {
 	tests := []struct {
-		name          string
-		parsedversion semver.Version
-		want          bool
+		name string
+		A    BaseUserData
+		B    BaseUserData
 	}{
 		{
-			name:          "true for version for v1.30",
-			parsedversion: semver.MustParse("1.30.99"),
-			want:          true,
+			name: "No diff between empty or nil additionalFiles", // NOTE: it maps to .Files in the KubeadmConfigSpec
+			A: BaseUserData{
+				AdditionalFiles: []bootstrapv1.File{},
+			},
+			B: BaseUserData{
+				AdditionalFiles: nil,
+			},
 		},
 		{
-			name:          "true for version for v1.28",
-			parsedversion: semver.MustParse("1.28.0"),
-			want:          true,
+			name: "No diff between empty or nil diskSetup.partitions",
+			A: BaseUserData{
+				DiskSetup: &bootstrapv1.DiskSetup{
+					Partitions: []bootstrapv1.Partition{},
+				},
+			},
+			B: BaseUserData{
+				DiskSetup: &bootstrapv1.DiskSetup{
+					Partitions: nil,
+				},
+			},
 		},
 		{
-			name:          "false for v1.31.0",
-			parsedversion: semver.MustParse("1.31.0"),
-			want:          false,
+			name: "No diff between empty or nil diskSetup.filesystems.extraOpts",
+			A: BaseUserData{
+				DiskSetup: &bootstrapv1.DiskSetup{
+					Filesystems: []bootstrapv1.Filesystem{
+						{
+							ExtraOpts: []string{},
+						},
+					},
+				},
+			},
+			B: BaseUserData{
+				DiskSetup: &bootstrapv1.DiskSetup{
+					Filesystems: []bootstrapv1.Filesystem{
+						{
+							ExtraOpts: nil,
+						},
+					},
+				},
+			},
 		},
 		{
-			name:          "false for v1.31.0-beta.0",
-			parsedversion: semver.MustParse("1.31.0-beta.0"),
-			want:          false,
+			name: "No diff between empty or nil diskSetup.filesystems",
+			A: BaseUserData{
+				DiskSetup: &bootstrapv1.DiskSetup{
+					Filesystems: []bootstrapv1.Filesystem{},
+				},
+			},
+			B: BaseUserData{
+				DiskSetup: &bootstrapv1.DiskSetup{
+					Filesystems: nil,
+				},
+			},
+		},
+		{
+			name: "No diff between empty or nil mounts",
+			A: BaseUserData{
+				Mounts: []bootstrapv1.MountPoints{},
+			},
+			B: BaseUserData{
+				Mounts: nil,
+			},
+		},
+		{
+			name: "No diff between empty or nil bootCommands",
+			A: BaseUserData{
+				BootCommands: []string{},
+			},
+			B: BaseUserData{
+				BootCommands: nil,
+			},
+		},
+		{
+			name: "No diff between empty or nil preKubeadmCommands",
+			A: BaseUserData{
+				PreKubeadmCommands: []string{},
+			},
+			B: BaseUserData{
+				PreKubeadmCommands: nil,
+			},
+		},
+		{
+			name: "No diff between empty or nil postKubeadmCommands",
+			A: BaseUserData{
+				PostKubeadmCommands: []string{},
+			},
+			B: BaseUserData{
+				PostKubeadmCommands: nil,
+			},
+		},
+		{
+			name: "No diff between empty or nil users",
+			A: BaseUserData{
+				Users: []bootstrapv1.User{},
+			},
+			B: BaseUserData{
+				Users: nil,
+			},
+		},
+		{
+			name: "No diff between empty or nil users.sshAuthorizedKeys",
+			A: BaseUserData{
+				Users: []bootstrapv1.User{
+					{
+						SSHAuthorizedKeys: nil,
+					},
+				},
+			},
+			B: BaseUserData{
+				Users: []bootstrapv1.User{
+					{
+						SSHAuthorizedKeys: []string{},
+					},
+				},
+			},
+		},
+		{
+			name: "No diff between empty or nil ntp.servers",
+			A: BaseUserData{
+				NTP: &bootstrapv1.NTP{
+					Servers: []string{},
+				},
+			},
+			B: BaseUserData{
+				NTP: &bootstrapv1.NTP{
+					Servers: nil,
+				},
+			},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := useKubeadmBootstrapScriptPre1_31(tt.parsedversion); got != tt.want {
-				t.Errorf("useKubeadmBootstrapScriptPre1_31() = %v, want %v", got, tt.want)
-			}
+			g := NewWithT(t)
+
+			outA, err := NewInitControlPlane(&ControlPlaneInput{BaseUserData: tt.A})
+			g.Expect(err).ToNot(HaveOccurred())
+
+			outB, err := NewInitControlPlane(&ControlPlaneInput{BaseUserData: tt.B})
+			g.Expect(err).ToNot(HaveOccurred())
+
+			g.Expect(string(outA)).To(Equal(string(outB)))
+
+			outA, err = NewJoinControlPlane(&ControlPlaneJoinInput{BaseUserData: tt.A})
+			g.Expect(err).ToNot(HaveOccurred())
+
+			outB, err = NewJoinControlPlane(&ControlPlaneJoinInput{BaseUserData: tt.B})
+			g.Expect(err).ToNot(HaveOccurred())
+
+			g.Expect(string(outA)).To(Equal(string(outB)))
 		})
 	}
 }

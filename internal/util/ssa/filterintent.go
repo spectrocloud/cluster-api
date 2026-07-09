@@ -80,7 +80,7 @@ func FilterIntent(ctx *FilterIntentInput) bool {
 		}
 
 		// If the field should be filtered out, delete it from the modified object.
-		if fieldCtx.ShouldFilter(fieldCtx.Path) {
+		if fieldCtx.ShouldFilter != nil && fieldCtx.ShouldFilter(fieldCtx.Path) {
 			delete(value, field)
 			gotDeletions = true
 			continue
@@ -88,10 +88,10 @@ func FilterIntent(ctx *FilterIntentInput) bool {
 
 		// Process nested fields and get in return if FilterIntent removed fields.
 		if FilterIntent(fieldCtx) {
+			gotDeletions = true
 			// Ensure we are not leaving empty maps around.
 			if v, ok := fieldCtx.Value.(map[string]interface{}); ok && len(v) == 0 {
 				delete(value, field)
-				gotDeletions = true
 			}
 		}
 	}

@@ -24,9 +24,8 @@ import (
 
 	"github.com/pkg/errors"
 	"go.etcd.io/etcd/api/v3/etcdserverpb"
-	"go.etcd.io/etcd/client/pkg/v3/logutil"
 	clientv3 "go.etcd.io/etcd/client/v3"
-	"go.uber.org/zap/zapcore"
+	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	kerrors "k8s.io/apimachinery/pkg/util/errors"
 
@@ -42,7 +41,7 @@ type etcd interface {
 	AlarmList(ctx context.Context) (*clientv3.AlarmResponse, error)
 	Close() error
 	Endpoints() []string
-	MemberList(ctx context.Context) (*clientv3.MemberListResponse, error)
+	MemberList(ctx context.Context, opts ...clientv3.OpOption) (*clientv3.MemberListResponse, error)
 	MemberRemove(ctx context.Context, id uint64) (*clientv3.MemberRemoveResponse, error)
 	MoveLeader(ctx context.Context, id uint64) (*clientv3.MoveLeaderResponse, error)
 	Status(ctx context.Context, endpoint string) (*clientv3.StatusResponse, error)
@@ -53,7 +52,6 @@ type Client struct {
 	EtcdClient  etcd
 	Endpoint    string
 	LeaderID    uint64
-	Errors      []string
 	CallTimeout time.Duration
 }
 
@@ -115,6 +113,13 @@ type Member struct {
 	IsLearner bool
 }
 
+// Members is a slice of Member pointers that implements sort.Interface, ordering by member name.
+type Members []*Member
+
+func (m Members) Len() int           { return len(m) }
+func (m Members) Less(i, j int) bool { return m[i].Name < m[j].Name }
+func (m Members) Swap(i, j int)      { m[i], m[j] = m[j], m[i] }
+
 // pbMemberToMember converts the protobuf representation of a cluster member to a Member struct.
 func pbMemberToMember(m *etcdserverpb.Member) *Member {
 	return &Member{
@@ -133,13 +138,8 @@ type ClientConfiguration struct {
 	TLSConfig   *tls.Config
 	DialTimeout time.Duration
 	CallTimeout time.Duration
+	Logger      *zap.Logger
 }
-
-var (
-	// Create the etcdClientLogger only once. Otherwise every call of clientv3.New
-	// would create its own logger which leads to a lot of memory allocations.
-	etcdClientLogger, _ = logutil.CreateDefaultZapLogger(zapcore.InfoLevel)
-)
 
 // NewClient creates a new etcd client with the given configuration.
 func NewClient(ctx context.Context, config ClientConfiguration) (*Client, error) {
@@ -155,7 +155,7 @@ func NewClient(ctx context.Context, config ClientConfiguration) (*Client, error)
 			grpc.WithContextDialer(dialer.DialContextWithAddr),
 		},
 		TLS:    config.TLSConfig,
-		Logger: etcdClientLogger,
+		Logger: config.Logger,
 	})
 	if err != nil {
 		return nil, errors.Wrap(err, "unable to create etcd client")
@@ -188,11 +188,13 @@ func newEtcdClient(ctx context.Context, etcdClient etcd, callTimeout time.Durati
 		return nil, errors.Wrap(err, "failed to get etcd status")
 	}
 
+	// We don't need to read or handle StatusResponse.Errors here. They
+	// are intended for human consumption, not for programmatic processing.
+	// KCP should rely only on alarms.
 	return &Client{
 		Endpoint:    endpoints[0],
 		EtcdClient:  etcdClient,
 		LeaderID:    status.Leader,
-		Errors:      status.Errors,
 		CallTimeout: callTimeout,
 	}, nil
 }

@@ -26,9 +26,11 @@ import (
 	"github.com/pkg/errors"
 	corev1 "k8s.io/api/core/v1"
 	kerrors "k8s.io/apimachinery/pkg/util/errors"
+	oldhttpstream "k8s.io/apimachinery/pkg/util/httpstream" //nolint:staticcheck // Keep using this package for now as it's not straightforward to migrate this to k8s.io/streaming/pkg/httpstream. For now for the fallback decision we check for errors of the old and new package to be safe. Eventually we stop using this package when we only support SPDYOverWebsocket.
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/portforward"
 	"k8s.io/client-go/transport/spdy"
+	"k8s.io/streaming/pkg/httpstream"
 )
 
 const defaultTimeout = 10 * time.Second
@@ -83,8 +85,14 @@ func (d *Dialer) DialContextWithAddr(ctx context.Context, addr string) (net.Conn
 }
 
 // DialContext creates proxied port-forwarded connections.
-// ctx is currently unused, but fulfils the type signature used by GRPC.
-func (d *Dialer) DialContext(_ context.Context, _ string, addr string) (net.Conn, error) {
+func (d *Dialer) DialContext(ctx context.Context, _ string, addr string) (net.Conn, error) {
+	// Check if context is already cancelled or timed out
+	select {
+	case <-ctx.Done():
+		return nil, errors.Wrap(ctx.Err(), "context cancelled before establishing connection")
+	default:
+	}
+
 	req := d.clientset.CoreV1().RESTClient().
 		Post().
 		Resource(d.proxy.Kind).
@@ -92,7 +100,26 @@ func (d *Dialer) DialContext(_ context.Context, _ string, addr string) (net.Conn
 		Name(addr).
 		SubResource("portforward")
 
-	dialer := spdy.NewDialer(d.upgrader, &http.Client{Transport: d.proxyTransport}, "POST", req.URL())
+	httpClient := &http.Client{
+		Transport: d.proxyTransport,
+	}
+
+	if deadline, ok := ctx.Deadline(); ok {
+		httpClient.Timeout = time.Until(deadline)
+	}
+
+	dialer := spdy.NewDialer(d.upgrader, httpClient, "POST", req.URL())
+
+	// Configure websocket dialer and keep spdy as fallback
+	// Note: websockets are enabled per default starting with kubernetes 1.31.
+	tunnelingDialer, err := portforward.NewSPDYOverWebsocketDialer(req.URL(), d.proxy.KubeConfig)
+	if err != nil {
+		return nil, errors.Wrap(err, "error creating websocket tunneling dialer")
+	}
+	dialer = portforward.NewFallbackDialer(tunnelingDialer, dialer, func(err error) bool {
+		return oldhttpstream.IsUpgradeFailure(err) || oldhttpstream.IsHTTPSProxyError(err) ||
+			httpstream.IsUpgradeFailure(err) || httpstream.IsHTTPSProxyError(err)
+	})
 
 	// Create a new connection from the dialer.
 	//
@@ -143,16 +170,4 @@ func (d *Dialer) DialContext(_ context.Context, _ string, addr string) (net.Conn
 
 	// Create the net.Conn and return.
 	return NewConn(connection, dataStream), nil
-}
-
-// DialTimeout sets the timeout.
-func DialTimeout(duration time.Duration) func(*Dialer) error {
-	return func(d *Dialer) error {
-		return d.setTimeout(duration)
-	}
-}
-
-func (d *Dialer) setTimeout(duration time.Duration) error {
-	d.timeout = duration
-	return nil
 }

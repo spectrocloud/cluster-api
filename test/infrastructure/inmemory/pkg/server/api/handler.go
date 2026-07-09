@@ -40,8 +40,8 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/runtime/serializer"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/apimachinery/pkg/util/httpstream"
-	"k8s.io/apimachinery/pkg/util/httpstream/spdy"
+	"k8s.io/apimachinery/pkg/util/httpstream"      //nolint:staticcheck // Keep using this package for now as it's not straightforward to migrate this to k8s.io/streaming/pkg/httpstream. Eventually we stop using this package when we only support SPDYOverWebsocket.
+	"k8s.io/apimachinery/pkg/util/httpstream/spdy" //nolint:staticcheck
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apiserver/pkg/endpoints/metrics"
 	"k8s.io/apiserver/pkg/endpoints/request"
@@ -86,36 +86,36 @@ func NewAPIServerHandler(manager inmemoryruntime.Manager, log logr.Logger, resol
 	ws.Route(ws.GET("/apis/{group}/{version}").To(apiServer.apisDiscovery))
 
 	// CRUD endpoints (global objects)
-	ws.Route(ws.POST("/api/v1/{resource}").Consumes(runtime.ContentTypeProtobuf).To(apiServer.apiV1Create))
+	ws.Route(ws.POST("/api/v1/{resource}").Consumes(runtime.ContentTypeProtobuf, runtime.ContentTypeJSON).To(apiServer.apiV1Create))
 	ws.Route(ws.GET("/api/v1/{resource}").If(isList).To(apiServer.apiV1List))
 	ws.Route(ws.GET("/api/v1/{resource}").If(isWatch).To(apiServer.apiV1Watch))
 	ws.Route(ws.GET("/api/v1/{resource}/{name}").To(apiServer.apiV1Get))
-	ws.Route(ws.PUT("/api/v1/{resource}/{name}").Consumes(runtime.ContentTypeProtobuf).To(apiServer.apiV1Update))
+	ws.Route(ws.PUT("/api/v1/{resource}/{name}").Consumes(runtime.ContentTypeProtobuf, runtime.ContentTypeJSON).To(apiServer.apiV1Update))
 	ws.Route(ws.PATCH("/api/v1/{resource}/{name}").Consumes(string(types.MergePatchType), string(types.StrategicMergePatchType)).To(apiServer.apiV1Patch))
 	ws.Route(ws.DELETE("/api/v1/{resource}/{name}").Consumes(runtime.ContentTypeProtobuf, runtime.ContentTypeJSON).To(apiServer.apiV1Delete))
 
-	ws.Route(ws.POST("/apis/{group}/{version}/{resource}").Consumes(runtime.ContentTypeProtobuf).To(apiServer.apiV1Create))
+	ws.Route(ws.POST("/apis/{group}/{version}/{resource}").Consumes(runtime.ContentTypeProtobuf, runtime.ContentTypeJSON).To(apiServer.apiV1Create))
 	ws.Route(ws.GET("/apis/{group}/{version}/{resource}").If(isList).To(apiServer.apiV1List))
 	ws.Route(ws.GET("/apis/{group}/{version}/{resource}").If(isWatch).To(apiServer.apiV1Watch))
 	ws.Route(ws.GET("/apis/{group}/{version}/{resource}/{name}").To(apiServer.apiV1Get))
-	ws.Route(ws.PUT("/apis/{group}/{version}/{resource}/{name}").Consumes(runtime.ContentTypeProtobuf).To(apiServer.apiV1Update))
+	ws.Route(ws.PUT("/apis/{group}/{version}/{resource}/{name}").Consumes(runtime.ContentTypeProtobuf, runtime.ContentTypeJSON).To(apiServer.apiV1Update))
 	ws.Route(ws.PATCH("/apis/{group}/{version}/{resource}/{name}").Consumes(string(types.MergePatchType), string(types.StrategicMergePatchType)).To(apiServer.apiV1Patch))
 	ws.Route(ws.DELETE("/apis/{group}/{version}/{resource}/{name}").Consumes(runtime.ContentTypeProtobuf, runtime.ContentTypeJSON).To(apiServer.apiV1Delete))
 
 	// CRUD endpoints (namespaced objects)
-	ws.Route(ws.POST("/api/v1/namespaces/{namespace}/{resource}").Consumes(runtime.ContentTypeProtobuf).To(apiServer.apiV1Create))
+	ws.Route(ws.POST("/api/v1/namespaces/{namespace}/{resource}").Consumes(runtime.ContentTypeProtobuf, runtime.ContentTypeJSON).To(apiServer.apiV1Create))
 	ws.Route(ws.GET("/api/v1/namespaces/{namespace}/{resource}").If(isList).To(apiServer.apiV1List))
 	ws.Route(ws.GET("/api/v1/namespaces/{namespace}/{resource}").If(isWatch).To(apiServer.apiV1Watch))
 	ws.Route(ws.GET("/api/v1/namespaces/{namespace}/{resource}/{name}").To(apiServer.apiV1Get))
-	ws.Route(ws.PUT("/api/v1/namespaces/{namespace}/{resource}/{name}").Consumes(runtime.ContentTypeProtobuf).To(apiServer.apiV1Update))
+	ws.Route(ws.PUT("/api/v1/namespaces/{namespace}/{resource}/{name}").Consumes(runtime.ContentTypeProtobuf, runtime.ContentTypeJSON).To(apiServer.apiV1Update))
 	ws.Route(ws.PATCH("/api/v1/namespaces/{namespace}/{resource}/{name}").Consumes(string(types.MergePatchType), string(types.StrategicMergePatchType)).To(apiServer.apiV1Patch))
 	ws.Route(ws.DELETE("/api/v1/namespaces/{namespace}/{resource}/{name}").Consumes(runtime.ContentTypeProtobuf, runtime.ContentTypeJSON).To(apiServer.apiV1Delete))
 
-	ws.Route(ws.POST("/apis/{group}/{version}/namespaces/{namespace}/{resource}").Consumes(runtime.ContentTypeProtobuf).To(apiServer.apiV1Create))
+	ws.Route(ws.POST("/apis/{group}/{version}/namespaces/{namespace}/{resource}").Consumes(runtime.ContentTypeProtobuf, runtime.ContentTypeJSON).To(apiServer.apiV1Create))
 	ws.Route(ws.GET("/apis/{group}/{version}/namespaces/{namespace}/{resource}").If(isList).To(apiServer.apiV1List))
 	ws.Route(ws.GET("/apis/{group}/{version}/namespaces/{namespace}/{resource}").If(isWatch).To(apiServer.apiV1Watch))
 	ws.Route(ws.GET("/apis/{group}/{version}/namespaces/{namespace}/{resource}/{name}").To(apiServer.apiV1Get))
-	ws.Route(ws.PUT("/apis/{group}/{version}/namespaces/{namespace}/{resource}/{name}").Consumes(runtime.ContentTypeProtobuf).To(apiServer.apiV1Update))
+	ws.Route(ws.PUT("/apis/{group}/{version}/namespaces/{namespace}/{resource}/{name}").Consumes(runtime.ContentTypeProtobuf, runtime.ContentTypeJSON).To(apiServer.apiV1Update))
 	ws.Route(ws.PATCH("/apis/{group}/{version}/namespaces/{namespace}/{resource}/{name}").Consumes(string(types.MergePatchType), string(types.StrategicMergePatchType)).To(apiServer.apiV1Patch))
 	ws.Route(ws.DELETE("/apis/{group}/{version}/namespaces/{namespace}/{resource}/{name}").Consumes(runtime.ContentTypeProtobuf, runtime.ContentTypeJSON).To(apiServer.apiV1Delete))
 
@@ -158,11 +158,11 @@ func (h *apiServerHandler) globalLogging(req *restful.Request, resp *restful.Res
 		scope := metrics.CleanScope(requestInfo)
 		verb := metrics.CleanVerb(metrics.CanonicalVerb(strings.ToUpper(req.Request.Method), scope), req.Request, requestInfo)
 		component := metrics.APIServerComponent
-		baseLabelValues := []string{verb, dryRun, requestInfo.APIGroup, requestInfo.APIVersion, requestInfo.Resource, requestInfo.Subresource, scope, component}
+		baseLabelValues := []string{verb, dryRun, requestInfo.APIGroup, requestInfo.APIVersion, requestInfo.Resource, requestInfo.Subresource, scope, component} //nolint:prealloc // Not all paths append
 		requestTotalLabelValues := append(baseLabelValues, strconv.Itoa(resp.StatusCode()))
 		requestLatencyLabelValues := baseLabelValues
 
-		// Additional CAPIM specific label values.
+		// Additional label values.
 		wclName, _ := h.resourceGroupResolver(req.Request.Host)
 		userAgent := req.Request.Header.Get("User-Agent")
 		requestTotalLabelValues = append(requestTotalLabelValues, req.Request.Method, req.Request.Host, req.SelectedRoutePath(), wclName, userAgent)
@@ -225,6 +225,20 @@ func (h *apiServerHandler) apisDiscovery(req *restful.Request, resp *restful.Res
 		}
 		if req.PathParameter("group") == "storage.k8s.io" && req.PathParameter("version") == "v1" {
 			if err := resp.WriteEntity(storageV1ResourceList); err != nil {
+				_ = resp.WriteErrorString(http.StatusInternalServerError, err.Error())
+				return
+			}
+			return
+		}
+		if req.PathParameter("group") == "apiextensions.k8s.io" && req.PathParameter("version") == "v1" {
+			if err := resp.WriteEntity(apiextensionsV1ResourceList); err != nil {
+				_ = resp.WriteErrorString(http.StatusInternalServerError, err.Error())
+				return
+			}
+			return
+		}
+		if req.PathParameter("group") == "policy" && req.PathParameter("version") == "v1" {
+			if err := resp.WriteEntity(policyV1ResourceList); err != nil {
 				_ = resp.WriteErrorString(http.StatusInternalServerError, err.Error())
 				return
 			}
@@ -345,7 +359,6 @@ func (h *apiServerHandler) v1List(ctx context.Context, req *restful.Request, gvk
 		listOpts = append(listOpts, client.InNamespace(req.PathParameter("namespace")))
 	}
 
-	// TODO: The only field Selector which works is for `spec.nodeName` on pods.
 	fieldSelector, err := fields.ParseSelector(req.QueryParameter("fieldSelector"))
 	if err != nil {
 		return nil, err
@@ -626,8 +639,8 @@ func (h *apiServerHandler) apiV1PortForward(req *restful.Request, resp *restful.
 		podName,
 		podNamespace,
 		func(ctx context.Context, _, _, _ string, stream io.ReadWriteCloser) error {
-			// Given that in the in-memory provider there is no real infrastructure, and thus no real workload cluster,
-			// we are going to forward all the connection back to the same server (the CAPIM controller pod).
+			// Given that in the in-memory backend there is no real infrastructure, and thus no real workload cluster,
+			// we are going to forward all the connection back to the same server (the controller pod).
 			return h.doPortForward(ctx, req.Request.Host, stream)
 		},
 	)
@@ -638,10 +651,10 @@ func (h *apiServerHandler) apiV1PortForward(req *restful.Request, resp *restful.
 
 // doPortForward establish a connection to the target of the port forward operation,  and sets up
 // a bidirectional copy of data.
-// In the case of this provider, the target endpoint is always on the same server (the CAPIM controller pod).
+// In the case of the in.memory backend, the target endpoint is always on the same server (the controller pod).
 func (h *apiServerHandler) doPortForward(ctx context.Context, address string, stream io.ReadWriteCloser) error {
 	// Get a connection to the target of the port forward operation.
-	dial, err := net.Dial("tcp", address)
+	dial, err := net.Dial("tcp", address) //nolint:noctx
 	if err != nil {
 		return fmt.Errorf("failed to dial %q: %w", address, err)
 	}
@@ -688,6 +701,12 @@ func getAPIResourceList(req *restful.Request) *metav1.APIResourceList {
 		}
 		if req.PathParameter("group") == "storage.k8s.io" && req.PathParameter("version") == "v1" {
 			return storageV1ResourceList
+		}
+		if req.PathParameter("group") == "apiextensions.k8s.io" && req.PathParameter("version") == "v1" {
+			return apiextensionsV1ResourceList
+		}
+		if req.PathParameter("group") == "policy" && req.PathParameter("version") == "v1" {
+			return policyV1ResourceList
 		}
 		return nil
 	}

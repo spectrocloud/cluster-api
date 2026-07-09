@@ -30,7 +30,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
+	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 )
 
 const semaphoreInformationKey = "lock-information"
@@ -95,7 +95,7 @@ func (c *ControlPlaneInitMutex) Lock(ctx context.Context, cluster *clusterv1.Clu
 		return false
 	}
 
-	log.Info("Attempting to acquire the lock")
+	log.V(4).Info("Attempting to acquire the lock")
 	err = c.client.Create(ctx, sema.ConfigMap)
 	switch {
 	case apierrors.IsAlreadyExists(err):
@@ -120,7 +120,7 @@ func (c *ControlPlaneInitMutex) Unlock(ctx context.Context, cluster *clusterv1.C
 	}, sema.ConfigMap)
 	switch {
 	case apierrors.IsNotFound(err):
-		log.Info("Control plane init lock not found, it may have been released already")
+		log.V(4).Info("Control plane init lock not found, it may have been released already")
 		return true
 	case err != nil:
 		log.Error(err, "Error unlocking the control plane init lock")

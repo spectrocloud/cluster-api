@@ -21,14 +21,12 @@ import (
 	"time"
 
 	"github.com/blang/semver/v4"
-	"github.com/pkg/errors"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
-	bootstrapv1 "sigs.k8s.io/cluster-api/bootstrap/kubeadm/api/v1beta1"
+	bootstrapv1 "sigs.k8s.io/cluster-api/api/bootstrap/kubeadm/v1beta2"
+	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/cluster-api/controlplane/kubeadm/internal"
 	"sigs.k8s.io/cluster-api/controlplane/kubeadm/internal/etcd"
-	expv1 "sigs.k8s.io/cluster-api/exp/api/v1beta1"
 	"sigs.k8s.io/cluster-api/util/collections"
 )
 
@@ -36,7 +34,7 @@ type fakeManagementCluster struct {
 	// TODO: once all client interactions are moved to the Management cluster this can go away
 	Management   *internal.Management
 	Machines     collections.Machines
-	MachinePools *expv1.MachinePoolList
+	MachinePools *clusterv1.MachinePoolList
 	Workload     *fakeWorkloadCluster
 	WorkloadErr  error
 	Reader       client.Reader
@@ -50,18 +48,25 @@ func (f *fakeManagementCluster) List(ctx context.Context, list client.ObjectList
 	return f.Reader.List(ctx, list, opts...)
 }
 
-func (f *fakeManagementCluster) GetWorkloadCluster(_ context.Context, _ client.ObjectKey) (internal.WorkloadCluster, error) {
+func (f *fakeManagementCluster) GetWorkloadCluster(_ context.Context, _ *clusterv1.Cluster, _ bootstrapv1.EncryptionAlgorithmType) (internal.WorkloadCluster, error) {
 	return f.Workload, f.WorkloadErr
 }
 
-func (f *fakeManagementCluster) GetMachinesForCluster(c context.Context, cluster *clusterv1.Cluster, filters ...collections.Func) (collections.Machines, error) {
+func (f *fakeManagementCluster) GetControlPlaneMachinesForCluster(ctx context.Context, cluster *clusterv1.Cluster) (collections.Machines, error) {
 	if f.Management != nil {
-		return f.Management.GetMachinesForCluster(c, cluster, filters...)
+		return f.Management.GetControlPlaneMachinesForCluster(ctx, cluster)
 	}
 	return f.Machines, nil
 }
 
-func (f *fakeManagementCluster) GetMachinePoolsForCluster(c context.Context, cluster *clusterv1.Cluster) (*expv1.MachinePoolList, error) {
+func (f *fakeManagementCluster) GetMachinesForCluster(ctx context.Context, cluster *clusterv1.Cluster, filters ...collections.Func) (collections.Machines, error) {
+	if f.Management != nil {
+		return f.Management.GetMachinesForCluster(ctx, cluster, filters...)
+	}
+	return f.Machines, nil
+}
+
+func (f *fakeManagementCluster) GetMachinePoolsForCluster(c context.Context, cluster *clusterv1.Cluster) (*clusterv1.MachinePoolList, error) {
 	if f.Management != nil {
 		return f.Management.GetMachinePoolsForCluster(c, cluster)
 	}
@@ -70,69 +75,41 @@ func (f *fakeManagementCluster) GetMachinePoolsForCluster(c context.Context, clu
 
 type fakeWorkloadCluster struct {
 	*internal.Workload
-	Status                     internal.ClusterStatus
-	EtcdMembersResult          []string
-	APIServerCertificateExpiry *time.Time
+	KubeadmConfigExist            bool
+	APIServerCertificateExpiry    *time.Time
+	OverrideForwardEtcdLeadership func(context.Context, string, string) error
 
-	forwardEtcdLeadershipCalled      int
-	removeEtcdMemberForMachineCalled int
+	forwardEtcdLeadershipCalled int
+	removeEtcdMemberCalled      int
 }
 
-func (f *fakeWorkloadCluster) ForwardEtcdLeadership(_ context.Context, _ *clusterv1.Machine, leaderCandidate *clusterv1.Machine) error {
-	f.forwardEtcdLeadershipCalled++
-	if leaderCandidate == nil {
-		return errors.New("leaderCandidate is nil")
+func (f *fakeWorkloadCluster) ForwardEtcdLeadership(ctx context.Context, member, leaderCandidate string) error {
+	if f.OverrideForwardEtcdLeadership != nil {
+		return f.OverrideForwardEtcdLeadership(ctx, member, leaderCandidate)
 	}
+	f.forwardEtcdLeadershipCalled++
 	return nil
 }
 
-func (f *fakeWorkloadCluster) ReconcileEtcdMembersAndControlPlaneNodes(_ context.Context, _ []*etcd.Member, _ []string) ([]string, error) {
-	return nil, nil
-}
-
-func (f *fakeWorkloadCluster) ClusterStatus(_ context.Context) (internal.ClusterStatus, error) {
-	return f.Status, nil
+func (f *fakeWorkloadCluster) HasKubeadmConfig(_ context.Context) (bool, error) {
+	return f.KubeadmConfigExist, nil
 }
 
 func (f *fakeWorkloadCluster) GetAPIServerCertificateExpiry(_ context.Context, _ *bootstrapv1.KubeadmConfig, _ string) (*time.Time, error) {
 	return f.APIServerCertificateExpiry, nil
 }
 
-func (f *fakeWorkloadCluster) AllowBootstrapTokensToGetNodes(_ context.Context) error {
-	return nil
-}
-
 func (f *fakeWorkloadCluster) AllowClusterAdminPermissions(_ context.Context, _ semver.Version) error {
 	return nil
 }
 
-func (f *fakeWorkloadCluster) ReconcileKubeletRBACRole(_ context.Context, _ semver.Version) error {
+func (f *fakeWorkloadCluster) UpdateEtcdLocalInKubeadmConfigMap(bootstrapv1.LocalEtcd) func(*bootstrapv1.ClusterConfiguration) {
 	return nil
 }
 
-func (f *fakeWorkloadCluster) ReconcileKubeletRBACBinding(_ context.Context, _ semver.Version) error {
+func (f *fakeWorkloadCluster) RemoveEtcdMember(_ context.Context, _ *etcd.Member, _ []*internal.Node) error {
+	f.removeEtcdMemberCalled++
 	return nil
-}
-
-func (f *fakeWorkloadCluster) UpdateKubernetesVersionInKubeadmConfigMap(semver.Version) func(*bootstrapv1.ClusterConfiguration) {
-	return nil
-}
-
-func (f *fakeWorkloadCluster) UpdateEtcdLocalInKubeadmConfigMap(*bootstrapv1.LocalEtcd) func(*bootstrapv1.ClusterConfiguration) {
-	return nil
-}
-
-func (f *fakeWorkloadCluster) UpdateKubeletConfigMap(_ context.Context, _ semver.Version) error {
-	return nil
-}
-
-func (f *fakeWorkloadCluster) RemoveEtcdMemberForMachine(_ context.Context, _ *clusterv1.Machine) error {
-	f.removeEtcdMemberForMachineCalled++
-	return nil
-}
-
-func (f *fakeWorkloadCluster) EtcdMembers(_ context.Context) ([]string, error) {
-	return f.EtcdMembersResult, nil
 }
 
 func (f *fakeWorkloadCluster) UpdateClusterConfiguration(context.Context, semver.Version, ...func(*bootstrapv1.ClusterConfiguration)) error {

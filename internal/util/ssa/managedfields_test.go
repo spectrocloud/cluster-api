@@ -19,248 +19,587 @@ package ssa
 
 import (
 	"context"
-	"encoding/json"
+	"strings"
 	"testing"
 
 	. "github.com/onsi/gomega"
-	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	"sigs.k8s.io/cluster-api/internal/contract"
+	bootstrapv1 "sigs.k8s.io/cluster-api/api/bootstrap/kubeadm/v1beta2"
+	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 )
 
-func TestDropManagedFields(t *testing.T) {
-	ctx := context.Background()
-
-	ssaManager := "ssa-manager"
-
-	fieldV1Map := map[string]interface{}{
-		"f:metadata": map[string]interface{}{
-			"f:name":        map[string]interface{}{},
-			"f:labels":      map[string]interface{}{},
-			"f:annotations": map[string]interface{}{},
-			"f:finalizers":  map[string]interface{}{},
+func TestRemoveManagedFieldsForLabelsAndAnnotations(t *testing.T) {
+	testFieldManager := "ssa-manager"
+	kubeadmConfig := &bootstrapv1.KubeadmConfig{
+		// Have to set TypeMeta explicitly when using SSA with typed objects.
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: bootstrapv1.GroupVersion.String(),
+			Kind:       "KubeadmConfig",
 		},
-	}
-	fieldV1, err := json.Marshal(fieldV1Map)
-	if err != nil {
-		panic(err)
-	}
-
-	objWithoutSSAManager := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "cm-1",
-			Namespace: "default",
-			ManagedFields: []metav1.ManagedFieldsEntry{{
-				Manager:    classicManager,
-				Operation:  metav1.ManagedFieldsOperationUpdate,
-				FieldsType: "FieldsV1",
-				FieldsV1:   &metav1.FieldsV1{Raw: fieldV1},
-			}},
-			Labels: map[string]string{
-				"label-1": "value-1",
-			},
-			Annotations: map[string]string{
-				"annotation-1": "value-1",
-			},
-			Finalizers: []string{"test-finalizer"},
+			Name:       "kubeadmconfig-1",
+			Namespace:  "default",
+			Finalizers: []string{"test.com/finalizer"},
 		},
-		Data: map[string]string{
-			"test-key": "test-value",
+		Spec: bootstrapv1.KubeadmConfigSpec{
+			Format: bootstrapv1.CloudConfig,
 		},
 	}
-
-	objectWithSSAManager := &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "cm-2",
-			Namespace: "default",
-			ManagedFields: []metav1.ManagedFieldsEntry{
-				{
-					Manager:    classicManager,
-					Operation:  metav1.ManagedFieldsOperationUpdate,
-					FieldsType: "FieldsV1",
-					FieldsV1:   &metav1.FieldsV1{Raw: fieldV1},
-				},
-				{
-					Manager:   ssaManager,
-					Operation: metav1.ManagedFieldsOperationApply,
-				},
-			},
-			Labels: map[string]string{
-				"label-1": "value-1",
-			},
-			Annotations: map[string]string{
-				"annotation-1": "value-1",
-			},
-			Finalizers: []string{"test-finalizer"},
-		},
-		Data: map[string]string{
-			"test-key": "test-value",
-		},
+	kubeadmConfigWithoutFinalizer := kubeadmConfig.DeepCopy()
+	kubeadmConfigWithoutFinalizer.Finalizers = nil
+	kubeadmConfigWithLabelsAndAnnotations := kubeadmConfig.DeepCopy()
+	kubeadmConfigWithLabelsAndAnnotations.Labels = map[string]string{
+		"label-1": "value-1",
+	}
+	kubeadmConfigWithLabelsAndAnnotations.Annotations = map[string]string{
+		"annotation-1": "value-1",
 	}
 
 	tests := []struct {
-		name                string
-		obj                 client.Object
-		wantOwnershipToDrop bool
+		name                                  string
+		kubeadmConfig                         *bootstrapv1.KubeadmConfig
+		statusWriteAfterCreate                bool
+		expectedManagedFieldsAfterCreate      []managedFieldEntry
+		expectedManagedFieldsAfterStatusWrite []managedFieldEntry
+		expectedManagedFieldsAfterRemoval     []managedFieldEntry
 	}{
 		{
-			name:                "should drop ownership of fields if there is no entry for ssaManager",
-			obj:                 objWithoutSSAManager,
-			wantOwnershipToDrop: true,
+			name: "no-op if there are no managedFields for labels and annotations",
+			// Note: This case should never happen, but using it to test the no-op code path.
+			kubeadmConfig: kubeadmConfig.DeepCopy(),
+			// Note: After create testFieldManager should own all fields.
+			expectedManagedFieldsAfterCreate: []managedFieldEntry{{
+				Manager:   testFieldManager,
+				Operation: metav1.ManagedFieldsOperationApply,
+				FieldsV1: `{
+"f:metadata":{
+	"f:finalizers":{
+		"v:\"test.com/finalizer\"":{}
+	}
+},
+"f:spec":{
+	"f:format":{}
+}}`,
+			}},
+			// Note: Expect no change.
+			expectedManagedFieldsAfterRemoval: []managedFieldEntry{{
+				Manager:   testFieldManager,
+				Operation: metav1.ManagedFieldsOperationApply,
+				FieldsV1: `{
+"f:metadata":{
+	"f:finalizers":{
+		"v:\"test.com/finalizer\"":{}
+	}
+},
+"f:spec":{
+	"f:format":{}
+}}`,
+			}},
 		},
 		{
-			name:                "should not drop ownership of fields if there is an entry for ssaManager",
-			obj:                 objectWithSSAManager,
-			wantOwnershipToDrop: false,
+			name: "no-op if there are no managedFields for labels and annotations (not even metadata)",
+			// Note: This case should never happen, but using it to test the no-op code path.
+			kubeadmConfig: kubeadmConfigWithoutFinalizer.DeepCopy(),
+			// Note: After create testFieldManager should own all fields.
+			expectedManagedFieldsAfterCreate: []managedFieldEntry{{
+				Manager:   testFieldManager,
+				Operation: metav1.ManagedFieldsOperationApply,
+				FieldsV1: `{
+"f:spec":{
+	"f:format":{}
+}}`,
+			}},
+			// Note: Expect no change.
+			expectedManagedFieldsAfterRemoval: []managedFieldEntry{{
+				Manager:   testFieldManager,
+				Operation: metav1.ManagedFieldsOperationApply,
+				FieldsV1: `{
+"f:spec":{
+	"f:format":{}
+}}`,
+			}},
+		},
+		{
+			name:          "Remove managedFields for labels and annotations",
+			kubeadmConfig: kubeadmConfigWithLabelsAndAnnotations.DeepCopy(),
+			// Note: After create testFieldManager should own all fields.
+			expectedManagedFieldsAfterCreate: []managedFieldEntry{{
+				Manager:   testFieldManager,
+				Operation: metav1.ManagedFieldsOperationApply,
+				FieldsV1: `{
+"f:metadata":{
+	"f:annotations":{
+		"f:annotation-1":{}
+	},
+	"f:finalizers":{
+		"v:\"test.com/finalizer\"":{}
+	},
+	"f:labels":{
+		"f:label-1":{}
+	}
+},
+"f:spec":{
+	"f:format":{}
+}}`,
+			}},
+			// Note: After removal testFieldManager should not own labels and annotations anymore.
+			expectedManagedFieldsAfterRemoval: []managedFieldEntry{{
+				Manager:   testFieldManager,
+				Operation: metav1.ManagedFieldsOperationApply,
+				FieldsV1: `{
+"f:metadata":{
+	"f:finalizers":{
+		"v:\"test.com/finalizer\"":{}
+	}
+},
+"f:spec":{
+	"f:format":{}
+}}`,
+			}},
+		},
+		{
+			name:                   "Remove managedFields for labels and annotations, preserve status fields and retry on conflict",
+			kubeadmConfig:          kubeadmConfigWithLabelsAndAnnotations.DeepCopy(),
+			statusWriteAfterCreate: true,
+			// Note: After create testFieldManager should own all fields.
+			expectedManagedFieldsAfterCreate: []managedFieldEntry{{
+				Manager:   testFieldManager,
+				Operation: metav1.ManagedFieldsOperationApply,
+				FieldsV1: `{
+"f:metadata":{
+	"f:annotations":{
+		"f:annotation-1":{}
+	},
+	"f:finalizers":{
+		"v:\"test.com/finalizer\"":{}
+	},
+	"f:labels":{
+		"f:label-1":{}
+	}
+},
+"f:spec":{
+	"f:format":{}
+}}`,
+			}},
+			// Note: After status write there is an additional entry for status.
+			expectedManagedFieldsAfterStatusWrite: []managedFieldEntry{{
+				Manager:   testFieldManager,
+				Operation: metav1.ManagedFieldsOperationApply,
+				FieldsV1: `{
+"f:metadata":{
+	"f:annotations":{
+		"f:annotation-1":{}
+	},
+	"f:finalizers":{
+		"v:\"test.com/finalizer\"":{}
+	},
+	"f:labels":{
+		"f:label-1":{}
+	}
+},
+"f:spec":{
+	"f:format":{}
+}}`,
+			}, {
+				Manager:   classicManager,
+				Operation: metav1.ManagedFieldsOperationUpdate,
+				FieldsV1: `{
+"f:status":{
+	".":{},
+	"f:initialization":{
+		".":{},
+		"f:dataSecretCreated":{}
+	}
+}}`,
+				Subresource: "status",
+			}},
+			// Note: After removal testFieldManager should not own labels and annotations anymore
+			//       additionally the status entry is preserved and because of the status write
+			//       the client will use the retry on conflict code path.
+			expectedManagedFieldsAfterRemoval: []managedFieldEntry{{
+				Manager:   testFieldManager,
+				Operation: metav1.ManagedFieldsOperationApply,
+				FieldsV1: `{
+"f:metadata":{
+	"f:finalizers":{
+		"v:\"test.com/finalizer\"":{}
+	}
+},
+"f:spec":{
+	"f:format":{}
+}}`,
+			}, {
+				Manager:   classicManager,
+				Operation: metav1.ManagedFieldsOperationUpdate,
+				FieldsV1: `{
+"f:status":{
+	".":{},
+	"f:initialization":{
+		".":{},
+		"f:dataSecretCreated":{}
+	}
+}}`,
+				Subresource: "status",
+			}},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			ctx := t.Context()
 			g := NewWithT(t)
-			fakeClient := fake.NewClientBuilder().WithObjects(tt.obj).Build()
-			labelsAndAnnotationsManagedFieldPaths := []contract.Path{
-				{"f:metadata", "f:annotations"},
-				{"f:metadata", "f:labels"},
+
+			// Note: This func is called exactly the same way as it is called when creating BootstrapConfig/InfraMachine in KCP/MS.
+			g.Expect(Patch(ctx, env.Client, testFieldManager, tt.kubeadmConfig)).To(Succeed())
+			t.Cleanup(func() {
+				ctx := context.Background()
+				objWithoutFinalizer := tt.kubeadmConfig.DeepCopyObject().(client.Object)
+				objWithoutFinalizer.SetFinalizers([]string{})
+				g.Expect(env.Client.Patch(ctx, objWithoutFinalizer, client.MergeFrom(tt.kubeadmConfig))).To(Succeed())
+				g.Expect(env.CleanupAndWait(ctx, tt.kubeadmConfig)).To(Succeed())
+			})
+			g.Expect(cleanupTime(tt.kubeadmConfig.GetManagedFields())).To(BeComparableTo(toManagedFields(tt.expectedManagedFieldsAfterCreate)))
+
+			if tt.statusWriteAfterCreate {
+				// Ensure we don't update resourceVersion in tt.kubeadmConfig so RemoveManagedFieldsForLabelsAndAnnotations
+				// below encounters a conflict and uses the retry on conflict code path.
+				kubeadmConfig := tt.kubeadmConfig.DeepCopyObject().(*bootstrapv1.KubeadmConfig)
+				origKubeadmConfig := kubeadmConfig.DeepCopyObject().(*bootstrapv1.KubeadmConfig)
+				kubeadmConfig.Status.Initialization.DataSecretCreated = ptr.To(true)
+				g.Expect(env.Client.Status().Patch(ctx, kubeadmConfig, client.MergeFrom(origKubeadmConfig), client.FieldOwner(classicManager))).To(Succeed())
+				g.Expect(cleanupTime(kubeadmConfig.GetManagedFields())).To(BeComparableTo(toManagedFields(tt.expectedManagedFieldsAfterStatusWrite)))
 			}
-			g.Expect(DropManagedFields(ctx, fakeClient, tt.obj, ssaManager, labelsAndAnnotationsManagedFieldPaths)).To(Succeed())
-			if tt.wantOwnershipToDrop {
-				g.Expect(tt.obj.GetManagedFields()).ShouldNot(MatchFieldOwnership(
-					classicManager,
-					metav1.ManagedFieldsOperationUpdate,
-					contract.Path{"f:metadata", "f:labels"},
-				))
-				g.Expect(tt.obj.GetManagedFields()).ShouldNot(MatchFieldOwnership(
-					classicManager,
-					metav1.ManagedFieldsOperationUpdate,
-					contract.Path{"f:metadata", "f:annotations"},
-				))
-			} else {
-				g.Expect(tt.obj.GetManagedFields()).Should(MatchFieldOwnership(
-					classicManager,
-					metav1.ManagedFieldsOperationUpdate,
-					contract.Path{"f:metadata", "f:labels"},
-				))
-				g.Expect(tt.obj.GetManagedFields()).Should(MatchFieldOwnership(
-					classicManager,
-					metav1.ManagedFieldsOperationUpdate,
-					contract.Path{"f:metadata", "f:annotations"},
-				))
-			}
-			// Verify ownership of other fields is not affected.
-			g.Expect(tt.obj.GetManagedFields()).Should(MatchFieldOwnership(
-				classicManager,
-				metav1.ManagedFieldsOperationUpdate,
-				contract.Path{"f:metadata", "f:finalizers"},
-			))
+
+			// Note: This func is called exactly the same way as it is called when creating BootstrapConfig/InfraMachine in KCP/MS.
+			g.Expect(RemoveManagedFieldsForLabelsAndAnnotations(ctx, env.Client, env.GetAPIReader(), tt.kubeadmConfig, testFieldManager)).To(Succeed())
+			g.Expect(cleanupTime(tt.kubeadmConfig.GetManagedFields())).To(BeComparableTo(toManagedFields(tt.expectedManagedFieldsAfterRemoval)))
 		})
 	}
 }
 
-func TestCleanUpManagedFieldsForSSAAdoption(t *testing.T) {
-	ctx := context.Background()
-
-	ssaManager := "ssa-manager"
-
-	objWithoutAnyManager := &corev1.ConfigMap{
+func TestMigrateManagedFields(t *testing.T) {
+	testFieldManager := "ssa-manager"
+	testMetadataFieldManager := "ssa-manager-metadata"
+	kubeadmConfig := &bootstrapv1.KubeadmConfig{
+		// Have to set TypeMeta explicitly when using SSA with typed objects.
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: bootstrapv1.GroupVersion.String(),
+			Kind:       "KubeadmConfig",
+		},
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "cm-1",
-			Namespace: "default",
+			Name:       "kubeadmconfig-1",
+			Namespace:  "default",
+			Finalizers: []string{"test.com/finalizer"},
 		},
-		Data: map[string]string{
-			"test-key": "test-value",
-		},
-	}
-	objWithOnlyClassicManager := &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "cm-1",
-			Namespace: "default",
-			ManagedFields: []metav1.ManagedFieldsEntry{{
-				Manager:   classicManager,
-				Operation: metav1.ManagedFieldsOperationUpdate,
-			}},
-		},
-		Data: map[string]string{
-			"test-key": "test-value",
-		},
-	}
-	objWithOnlySSAManager := &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "cm-1",
-			Namespace: "default",
-			ManagedFields: []metav1.ManagedFieldsEntry{{
-				Manager:   ssaManager,
-				Operation: metav1.ManagedFieldsOperationApply,
-			}},
-		},
-		Data: map[string]string{
-			"test-key": "test-value",
-		},
-	}
-	objWithClassicManagerAndSSAManager := &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "cm-1",
-			Namespace: "default",
-			ManagedFields: []metav1.ManagedFieldsEntry{
-				{
-					Manager:   classicManager,
-					Operation: metav1.ManagedFieldsOperationUpdate,
-				},
-				{
-					Manager:   ssaManager,
-					Operation: metav1.ManagedFieldsOperationApply,
-				},
-			},
-		},
-		Data: map[string]string{
-			"test-key": "test-value",
+		Spec: bootstrapv1.KubeadmConfigSpec{
+			Format: bootstrapv1.CloudConfig,
 		},
 	}
 
 	tests := []struct {
-		name                       string
-		obj                        client.Object
-		wantEntryForClassicManager bool
+		name                                                   string
+		kubeadmConfig                                          *bootstrapv1.KubeadmConfig
+		labels                                                 map[string]string
+		annotations                                            map[string]string
+		statusWriteAfterCreate                                 bool
+		updateLabelsAndAnnotationsAfterMigration               bool
+		expectedManagedFieldsAfterCreate                       []managedFieldEntry
+		expectedManagedFieldsAfterStatusWrite                  []managedFieldEntry
+		expectedManagedFieldsAfterMigration                    []managedFieldEntry
+		expectedManagedFieldsAfterUpdatingLabelsAndAnnotations []managedFieldEntry
 	}{
 		{
-			name:                       "should add an entry for ssaManager if it does not have one",
-			obj:                        objWithoutAnyManager,
-			wantEntryForClassicManager: false,
+			name: "no-op if there are no managedFields for the ClusterNameLabel",
+			// Note: This case should never happen, but using it to test the ClusterNameLabel check.
+			kubeadmConfig: kubeadmConfig.DeepCopy(),
+			labels: map[string]string{
+				"label-1": "value-1",
+			},
+			annotations: map[string]string{
+				"annotation-1": "value-1",
+			},
+			expectedManagedFieldsAfterCreate: []managedFieldEntry{{
+				Manager:   testFieldManager,
+				Operation: metav1.ManagedFieldsOperationApply,
+				FieldsV1: `{
+"f:metadata":{
+	"f:annotations":{
+		"f:annotation-1":{}
+	},
+	"f:labels":{
+		"f:label-1":{}
+	}
+}}`,
+			}, {
+				Manager:   classicManager,
+				Operation: metav1.ManagedFieldsOperationUpdate,
+				FieldsV1: `{
+"f:metadata":{
+	"f:finalizers":{
+		".":{},
+		"v:\"test.com/finalizer\"":{}
+	}
+},
+"f:spec":{
+	".":{},
+	"f:format":{}
+}}`,
+			}},
+			// Note: Expect no change.
+			expectedManagedFieldsAfterMigration: []managedFieldEntry{{
+				Manager:   testFieldManager,
+				Operation: metav1.ManagedFieldsOperationApply,
+				FieldsV1: `{
+"f:metadata":{
+	"f:annotations":{
+		"f:annotation-1":{}
+	},
+	"f:labels":{
+		"f:label-1":{}
+	}
+}}`,
+			}, {
+				Manager:   classicManager,
+				Operation: metav1.ManagedFieldsOperationUpdate,
+				FieldsV1: `{
+"f:metadata":{
+	"f:finalizers":{
+		".":{},
+		"v:\"test.com/finalizer\"":{}
+	}
+},
+"f:spec":{
+	".":{},
+	"f:format":{}
+}}`,
+			}},
 		},
 		{
-			name:                       "should add an entry for ssaManager and drop entry for classic manager if it exists",
-			obj:                        objWithOnlyClassicManager,
-			wantEntryForClassicManager: false,
-		},
-		{
-			name:                       "should keep the entry for ssa-manager if it already has one (no-op)",
-			obj:                        objWithOnlySSAManager,
-			wantEntryForClassicManager: false,
-		},
-		{
-			name:                       "should keep the entry with ssa-manager if it already has one - should not drop other manager entries (no-op)",
-			obj:                        objWithClassicManagerAndSSAManager,
-			wantEntryForClassicManager: true,
+			name:          "Remove managedFields if there are managedFields for the ClusterNameLabel and preserve status",
+			kubeadmConfig: kubeadmConfig.DeepCopy(),
+			labels: map[string]string{
+				"label-1":                  "value-1",
+				clusterv1.ClusterNameLabel: "cluster-1",
+			},
+			annotations: map[string]string{
+				"annotation-1": "value-1",
+			},
+			statusWriteAfterCreate:                   true,
+			updateLabelsAndAnnotationsAfterMigration: true,
+			// Note: After create testFieldManager should own labels and annotations and
+			//       manager should own everything else (same as in CAPI <= v1.11).
+			expectedManagedFieldsAfterCreate: []managedFieldEntry{{
+				Manager:   testFieldManager,
+				Operation: metav1.ManagedFieldsOperationApply,
+				FieldsV1: `{
+"f:metadata":{
+	"f:annotations":{
+		"f:annotation-1":{}
+	},
+	"f:labels":{
+		"f:cluster.x-k8s.io/cluster-name":{},
+		"f:label-1":{}
+	}
+}}`,
+			}, {
+				Manager:   classicManager,
+				Operation: metav1.ManagedFieldsOperationUpdate,
+				FieldsV1: `{
+"f:metadata":{
+	"f:finalizers":{
+		".":{},
+		"v:\"test.com/finalizer\"":{}
+	}
+},
+"f:spec":{
+	".":{},
+	"f:format":{}
+}}`,
+			}},
+			// Note: After status write there is an additional entry for status.
+			expectedManagedFieldsAfterStatusWrite: []managedFieldEntry{{
+				Manager:   testFieldManager,
+				Operation: metav1.ManagedFieldsOperationApply,
+				FieldsV1: `{
+"f:metadata":{
+	"f:annotations":{
+		"f:annotation-1":{}
+	},
+	"f:labels":{
+		"f:cluster.x-k8s.io/cluster-name":{},
+		"f:label-1":{}
+	}
+}}`,
+			}, {
+				Manager:   classicManager,
+				Operation: metav1.ManagedFieldsOperationUpdate,
+				FieldsV1: `{
+"f:metadata":{
+	"f:finalizers":{
+		".":{},
+		"v:\"test.com/finalizer\"":{}
+	}
+},
+"f:spec":{
+	".":{},
+	"f:format":{}
+}}`,
+			}, {
+				Manager:   classicManager,
+				Operation: metav1.ManagedFieldsOperationUpdate,
+				FieldsV1: `{
+"f:status":{
+	".":{},
+	"f:initialization":{
+		".":{},
+		"f:dataSecretCreated":{}
+	}
+}}`,
+				Subresource: "status",
+			}},
+			// Note: After migration the testMetadataFieldManager should have a seed entry, spec and annotation
+			//      fields are orphaned and the status entry should be preserved
+			expectedManagedFieldsAfterMigration: []managedFieldEntry{{
+				Manager:   testMetadataFieldManager,
+				Operation: metav1.ManagedFieldsOperationApply,
+				FieldsV1: `{
+"f:metadata":{
+	"f:name":{}
+}}`,
+			}, {
+				Manager:   classicManager,
+				Operation: metav1.ManagedFieldsOperationUpdate,
+				FieldsV1: `{
+"f:status":{
+	".":{},
+	"f:initialization":{
+		".":{},
+		"f:dataSecretCreated":{}
+	}
+}}`,
+				Subresource: "status",
+			}},
+			// Note: After updating labels and annotations testMetadataFieldManager has a new entry for
+			//      them (replacing the seed entry).
+			expectedManagedFieldsAfterUpdatingLabelsAndAnnotations: []managedFieldEntry{{
+				Manager:   testMetadataFieldManager,
+				Operation: metav1.ManagedFieldsOperationApply,
+				FieldsV1: `{
+"f:metadata":{
+	"f:annotations":{
+		"f:annotation-1":{}
+	},
+	"f:labels":{
+		"f:cluster.x-k8s.io/cluster-name":{},
+		"f:label-1":{}
+	}
+}}`,
+			}, {
+				Manager:   classicManager,
+				Operation: metav1.ManagedFieldsOperationUpdate,
+				FieldsV1: `{
+"f:status":{
+	".":{},
+	"f:initialization":{
+		".":{},
+		"f:dataSecretCreated":{}
+	}
+}}`,
+				Subresource: "status",
+			}},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			ctx := t.Context()
 			g := NewWithT(t)
-			fakeClient := fake.NewClientBuilder().WithObjects(tt.obj).Build()
-			g.Expect(CleanUpManagedFieldsForSSAAdoption(ctx, fakeClient, tt.obj, ssaManager)).Should(Succeed())
-			g.Expect(tt.obj.GetManagedFields()).Should(
-				ContainElement(MatchManagedFieldsEntry(ssaManager, metav1.ManagedFieldsOperationApply)))
-			if tt.wantEntryForClassicManager {
-				g.Expect(tt.obj.GetManagedFields()).Should(
-					ContainElement(MatchManagedFieldsEntry(classicManager, metav1.ManagedFieldsOperationUpdate)))
-			} else {
-				g.Expect(tt.obj.GetManagedFields()).ShouldNot(
-					ContainElement(MatchManagedFieldsEntry(classicManager, metav1.ManagedFieldsOperationUpdate)))
+
+			// Note: Create the object like it was created it in CAPI <= v1.11 (with manager).
+			g.Expect(env.Client.Create(ctx, tt.kubeadmConfig, client.FieldOwner(classicManager))).To(Succeed())
+			t.Cleanup(func() {
+				ctx := context.Background()
+				objWithoutFinalizer := tt.kubeadmConfig.DeepCopyObject().(client.Object)
+				objWithoutFinalizer.SetFinalizers([]string{})
+				g.Expect(env.Client.Patch(ctx, objWithoutFinalizer, client.MergeFrom(tt.kubeadmConfig))).To(Succeed())
+				g.Expect(env.CleanupAndWait(ctx, tt.kubeadmConfig)).To(Succeed())
+			})
+
+			// Note: Update labels and annotations like in CAPI <= v1.11 (with the "main" fieldManager).
+			updatedObject := &unstructured.Unstructured{}
+			updatedObject.SetGroupVersionKind(bootstrapv1.GroupVersion.WithKind("KubeadmConfig"))
+			updatedObject.SetNamespace(tt.kubeadmConfig.GetNamespace())
+			updatedObject.SetName(tt.kubeadmConfig.GetName())
+			updatedObject.SetUID(tt.kubeadmConfig.GetUID())
+			updatedObject.SetLabels(tt.labels)
+			updatedObject.SetAnnotations(tt.annotations)
+			g.Expect(Patch(ctx, env.Client, testFieldManager, updatedObject)).To(Succeed())
+			g.Expect(env.GetAPIReader().Get(ctx, client.ObjectKeyFromObject(tt.kubeadmConfig), tt.kubeadmConfig)).To(Succeed())
+			g.Expect(cleanupTime(tt.kubeadmConfig.GetManagedFields())).To(BeComparableTo(toManagedFields(tt.expectedManagedFieldsAfterCreate)))
+
+			if tt.statusWriteAfterCreate {
+				origKubeadmConfig := tt.kubeadmConfig.DeepCopyObject().(*bootstrapv1.KubeadmConfig)
+				tt.kubeadmConfig.Status.Initialization.DataSecretCreated = ptr.To(true)
+				g.Expect(env.Client.Status().Patch(ctx, tt.kubeadmConfig, client.MergeFrom(origKubeadmConfig), client.FieldOwner(classicManager))).To(Succeed())
+				g.Expect(cleanupTime(tt.kubeadmConfig.GetManagedFields())).To(BeComparableTo(toManagedFields(tt.expectedManagedFieldsAfterStatusWrite)))
+			}
+
+			// Note: This func is called exactly the same way as it is called in syncMachines in KCP/MS.
+			g.Expect(MigrateManagedFields(ctx, env.Client, tt.kubeadmConfig, testFieldManager, testMetadataFieldManager)).To(Succeed())
+			g.Expect(cleanupTime(tt.kubeadmConfig.GetManagedFields())).To(BeComparableTo(toManagedFields(tt.expectedManagedFieldsAfterMigration)))
+
+			if tt.updateLabelsAndAnnotationsAfterMigration {
+				// Note: Update labels and annotations exactly the same way as it is done in syncMachines in KCP/MS.
+				updatedObject := &unstructured.Unstructured{}
+				updatedObject.SetGroupVersionKind(bootstrapv1.GroupVersion.WithKind("KubeadmConfig"))
+				updatedObject.SetNamespace(tt.kubeadmConfig.GetNamespace())
+				updatedObject.SetName(tt.kubeadmConfig.GetName())
+				updatedObject.SetUID(tt.kubeadmConfig.GetUID())
+				updatedObject.SetLabels(tt.labels)
+				updatedObject.SetAnnotations(tt.annotations)
+				g.Expect(Patch(ctx, env.Client, testMetadataFieldManager, updatedObject)).To(Succeed())
+				g.Expect(env.GetAPIReader().Get(ctx, client.ObjectKeyFromObject(tt.kubeadmConfig), tt.kubeadmConfig)).To(Succeed())
+				g.Expect(cleanupTime(tt.kubeadmConfig.GetManagedFields())).To(BeComparableTo(toManagedFields(tt.expectedManagedFieldsAfterUpdatingLabelsAndAnnotations)))
 			}
 		})
 	}
+}
+
+func cleanupTime(fields []metav1.ManagedFieldsEntry) []metav1.ManagedFieldsEntry {
+	for i := range fields {
+		fields[i].Time = nil
+	}
+	return fields
+}
+
+type managedFieldEntry struct {
+	Manager     string
+	Operation   metav1.ManagedFieldsOperationType
+	FieldsV1    string
+	Subresource string
+}
+
+func toManagedFields(managedFields []managedFieldEntry) []metav1.ManagedFieldsEntry {
+	res := []metav1.ManagedFieldsEntry{}
+	for _, f := range managedFields {
+		res = append(res, metav1.ManagedFieldsEntry{
+			Manager:     f.Manager,
+			Operation:   f.Operation,
+			APIVersion:  bootstrapv1.GroupVersion.String(),
+			FieldsType:  "FieldsV1",
+			FieldsV1:    metav1.NewFieldsV1(trimSpaces(f.FieldsV1)),
+			Subresource: f.Subresource,
+		})
+	}
+	return res
+}
+
+func trimSpaces(s string) string {
+	s = strings.ReplaceAll(s, "\n", "")
+	s = strings.ReplaceAll(s, "\t", "")
+	return s
 }

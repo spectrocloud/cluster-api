@@ -23,8 +23,8 @@ SHELL:=/usr/bin/env bash
 #
 # Go.
 #
-GO_VERSION ?= 1.23.6
-GO_DIRECTIVE_VERSION ?= 1.23.0
+GO_VERSION ?= 1.26.4
+GO_DIRECTIVE_VERSION ?= 1.26.0
 GO_CONTAINER_IMAGE ?= docker.io/library/golang:$(GO_VERSION)
 
 # Ensure correct toolchain is used
@@ -44,7 +44,7 @@ export GO111MODULE=on
 #
 # Kubebuilder.
 #
-export KUBEBUILDER_ENVTEST_KUBERNETES_VERSION ?= 1.32.0
+export KUBEBUILDER_ENVTEST_KUBERNETES_VERSION ?= 1.36.0
 export KUBEBUILDER_CONTROLPLANE_START_TIMEOUT ?= 60s
 export KUBEBUILDER_CONTROLPLANE_STOP_TIMEOUT ?= 60s
 
@@ -59,7 +59,6 @@ TRACE ?= 0
 #
 # Full directory of where the Makefile resides
 ROOT_DIR:=$(shell dirname $(realpath $(firstword $(MAKEFILE_LIST))))
-EXP_DIR := exp
 BIN_DIR := bin
 TEST_DIR := test
 TOOLS_DIR := hack/tools
@@ -69,10 +68,27 @@ E2E_FRAMEWORK_DIR := $(TEST_DIR)/framework
 CAPD_DIR := $(TEST_DIR)/infrastructure/docker
 CAPIM_DIR := $(TEST_DIR)/infrastructure/inmemory
 TEST_EXTENSION_DIR := $(TEST_DIR)/extension
-GO_INSTALL := ./scripts/go_install.sh
+GO_INSTALL := ./hack/scripts/ensure/go_install.sh
 OBSERVABILITY_DIR := hack/observability
 
 export PATH := $(abspath $(TOOLS_BIN_DIR)):$(PATH)
+
+# DBG=1 for building binaries which includes DWARF and symbol table for delve
+# debugging. When DBG is unspecified it defaults to "-s -w" which strips debug
+# information.
+export DBG ?= 0
+
+# Set build time variables including version details
+LDFLAGS := $(shell hack/scripts/release/version.sh)
+GCFLAGS := $(shell hack/scripts/release/gogcflags.sh)
+
+# Check if LDFLAGS was able to identify a Semantic Version tag in the repository, or not;
+# avoid building if that's true (see hack/scripts/release/version.sh for more information).
+SEMVER_CHECK = $(findstring GIT_VERSION should be a valid Semantic Version, $(LDFLAGS))
+ifneq ($(SEMVER_CHECK),)
+    $(warning SEMVER_CHECK: $(LDFLAGS))
+    $(error Build halted)
+endif
 
 #
 # Ginkgo configuration.
@@ -102,34 +118,34 @@ get_go_version = $(shell go list -m $1 | awk '{print $$2}')
 # Binaries.
 #
 # Note: Need to use abspath so we can invoke these from subdirectories
-KUSTOMIZE_VER := v5.3.0
+KUSTOMIZE_VER := v5.7.0
 KUSTOMIZE_BIN := kustomize
 KUSTOMIZE := $(abspath $(TOOLS_BIN_DIR)/$(KUSTOMIZE_BIN)-$(KUSTOMIZE_VER))
 KUSTOMIZE_PKG := sigs.k8s.io/kustomize/kustomize/v5
 
-SETUP_ENVTEST_VER := release-0.20
+SETUP_ENVTEST_VER := v0.24.0
 SETUP_ENVTEST_BIN := setup-envtest
 SETUP_ENVTEST := $(abspath $(TOOLS_BIN_DIR)/$(SETUP_ENVTEST_BIN)-$(SETUP_ENVTEST_VER))
 SETUP_ENVTEST_PKG := sigs.k8s.io/controller-runtime/tools/setup-envtest
 
-CONTROLLER_GEN_VER := v0.17.0
+CONTROLLER_GEN_VER := v0.21.0
 CONTROLLER_GEN_BIN := controller-gen
 CONTROLLER_GEN := $(abspath $(TOOLS_BIN_DIR)/$(CONTROLLER_GEN_BIN)-$(CONTROLLER_GEN_VER))
 CONTROLLER_GEN_PKG := sigs.k8s.io/controller-tools/cmd/controller-gen
 
-GOTESTSUM_VER := v1.11.0
+GOTESTSUM_VER := v1.12.3
 GOTESTSUM_BIN := gotestsum
 GOTESTSUM := $(abspath $(TOOLS_BIN_DIR)/$(GOTESTSUM_BIN)-$(GOTESTSUM_VER))
 GOTESTSUM_PKG := gotest.tools/gotestsum
 
-CONVERSION_GEN_VER := v0.32.0
+CONVERSION_GEN_VER := v0.36.0
 CONVERSION_GEN_BIN := conversion-gen
 # We are intentionally using the binary without version suffix, to avoid the version
 # in generated files.
 CONVERSION_GEN := $(abspath $(TOOLS_BIN_DIR)/$(CONVERSION_GEN_BIN))
 CONVERSION_GEN_PKG := k8s.io/code-generator/cmd/conversion-gen
 
-GO_APIDIFF_VER := v0.8.2
+GO_APIDIFF_VER := v0.8.3
 GO_APIDIFF_BIN := go-apidiff
 GO_APIDIFF := $(abspath $(TOOLS_BIN_DIR)/$(GO_APIDIFF_BIN)-$(GO_APIDIFF_VER))
 GO_APIDIFF_PKG := github.com/joelanford/go-apidiff
@@ -137,9 +153,9 @@ GO_APIDIFF_PKG := github.com/joelanford/go-apidiff
 HADOLINT_VER := v2.12.0
 HADOLINT_FAILURE_THRESHOLD = warning
 
-SHELLCHECK_VER := v0.9.0
+SHELLCHECK_VER := v0.10.0
 
-TRIVY_VER := 0.49.1
+TRIVY_VER := 0.69.2
 
 KPROMO_VER := 5ab0dbc74b0228c22a93d240596dff77464aee8f
 KPROMO_BIN := kpromo
@@ -147,7 +163,7 @@ KPROMO :=  $(abspath $(TOOLS_BIN_DIR)/$(KPROMO_BIN)-$(KPROMO_VER))
 # KPROMO_PKG may have to be changed if KPROMO_VER increases its major version.
 KPROMO_PKG := sigs.k8s.io/promo-tools/v4/cmd/kpromo
 
-YQ_VER := v4.35.2
+YQ_VER := v4.45.4
 YQ_BIN := yq
 YQ :=  $(abspath $(TOOLS_BIN_DIR)/$(YQ_BIN)-$(YQ_VER))
 YQ_PKG := github.com/mikefarah/yq/v4
@@ -162,21 +178,27 @@ GINKGO_PKG := github.com/onsi/ginkgo/v2/ginkgo
 GOLANGCI_LINT_BIN := golangci-lint
 GOLANGCI_LINT_VER := $(shell cat .github/workflows/pr-golangci-lint.yaml | grep [[:space:]]version: | sed 's/.*version: //')
 GOLANGCI_LINT := $(abspath $(TOOLS_BIN_DIR)/$(GOLANGCI_LINT_BIN)-$(GOLANGCI_LINT_VER))
-GOLANGCI_LINT_PKG := github.com/golangci/golangci-lint/cmd/golangci-lint
+GOLANGCI_LINT_PKG := github.com/golangci/golangci-lint/v2/cmd/golangci-lint
 
-GOLANGCI_LINT_KAL_BIN := golangci-lint-kal
-GOLANGCI_LINT_KAL_VER := $(shell cat ./hack/tools/.custom-gcl.yaml | grep name: | sed 's/name: golangci-lint-kal-//')
-GOLANGCI_LINT_KAL := $(abspath $(TOOLS_BIN_DIR)/$(GOLANGCI_LINT_KAL_BIN)-$(GOLANGCI_LINT_KAL_VER))
+GOLANGCI_LINT_KAL_BIN := golangci-lint-kube-api-linter
+GOLANGCI_LINT_KAL_VER := $(shell cat ./hack/tools/.custom-gcl.yaml | grep version: | sed 's/version: //')
+GOLANGCI_LINT_KAL := $(abspath $(TOOLS_BIN_DIR)/$(GOLANGCI_LINT_KAL_BIN))
 
 GOVULNCHECK_BIN := govulncheck
-GOVULNCHECK_VER := v1.1.4
-GOVULNCHECK := $(abspath $(TOOLS_BIN_DIR)/$(GOVULNCHECK_BIN)-$(GOVULNCHECK_VER))
-GOVULNCHECK_PKG := golang.org/x/vuln/cmd/govulncheck
+GOVULNCHECK_VER := v1.3.0
+GOVULNCHECK := $(abspath $(TOOLS_BIN_DIR)/$(GOVULNCHECK_BIN))
+GOVULNCHECK_DIR := hack/tools/govulncheck
+GOVULNCHECK_TMP_DIR ?= $(GOVULNCHECK_DIR)/govulncheck.tmp
 
-IMPORT_BOSS_BIN := import-boss
-IMPORT_BOSS_VER := v0.28.1
-IMPORT_BOSS := $(abspath $(TOOLS_BIN_DIR)/$(IMPORT_BOSS_BIN))
-IMPORT_BOSS_PKG := k8s.io/code-generator/cmd/import-boss
+CRANE_BIN := crane
+CRANE_VER := v0.20.7
+CRANE := $(abspath $(TOOLS_BIN_DIR)/$(CRANE_BIN)-$(CRANE_VER))
+CRANE_PKG := github.com/google/go-containerregistry/cmd/crane
+
+CRD_REF_DOCS_VER := v0.3.0
+CRD_REF_DOCS_BIN := crd-ref-docs
+CRD_REF_DOCS := $(abspath $(TOOLS_BIN_DIR)/$(CRD_REF_DOCS_BIN)-$(CRD_REF_DOCS_VER))
+CRD_REF_DOCS_PKG := github.com/elastic/crd-ref-docs
 
 TRIAGE_PARTY_IMAGE_NAME ?= extra/triage-party
 TRIAGE_PARTY_CONTROLLER_IMG ?= $(STAGING_REGISTRY)/$(TRIAGE_PARTY_IMAGE_NAME)
@@ -187,7 +209,7 @@ TRIAGE_PARTY_VERSION ?= v1.6.0
 CONVERSION_VERIFIER_BIN := conversion-verifier
 CONVERSION_VERIFIER := $(abspath $(TOOLS_BIN_DIR)/$(CONVERSION_VERIFIER_BIN))
 
-OPENAPI_GEN_VER := 2c72e55 # main branch as of 03.01.2025
+OPENAPI_GEN_VER := 589584f1c912f4367fe8954f649a59a98b912da5 # in sync with go.mod k8s.io/kube-openapi as of 17.12.2025.
 OPENAPI_GEN_BIN := openapi-gen
 # We are intentionally using the binary without version suffix, to avoid the version
 # in generated files.
@@ -226,10 +248,6 @@ KUBEADM_CONTROL_PLANE_CONTROLLER_IMG ?= $(REGISTRY)/$(KUBEADM_CONTROL_PLANE_IMAG
 CAPD_IMAGE_NAME ?= capd-manager
 CAPD_CONTROLLER_IMG ?= $(REGISTRY)/$(CAPD_IMAGE_NAME)
 
-# capim
-CAPIM_IMAGE_NAME ?= capim-manager
-CAPIM_CONTROLLER_IMG ?= $(REGISTRY)/$(CAPIM_IMAGE_NAME)
-
 # clusterctl
 CLUSTERCTL_MANIFEST_DIR := cmd/clusterctl/config
 CLUSTERCTL_IMAGE_NAME ?= clusterctl
@@ -258,9 +276,6 @@ ifeq ($(SELINUX_ENABLED),1)
   DOCKER_VOL_OPTS?=:z
 endif
 
-# Set build time variables including version details
-LDFLAGS := $(shell hack/version.sh)
-
 all: test managers clusterctl
 
 help:  # Display this help
@@ -272,11 +287,11 @@ help:  # Display this help
 
 ##@ generate:
 
-ALL_GENERATE_MODULES = core kubeadm-bootstrap kubeadm-control-plane docker-infrastructure in-memory-infrastructure test-extension
+ALL_GENERATE_MODULES = core kubeadm-bootstrap kubeadm-control-plane docker-infrastructure test-extension
 
 .PHONY: generate
 generate: ## Run all generate-manifests-*, generate-go-deepcopy-*, generate-go-conversions-* and generate-go-openapi targets
-	$(MAKE) generate-modules generate-manifests generate-go-deepcopy generate-go-conversions generate-go-openapi generate-metrics-config
+	$(MAKE) generate-modules generate-manifests generate-go-deepcopy generate-go-conversions generate-go-openapi
 
 .PHONY: generate-manifests
 generate-manifests: $(addprefix generate-manifests-,$(ALL_GENERATE_MODULES)) ## Run all generate-manifests-* targets
@@ -286,20 +301,12 @@ generate-manifests-core: $(CONTROLLER_GEN) $(KUSTOMIZE) ## Generate manifests e.
 	$(MAKE) clean-generated-yaml SRC_DIRS="./config/crd/bases,./config/webhook/manifests.yaml"
 	$(CONTROLLER_GEN) \
 		paths=./ \
-		paths=./api/... \
-		paths=./internal/apis/core/... \
+		paths=./api/addons/... \
+		paths=./api/core/... \
+		paths=./api/ipam/... \
+		paths=./api/runtime/... \
 		paths=./internal/controllers/... \
 		paths=./internal/webhooks/... \
-		paths=./$(EXP_DIR)/api/... \
-		paths=./$(EXP_DIR)/internal/controllers/... \
-		paths=./$(EXP_DIR)/internal/webhooks/... \
-		paths=./$(EXP_DIR)/addons/api/... \
-		paths=./$(EXP_DIR)/addons/internal/controllers/... \
-		paths=./$(EXP_DIR)/addons/internal/webhooks/... \
-		paths=./$(EXP_DIR)/ipam/api/... \
-		paths=./$(EXP_DIR)/ipam/internal/webhooks/... \
-		paths=./$(EXP_DIR)/runtime/api/... \
-		paths=./$(EXP_DIR)/runtime/internal/controllers/... \
 		crd:crdVersions=v1 \
 		rbac:roleName=manager-role \
 		output:crd:dir=./config/crd/bases \
@@ -314,16 +321,43 @@ generate-manifests-core: $(CONTROLLER_GEN) $(KUSTOMIZE) ## Generate manifests e.
 		paths=./util/test/builder/... \
 		crd:crdVersions=v1 \
 		output:crd:dir=./util/test/builder/crd
+	$(CONTROLLER_GEN) \
+		paths=./internal/topology/upgrade/test/t1/... \
+		crd:crdVersions=v1 \
+		output:crd:dir=./internal/topology/upgrade/test/t1/crd
+	$(CONTROLLER_GEN) \
+		paths=./internal/topology/upgrade/test/t2/... \
+		crd:crdVersions=v1 \
+		output:crd:dir=./internal/topology/upgrade/test/t2/crd
+	$(CONTROLLER_GEN) \
+		paths=./controllers/crdmigrator/test/t1/... \
+		crd:crdVersions=v1 \
+		output:crd:dir=./controllers/crdmigrator/test/t1/crd
+	$(CONTROLLER_GEN) \
+		paths=./controllers/crdmigrator/test/t2/... \
+		crd:crdVersions=v1 \
+		output:crd:dir=./controllers/crdmigrator/test/t2/crd
+	$(CONTROLLER_GEN) \
+		paths=./controllers/crdmigrator/test/t3/... \
+		crd:crdVersions=v1 \
+		output:crd:dir=./controllers/crdmigrator/test/t3/crd
+	$(CONTROLLER_GEN) \
+		paths=./controllers/crdmigrator/test/t4/... \
+		crd:crdVersions=v1 \
+		output:crd:dir=./controllers/crdmigrator/test/t4/crd
+	$(CONTROLLER_GEN) \
+		paths=./util/deprecated/v1beta1/test/builder/... \
+		crd:crdVersions=v1 \
+		output:crd:dir=./util/deprecated/v1beta1/test/builder/crd
 
 .PHONY: generate-manifests-kubeadm-bootstrap
 generate-manifests-kubeadm-bootstrap: $(CONTROLLER_GEN) ## Generate manifests e.g. CRD, RBAC etc. for kubeadm bootstrap
 	$(MAKE) clean-generated-yaml SRC_DIRS="./bootstrap/kubeadm/config/crd/bases,./bootstrap/kubeadm/config/webhook/manifests.yaml"
 	$(CONTROLLER_GEN) \
+		paths=./api/bootstrap/kubeadm/... \
 		paths=./bootstrap/kubeadm \
-		paths=./bootstrap/kubeadm/api/... \
 		paths=./bootstrap/kubeadm/internal/controllers/... \
 		paths=./bootstrap/kubeadm/internal/webhooks/... \
-		paths=./internal/apis/bootstrap/kubeadm/... \
 		crd:crdVersions=v1 \
 		rbac:roleName=manager-role \
 		output:crd:dir=./bootstrap/kubeadm/config/crd/bases \
@@ -335,11 +369,10 @@ generate-manifests-kubeadm-bootstrap: $(CONTROLLER_GEN) ## Generate manifests e.
 generate-manifests-kubeadm-control-plane: $(CONTROLLER_GEN) ## Generate manifests e.g. CRD, RBAC etc. for kubeadm control plane
 	$(MAKE) clean-generated-yaml SRC_DIRS="./controlplane/kubeadm/config/crd/bases,./controlplane/kubeadm/config/webhook/manifests.yaml"
 	$(CONTROLLER_GEN) \
+		paths=./api/controlplane/kubeadm/... \
 		paths=./controlplane/kubeadm \
-		paths=./controlplane/kubeadm/api/... \
 		paths=./controlplane/kubeadm/internal/controllers/... \
 		paths=./controlplane/kubeadm/internal/webhooks/... \
-		paths=./internal/apis/controlplane/kubeadm/... \
 		crd:crdVersions=v1 \
 		rbac:roleName=manager-role \
 		output:crd:dir=./controlplane/kubeadm/config/crd/bases \
@@ -351,24 +384,6 @@ generate-manifests-kubeadm-control-plane: $(CONTROLLER_GEN) ## Generate manifest
 generate-manifests-docker-infrastructure: $(CONTROLLER_GEN) ## Generate manifests e.g. CRD, RBAC etc. for docker infrastructure provider
 	$(MAKE) clean-generated-yaml SRC_DIRS="$(CAPD_DIR)/config/crd/bases,$(CAPD_DIR)/config/webhook/manifests.yaml"
 	cd $(CAPD_DIR); $(CONTROLLER_GEN) \
-		paths=./ \
-		paths=./api/... \
-		paths=./$(EXP_DIR)/api/... \
-		paths=./$(EXP_DIR)/internal/controllers/... \
-		paths=./$(EXP_DIR)/internal/webhooks/... \
-		paths=./internal/controllers/... \
-		paths=./internal/webhooks/... \
-		crd:crdVersions=v1 \
-		rbac:roleName=manager-role \
-		output:crd:dir=./config/crd/bases \
-		output:webhook:dir=./config/webhook \
-		webhook
-
-
-.PHONY: generate-manifests-in-memory-infrastructure
-generate-manifests-in-memory-infrastructure: $(CONTROLLER_GEN) ## Generate manifests e.g. CRD, RBAC etc. for in-memory infrastructure provider
-	$(MAKE) clean-generated-yaml SRC_DIRS="$(CAPIM_DIR)/config/crd/bases,$(CAPIM_DIR)/config/webhook/manifests.yaml"
-	cd $(CAPIM_DIR); $(CONTROLLER_GEN) \
 		paths=./ \
 		paths=./api/... \
 		paths=./internal/controllers/... \
@@ -392,49 +407,49 @@ generate-go-deepcopy:  ## Run all generate-go-deepcopy-* targets
 
 .PHONY: generate-go-deepcopy-core
 generate-go-deepcopy-core: $(CONTROLLER_GEN) ## Generate deepcopy go code for core
-	$(MAKE) clean-generated-deepcopy SRC_DIRS="./api,./$(EXP_DIR)/api,./$(EXP_DIR)/addons/api,./$(EXP_DIR)/runtime/api,./$(EXP_DIR)/runtime/hooks/api"
+	$(MAKE) clean-generated-deepcopy SRC_DIRS="./api/addons,./api/core,./api/ipam,./api/runtime,./api/runtime/hooks"
 	$(CONTROLLER_GEN) \
-		object:headerFile=./hack/boilerplate/boilerplate.generatego.txt \
-		paths=./api/... \
-		paths=./$(EXP_DIR)/api/... \
-		paths=./$(EXP_DIR)/addons/api/... \
-		paths=./$(EXP_DIR)/ipam/api/... \
-		paths=./$(EXP_DIR)/runtime/api/... \
-		paths=./$(EXP_DIR)/runtime/hooks/api/... \
-		paths=./internal/runtime/test/... \
+		object:headerFile=./hack/scripts/verify/boilerplate/boilerplate.generatego.txt \
+		paths=./api/addons/... \
+		paths=./api/core/... \
+		paths=./api/ipam/... \
+		paths=./api/runtime/... \
+		paths=./api/runtime/hooks/... \
 		paths=./cmd/clusterctl/... \
-		paths=./util/test/builder/...
+		paths=./controllers/crdmigrator/test/... \
+		paths=./internal/runtime/test/... \
+		paths=./internal/topology/upgrade/test/... \
+		paths=./util/test/builder/... \
+		paths=./util/deprecated/v1beta1/test/builder/...
 
 .PHONY: generate-go-deepcopy-kubeadm-bootstrap
 generate-go-deepcopy-kubeadm-bootstrap: $(CONTROLLER_GEN) ## Generate deepcopy go code for kubeadm bootstrap
-	$(MAKE) clean-generated-deepcopy SRC_DIRS="./bootstrap/kubeadm/api,./bootstrap/kubeadm/types"
+	$(MAKE) clean-generated-deepcopy SRC_DIRS="./api/bootstrap/kubeadm,./bootstrap/kubeadm/types"
 	$(CONTROLLER_GEN) \
-		object:headerFile=./hack/boilerplate/boilerplate.generatego.txt \
-		paths=./bootstrap/kubeadm/api/... \
+		object:headerFile=./hack/scripts/verify/boilerplate/boilerplate.generatego.txt \
+		paths=./api/bootstrap/kubeadm/... \
 		paths=./bootstrap/kubeadm/types/...
 
 .PHONY: generate-go-deepcopy-kubeadm-control-plane
 generate-go-deepcopy-kubeadm-control-plane: $(CONTROLLER_GEN) ## Generate deepcopy go code for kubeadm control plane
-	$(MAKE) clean-generated-deepcopy SRC_DIRS="./controlplane/kubeadm/api"
+	$(MAKE) clean-generated-deepcopy SRC_DIRS="./api/controlplane/kubeadm"
 	$(CONTROLLER_GEN) \
-		object:headerFile=./hack/boilerplate/boilerplate.generatego.txt \
-		paths=./controlplane/kubeadm/api/...
+		object:headerFile=./hack/scripts/verify/boilerplate/boilerplate.generatego.txt \
+		paths=./api/controlplane/kubeadm/...
 
 .PHONY: generate-go-deepcopy-docker-infrastructure
-generate-go-deepcopy-docker-infrastructure: $(CONTROLLER_GEN) ## Generate deepcopy go code for docker infrastructure provider
-	$(MAKE) clean-generated-deepcopy SRC_DIRS="$(CAPD_DIR)/api,$(CAPD_DIR)/$(EXP_DIR)/api"
+generate-go-deepcopy-docker-infrastructure: $(CONTROLLER_GEN) generate-go-deepcopy-in-memory-infrastructure ## Generate deepcopy go code for docker infrastructure provider
+	$(MAKE) clean-generated-deepcopy SRC_DIRS="$(CAPD_DIR)/api"
 	cd $(CAPD_DIR); $(CONTROLLER_GEN) \
-		object:headerFile=../../../hack/boilerplate/boilerplate.generatego.txt \
-		paths=./api/... \
-		paths=./$(EXP_DIR)/api/...
+		object:headerFile=../../../hack/scripts/verify/boilerplate/boilerplate.generatego.txt \
+		paths=./api/...
 
 .PHONY: generate-go-deepcopy-in-memory-infrastructure
-generate-go-deepcopy-in-memory-infrastructure: $(CONTROLLER_GEN) ## Generate deepcopy go code for in-memory infrastructure provider
-	$(MAKE) clean-generated-deepcopy SRC_DIRS="$(CAPIM_DIR)/api,$(CAPIM_DIR)/internal/cloud/api"
+generate-go-deepcopy-in-memory-infrastructure: $(CONTROLLER_GEN) ## Generate deepcopy go code for in-memory cloud resources
+	$(MAKE) clean-generated-deepcopy SRC_DIRS="$(CAPIM_DIR)/pkg/cloud/api"
 	cd $(CAPIM_DIR); $(CONTROLLER_GEN) \
-		object:headerFile=../../../hack/boilerplate/boilerplate.generatego.txt \
-		paths=./api/... \
-        paths=./internal/cloud/api/...
+		object:headerFile=../../../hack/scripts/verify/boilerplate/boilerplate.generatego.txt \
+        paths=./pkg/cloud/api/...
 
 .PHONY: generate-go-deepcopy-test-extension
 generate-go-deepcopy-test-extension: $(CONTROLLER_GEN) ## Generate deepcopy go code for test-extension
@@ -446,102 +461,97 @@ generate-go-conversions: ## Run all generate-go-conversions-* targets
 .PHONY: generate-go-conversions-core
 generate-go-conversions-core: ## Run all generate-go-conversions-core-* targets
 	$(MAKE) generate-go-conversions-core-api
-	$(MAKE) generate-go-conversions-core-exp
-	$(MAKE) generate-go-conversions-core-exp-ipam
+	$(MAKE) generate-go-conversions-addons-api
+	$(MAKE) generate-go-conversions-core-ipam
 	$(MAKE) generate-go-conversions-core-runtime
 
 .PHONY: generate-go-conversions-core-api
 generate-go-conversions-core-api: $(CONVERSION_GEN) ## Generate conversions go code for core api
-	$(MAKE) clean-generated-conversions SRC_DIRS="./internal/apis/core/v1alpha3,./internal/apis/core/v1alpha4"
+	$(MAKE) clean-generated-conversions SRC_DIRS="./api/core/v1beta1,./internal/topology/upgrade/test/t2/v1beta1"
+	cd api; $(CONVERSION_GEN) \
+		--output-file=zz_generated.conversion.go \
+		--go-header-file=./../hack/scripts/verify/boilerplate/boilerplate.generatego.txt \
+		./core/v1beta1
 	$(CONVERSION_GEN) \
 		--output-file=zz_generated.conversion.go \
-		--go-header-file=./hack/boilerplate/boilerplate.generatego.txt \
-		./internal/apis/core/v1alpha3 \
-		./internal/apis/core/v1alpha4
+		--go-header-file=./hack/scripts/verify/boilerplate/boilerplate.generatego.txt \
+		./internal/topology/upgrade/test/t2/v1beta1
 
-.PHONY: generate-go-conversions-core-exp
-generate-go-conversions-core-exp: $(CONVERSION_GEN) ## Generate conversions go code for core exp
-	$(MAKE) clean-generated-conversions SRC_DIRS="./internal/apis/core/exp/v1alpha3,./internal/apis/core/exp/addons/v1alpha3,./internal/apis/core/exp/v1alpha4,./internal/apis/core/exp/addons/v1alpha4"
-	$(CONVERSION_GEN) \
+.PHONY: generate-go-conversions-addons-api
+generate-go-conversions-addons-api: $(CONVERSION_GEN) ## Generate conversions go code for addons api
+	$(MAKE) clean-generated-conversions SRC_DIRS="./api/addons/v1beta1"
+	cd api; $(CONVERSION_GEN) \
 		--output-file=zz_generated.conversion.go \
-		--go-header-file=./hack/boilerplate/boilerplate.generatego.txt \
-		./internal/apis/core/exp/v1alpha3 \
-		./internal/apis/core/exp/v1alpha4 \
-		./internal/apis/core/exp/addons/v1alpha3 \
-		./internal/apis/core/exp/addons/v1alpha4
+		--go-header-file=./../hack/scripts/verify/boilerplate/boilerplate.generatego.txt \
+		./addons/v1beta1
 
-.PHONY: generate-go-conversions-core-exp-ipam
-generate-go-conversions-core-exp-ipam: $(CONVERSION_GEN) ## Generate conversions go code for core exp IPAM
-	$(MAKE) clean-generated-conversions SRC_DIRS="./$(EXP_DIR)/ipam/api/v1alpha1"
-	$(CONVERSION_GEN) \
+.PHONY: generate-go-conversions-core-ipam
+generate-go-conversions-core-ipam: $(CONVERSION_GEN) ## Generate conversions go code for IPAM
+	$(MAKE) clean-generated-conversions SRC_DIRS="./api/ipam/v1beta1,./api/ipam/v1alpha1"
+	cd api; $(CONVERSION_GEN) \
 		--output-file=zz_generated.conversion.go \
-		--go-header-file=./hack/boilerplate/boilerplate.generatego.txt \
-		./$(EXP_DIR)/ipam/api/v1alpha1
+		--go-header-file=./../hack/scripts/verify/boilerplate/boilerplate.generatego.txt \
+		./ipam/v1alpha1 \
+		./ipam/v1beta1
 
 .PHONY: generate-go-conversions-core-runtime
 generate-go-conversions-core-runtime: $(CONVERSION_GEN) ## Generate conversions go code for core runtime
 	$(MAKE) clean-generated-conversions SRC_DIRS="./internal/runtime/test/v1alpha1,./internal/runtime/test/v1alpha2"
 	$(CONVERSION_GEN) \
 		--output-file=zz_generated.conversion.go \
-		--go-header-file=./hack/boilerplate/boilerplate.generatego.txt \
+		--go-header-file=./hack/scripts/verify/boilerplate/boilerplate.generatego.txt \
 		./internal/runtime/test/v1alpha1 \
 		./internal/runtime/test/v1alpha2
+	$(MAKE) clean-generated-conversions SRC_DIRS="./api/runtime/v1alpha1"
+	cd api; $(CONVERSION_GEN) \
+		--output-file=zz_generated.conversion.go \
+		--go-header-file=./../hack/scripts/verify/boilerplate/boilerplate.generatego.txt \
+		./runtime/v1alpha1
 
 .PHONY: generate-go-conversions-kubeadm-bootstrap
 generate-go-conversions-kubeadm-bootstrap: $(CONVERSION_GEN) ## Generate conversions go code for kubeadm bootstrap
-	$(MAKE) clean-generated-conversions SRC_DIRS="./internal/apis/bootstrap/kubeadm"
+	$(MAKE) clean-generated-conversions SRC_DIRS="./api/bootstrap/kubeadm/v1beta1"
+	cd api; $(CONVERSION_GEN) \
+		--output-file=zz_generated.conversion.go \
+		--go-header-file=./../hack/scripts/verify/boilerplate/boilerplate.generatego.txt \
+		./bootstrap/kubeadm/v1beta1
+	$(MAKE) clean-generated-conversions SRC_DIRS="./bootstrap/kubeadm/types/upstreamv1beta3,./bootstrap/kubeadm/types/upstreamv1beta4"
 	$(CONVERSION_GEN) \
 		--output-file=zz_generated.conversion.go \
-		--go-header-file=./hack/boilerplate/boilerplate.generatego.txt \
-		./internal/apis/bootstrap/kubeadm/v1alpha3 \
-		./internal/apis/bootstrap/kubeadm/v1alpha4
-	$(MAKE) clean-generated-conversions SRC_DIRS="./bootstrap/kubeadm/types/upstreamv1beta1,./bootstrap/kubeadm/types/upstreamv1beta2,./bootstrap/kubeadm/types/upstreamv1beta3,./bootstrap/kubeadm/types/upstreamv1beta4"
-	$(CONVERSION_GEN) \
-		--output-file=zz_generated.conversion.go \
-		--go-header-file=./hack/boilerplate/boilerplate.generatego.txt \
-		./bootstrap/kubeadm/types/upstreamv1beta1 \
-		./bootstrap/kubeadm/types/upstreamv1beta2 \
+		--go-header-file=./hack/scripts/verify/boilerplate/boilerplate.generatego.txt \
 		./bootstrap/kubeadm/types/upstreamv1beta3 \
 		./bootstrap/kubeadm/types/upstreamv1beta4
 
 .PHONY: generate-go-conversions-kubeadm-control-plane
 generate-go-conversions-kubeadm-control-plane: $(CONVERSION_GEN) ## Generate conversions go code for kubeadm control plane
-	$(MAKE) clean-generated-conversions SRC_DIRS="./internal/apis/controlplane/kubeadm"
-	$(CONVERSION_GEN) \
+	$(MAKE) clean-generated-conversions SRC_DIRS="./api/controlplane/kubeadm/v1beta1"
+	cd api; $(CONVERSION_GEN) \
 		--output-file=zz_generated.conversion.go \
-		--go-header-file=./hack/boilerplate/boilerplate.generatego.txt \
-		./internal/apis/controlplane/kubeadm/v1alpha3 \
-		./internal/apis/controlplane/kubeadm/v1alpha4
+		--go-header-file=./../hack/scripts/verify/boilerplate/boilerplate.generatego.txt \
+		./controlplane/kubeadm/v1beta1
 
 .PHONY: generate-go-conversions-docker-infrastructure
 generate-go-conversions-docker-infrastructure: $(CONVERSION_GEN) ## Generate conversions go code for docker infrastructure provider
 	cd $(CAPD_DIR); $(CONVERSION_GEN) \
 		--output-file=zz_generated.conversion.go \
-		--go-header-file=../../../hack/boilerplate/boilerplate.generatego.txt \
-		./api/v1alpha3 \
-		./api/v1alpha4 \
-		./$(EXP_DIR)/api/v1alpha3 \
-		./$(EXP_DIR)/api/v1alpha4
-
-.PHONY: generate-go-conversions-in-memory-infrastructure
-generate-go-conversions-in-memory-infrastructure: $(CONVERSION_GEN) ## Generate conversions go code for in-memory infrastructure provider
-	cd $(CAPIM_DIR)
+		--go-header-file=../../../hack/scripts/verify/boilerplate/boilerplate.generatego.txt \
+		./api/v1beta1
 
 .PHONY: generate-go-conversions-test-extension
-generate-go-conversions-test-extension: $(CONVERSION_GEN) ## Generate conversions go code for in-memory infrastructure provider
+generate-go-conversions-test-extension: $(CONVERSION_GEN) ## Generate conversions go code for test runtime extension provider
 
 # The tmp/sigs.k8s.io/cluster-api symlink is a workaround to make this target run outside of GOPATH
 .PHONY: generate-go-openapi
 generate-go-openapi: $(OPENAPI_GEN) ## Generate openapi go code for runtime SDK
-	@mkdir -p ./tmp/sigs.k8s.io; ln -s $(ROOT_DIR) ./tmp/sigs.k8s.io/; cd ./tmp; \
-	for pkg in "api/v1beta1" "$(EXP_DIR)/runtime/hooks/api/v1alpha1"; do \
-		(cd ../ && $(MAKE) clean-generated-openapi-definitions SRC_DIRS="./$${pkg}"); \
+	@mkdir -p ./tmp/sigs.k8s.io; rm -f ./tmp/sigs.k8s.io/cluster-api; ln -s $(ROOT_DIR) ./tmp/sigs.k8s.io/cluster-api; cd ./tmp; \
+	for pkg in "api/core/v1beta2" "api/runtime/hooks/v1alpha1"; do \
+		(cd ../ && $(MAKE) clean-generated-openapi-definitions SRC_DIRS="./hack/tools/runtime-openapi-gen/$${pkg}"); \
 		echo "** Generating openapi schema for types in ./$${pkg} **"; \
 		$(OPENAPI_GEN) \
-			--output-dir=../$${pkg} \
+			--output-dir=../hack/tools/runtime-openapi-gen/$${pkg} \
 			--output-file=zz_generated.openapi.go \
-			--output-pkg=sigs.k8s.io/cluster-api/$${pkg} \
-			--go-header-file=../hack/boilerplate/boilerplate.generatego.txt \
+			--output-pkg=sigs.k8s.io/cluster-api/hack/tools/runtime-openapi-gen/$${pkg} \
+			--go-header-file=../hack/scripts/verify/boilerplate/boilerplate.generatego.txt \
 			sigs.k8s.io/cluster-api/$${pkg}; \
 	done; \
 	rm sigs.k8s.io/cluster-api
@@ -549,85 +559,64 @@ generate-go-openapi: $(OPENAPI_GEN) ## Generate openapi go code for runtime SDK
 .PHONY: generate-modules
 generate-modules: ## Run go mod tidy to ensure modules are up to date
 	go mod tidy
+	cd api; go mod tidy
 	cd $(TOOLS_DIR); go mod tidy
 	cd $(TEST_DIR); go mod tidy
 
 .PHONY: generate-doctoc
 generate-doctoc:
-	TRACE=$(TRACE) ./hack/generate-doctoc.sh
+	TRACE=$(TRACE) ./hack/scripts/docs/generate-doctoc.sh
+
+.PHONY: generate-crd-docs
+generate-crd-docs: $(CRD_REF_DOCS) ## Generate CRD API reference documentation using crd-ref-docs
+	$(CRD_REF_DOCS) \
+		--source-path=$(ROOT_DIR)/api \
+		--config=$(ROOT_DIR)/hack/crd-ref-docs-config-v1beta2.yaml \
+		--renderer=markdown \
+		--output-path=$(ROOT_DIR)/$(DOCS_DIR)/book/src/reference/api/crd-api-reference.md
+	$(CRD_REF_DOCS) \
+		--source-path=$(ROOT_DIR)/api \
+		--config=$(ROOT_DIR)/hack/crd-ref-docs-config-v1beta1.yaml \
+		--renderer=markdown \
+		--output-path=$(ROOT_DIR)/$(DOCS_DIR)/book/src/reference/api/crd-api-reference-v1beta1.md
+	printf '%s\n\n' '> This page documents **deprecated** API packages. For current types, see [CRD API Reference (v1beta2)](crd-api-reference.md).' | cat - $(ROOT_DIR)/$(DOCS_DIR)/book/src/reference/api/crd-api-reference-v1beta1.md > $(ROOT_DIR)/$(DOCS_DIR)/book/src/reference/api/crd-api-reference-v1beta1.md.tmp && mv $(ROOT_DIR)/$(DOCS_DIR)/book/src/reference/api/crd-api-reference-v1beta1.md.tmp $(ROOT_DIR)/$(DOCS_DIR)/book/src/reference/api/crd-api-reference-v1beta1.md
 
 .PHONY: generate-e2e-templates
-generate-e2e-templates: $(KUSTOMIZE) $(addprefix generate-e2e-templates-, v0.3 v0.4 v1.5 v1.6 v1.8 v1.9 main) ## Generate cluster templates for all versions
+generate-e2e-templates: $(KUSTOMIZE) generate-e2e-templates-main
 
 DOCKER_TEMPLATES := test/e2e/data/infrastructure-docker
-INMEMORY_TEMPLATES := test/e2e/data/infrastructure-inmemory
-
-.PHONY: generate-e2e-templates-v0.3
-generate-e2e-templates-v0.3: $(KUSTOMIZE)
-	$(KUSTOMIZE) build $(DOCKER_TEMPLATES)/v0.3/cluster-template --load-restrictor LoadRestrictionsNone > $(DOCKER_TEMPLATES)/v0.3/cluster-template.yaml
-
-.PHONY: generate-e2e-templates-v0.4
-generate-e2e-templates-v0.4: $(KUSTOMIZE)
-	$(KUSTOMIZE) build $(DOCKER_TEMPLATES)/v0.4/cluster-template --load-restrictor LoadRestrictionsNone > $(DOCKER_TEMPLATES)/v0.4/cluster-template.yaml
-
-.PHONY: generate-e2e-templates-v1.5
-generate-e2e-templates-v1.5: $(KUSTOMIZE)
-	$(KUSTOMIZE) build $(DOCKER_TEMPLATES)/v1.5/cluster-template --load-restrictor LoadRestrictionsNone > $(DOCKER_TEMPLATES)/v1.5/cluster-template.yaml
-	$(KUSTOMIZE) build $(DOCKER_TEMPLATES)/v1.5/cluster-template-topology --load-restrictor LoadRestrictionsNone > $(DOCKER_TEMPLATES)/v1.5/cluster-template-topology.yaml
-
-.PHONY: generate-e2e-templates-v1.6
-generate-e2e-templates-v1.6: $(KUSTOMIZE)
-	$(KUSTOMIZE) build $(DOCKER_TEMPLATES)/v1.6/cluster-template --load-restrictor LoadRestrictionsNone > $(DOCKER_TEMPLATES)/v1.6/cluster-template.yaml
-	$(KUSTOMIZE) build $(DOCKER_TEMPLATES)/v1.6/cluster-template-topology --load-restrictor LoadRestrictionsNone > $(DOCKER_TEMPLATES)/v1.6/cluster-template-topology.yaml
-
-.PHONY: generate-e2e-templates-v1.8
-generate-e2e-templates-v1.8: $(KUSTOMIZE)
-	$(KUSTOMIZE) build $(DOCKER_TEMPLATES)/v1.8/cluster-template --load-restrictor LoadRestrictionsNone > $(DOCKER_TEMPLATES)/v1.8/cluster-template.yaml
-	$(KUSTOMIZE) build $(DOCKER_TEMPLATES)/v1.8/cluster-template-topology --load-restrictor LoadRestrictionsNone > $(DOCKER_TEMPLATES)/v1.8/cluster-template-topology.yaml
-
-.PHONY: generate-e2e-templates-v1.9
-generate-e2e-templates-v1.9: $(KUSTOMIZE)
-	$(KUSTOMIZE) build $(DOCKER_TEMPLATES)/v1.9/cluster-template --load-restrictor LoadRestrictionsNone > $(DOCKER_TEMPLATES)/v1.9/cluster-template.yaml
-	$(KUSTOMIZE) build $(DOCKER_TEMPLATES)/v1.9/cluster-template-topology --load-restrictor LoadRestrictionsNone > $(DOCKER_TEMPLATES)/v1.9/cluster-template-topology.yaml
 
 .PHONY: generate-e2e-templates-main
 generate-e2e-templates-main: $(KUSTOMIZE)
 	$(KUSTOMIZE) build $(DOCKER_TEMPLATES)/main/cluster-template --load-restrictor LoadRestrictionsNone > $(DOCKER_TEMPLATES)/main/cluster-template.yaml
 	$(KUSTOMIZE) build $(DOCKER_TEMPLATES)/main/cluster-template-md-remediation --load-restrictor LoadRestrictionsNone > $(DOCKER_TEMPLATES)/main/cluster-template-md-remediation.yaml
+	$(KUSTOMIZE) build $(DOCKER_TEMPLATES)/main/cluster-template-kcp-md-taints --load-restrictor LoadRestrictionsNone > $(DOCKER_TEMPLATES)/main/cluster-template-kcp-md-taints.yaml
 	$(KUSTOMIZE) build $(DOCKER_TEMPLATES)/main/cluster-template-kcp-remediation --load-restrictor LoadRestrictionsNone > $(DOCKER_TEMPLATES)/main/cluster-template-kcp-remediation.yaml
 	$(KUSTOMIZE) build $(DOCKER_TEMPLATES)/main/cluster-template-kcp-adoption/step1 --load-restrictor LoadRestrictionsNone > $(DOCKER_TEMPLATES)/main/cluster-template-kcp-adoption.yaml
 	echo "---" >> $(DOCKER_TEMPLATES)/main/cluster-template-kcp-adoption.yaml
 	$(KUSTOMIZE) build $(DOCKER_TEMPLATES)/main/cluster-template-kcp-adoption/step2 --load-restrictor LoadRestrictionsNone >> $(DOCKER_TEMPLATES)/main/cluster-template-kcp-adoption.yaml
 	$(KUSTOMIZE) build $(DOCKER_TEMPLATES)/main/cluster-template-machine-pool --load-restrictor LoadRestrictionsNone > $(DOCKER_TEMPLATES)/main/cluster-template-machine-pool.yaml
-	$(KUSTOMIZE) build $(DOCKER_TEMPLATES)/main/cluster-template-upgrades --load-restrictor LoadRestrictionsNone > $(DOCKER_TEMPLATES)/main/cluster-template-upgrades.yaml
 	$(KUSTOMIZE) build $(DOCKER_TEMPLATES)/main/cluster-template-upgrades-runtimesdk --load-restrictor LoadRestrictionsNone > $(DOCKER_TEMPLATES)/main/cluster-template-upgrades-runtimesdk.yaml
 	$(KUSTOMIZE) build $(DOCKER_TEMPLATES)/main/cluster-template-kcp-pre-drain --load-restrictor LoadRestrictionsNone > $(DOCKER_TEMPLATES)/main/cluster-template-kcp-pre-drain.yaml
 	$(KUSTOMIZE) build $(DOCKER_TEMPLATES)/main/cluster-template-kcp-scale-in --load-restrictor LoadRestrictionsNone > $(DOCKER_TEMPLATES)/main/cluster-template-kcp-scale-in.yaml
 	$(KUSTOMIZE) build $(DOCKER_TEMPLATES)/main/cluster-template-ipv6 --load-restrictor LoadRestrictionsNone > $(DOCKER_TEMPLATES)/main/cluster-template-ipv6.yaml
 	$(KUSTOMIZE) build $(DOCKER_TEMPLATES)/main/cluster-template-topology-dualstack-ipv6-primary --load-restrictor LoadRestrictionsNone > $(DOCKER_TEMPLATES)/main/cluster-template-topology-dualstack-ipv6-primary.yaml
 	$(KUSTOMIZE) build $(DOCKER_TEMPLATES)/main/cluster-template-topology-dualstack-ipv4-primary --load-restrictor LoadRestrictionsNone > $(DOCKER_TEMPLATES)/main/cluster-template-topology-dualstack-ipv4-primary.yaml
+	$(KUSTOMIZE) build $(DOCKER_TEMPLATES)/main/cluster-template-topology-in-place --load-restrictor LoadRestrictionsNone > $(DOCKER_TEMPLATES)/main/cluster-template-topology-in-place.yaml
 	$(KUSTOMIZE) build $(DOCKER_TEMPLATES)/main/cluster-template-topology-no-workers --load-restrictor LoadRestrictionsNone > $(DOCKER_TEMPLATES)/main/cluster-template-topology-no-workers.yaml
+	$(KUSTOMIZE) build $(DOCKER_TEMPLATES)/main/cluster-template-topology-runtimesdk-v1beta1 --load-restrictor LoadRestrictionsNone > $(DOCKER_TEMPLATES)/main/cluster-template-topology-runtimesdk-v1beta1.yaml
 	$(KUSTOMIZE) build $(DOCKER_TEMPLATES)/main/cluster-template-topology-kcp-only --load-restrictor LoadRestrictionsNone > $(DOCKER_TEMPLATES)/main/cluster-template-topology-kcp-only.yaml
+	$(KUSTOMIZE) build $(DOCKER_TEMPLATES)/main/cluster-template-topology-kubeadm-version --load-restrictor LoadRestrictionsNone > $(DOCKER_TEMPLATES)/main/cluster-template-topology-kubeadm-version.yaml
 	$(KUSTOMIZE) build $(DOCKER_TEMPLATES)/main/cluster-template-topology-autoscaler --load-restrictor LoadRestrictionsNone > $(DOCKER_TEMPLATES)/main/cluster-template-topology-autoscaler.yaml
 	$(KUSTOMIZE) build $(DOCKER_TEMPLATES)/main/cluster-template-topology --load-restrictor LoadRestrictionsNone > $(DOCKER_TEMPLATES)/main/cluster-template-topology.yaml
+	$(KUSTOMIZE) build $(DOCKER_TEMPLATES)/main/cluster-template-topology-taints --load-restrictor LoadRestrictionsNone > $(DOCKER_TEMPLATES)/main/cluster-template-topology-taints.yaml
 	$(KUSTOMIZE) build $(DOCKER_TEMPLATES)/main/cluster-template-ignition --load-restrictor LoadRestrictionsNone > $(DOCKER_TEMPLATES)/main/cluster-template-ignition.yaml
 	$(KUSTOMIZE) build $(DOCKER_TEMPLATES)/main/clusterclass-quick-start-kcp-only --load-restrictor LoadRestrictionsNone > $(DOCKER_TEMPLATES)/main/clusterclass-quick-start-kcp-only.yaml
 
-	$(KUSTOMIZE) build $(INMEMORY_TEMPLATES)/main/cluster-template --load-restrictor LoadRestrictionsNone > $(INMEMORY_TEMPLATES)/main/cluster-template.yaml
-
 .PHONY: generate-metrics-config
 generate-metrics-config: ## Generate ./config/metrics/crd-metrics-config.yaml
-	OUTPUT_FILE="./config/metrics/crd-metrics-config.yaml"; \
-	METRIC_TEMPLATES_DIR="./config/metrics/templates"; \
-	echo "# This file was auto-generated via: make generate-metrics-config" > "$${OUTPUT_FILE}"; \
-	cat "$${METRIC_TEMPLATES_DIR}/header.yaml" >> "$${OUTPUT_FILE}"; \
-	for resource in clusterclass cluster kubeadmcontrolplane kubeadmconfig machine machinedeployment machinehealthcheck machineset machinepool; do \
-		cat "$${METRIC_TEMPLATES_DIR}/$${resource}.yaml"; \
-		sed 's/$${RESOURCE}/'$${resource}'/g' "$${METRIC_TEMPLATES_DIR}/common_metrics.yaml"; \
-		if [[ "$${resource}" != "cluster" ]]; then \
-			cat "$${METRIC_TEMPLATES_DIR}/owner_metric.yaml"; \
-		fi \
-	done >> "$${OUTPUT_FILE}"; \
+	@echo "Use PR state from 'https://github.com/kubernetes-sigs/cluster-api/pull/9347'"; \
+	exit 1
 
 .PHONY: generate-diagrams
 generate-diagrams: ## Generate diagrams for *.plantuml files
@@ -659,14 +648,15 @@ generate-test-infra-prowjobs: $(PROWJOB_GEN) ## Generates the prowjob configurat
 .PHONY: lint
 lint: $(GOLANGCI_LINT) $(GOLANGCI_LINT_KAL) ## Lint the codebase
 	$(GOLANGCI_LINT) run -v $(GOLANGCI_LINT_EXTRA_ARGS)
-	cd $(TEST_DIR); $(GOLANGCI_LINT) run --path-prefix $(TEST_DIR) --config $(ROOT_DIR)/.golangci.yml -v $(GOLANGCI_LINT_EXTRA_ARGS)
-	cd $(TOOLS_DIR); $(GOLANGCI_LINT) run --path-prefix $(TOOLS_DIR) --config $(ROOT_DIR)/.golangci.yml -v $(GOLANGCI_LINT_EXTRA_ARGS)
-	./scripts/lint-dockerfiles.sh $(HADOLINT_VER) $(HADOLINT_FAILURE_THRESHOLD)
-	$(GOLANGCI_LINT_KAL) run -v --config $(ROOT_DIR)/.golangci-kal.yml $(GOLANGCI_LINT_EXTRA_ARGS)
+	cd api; $(GOLANGCI_LINT) run --config $(ROOT_DIR)/.golangci.yml -v $(GOLANGCI_LINT_EXTRA_ARGS)
+	cd $(TEST_DIR); $(GOLANGCI_LINT) run --config $(ROOT_DIR)/.golangci.yml -v $(GOLANGCI_LINT_EXTRA_ARGS)
+	cd $(TOOLS_DIR); $(GOLANGCI_LINT) run --config $(ROOT_DIR)/.golangci.yml -v $(GOLANGCI_LINT_EXTRA_ARGS)
+	./hack/scripts/verify/verify-dockerfiles.sh $(HADOLINT_VER) $(HADOLINT_FAILURE_THRESHOLD)
+	cd api; $(GOLANGCI_LINT_KAL) run -v --config $(ROOT_DIR)/.golangci-kal.yml $(GOLANGCI_LINT_EXTRA_ARGS)
 
 .PHONY: lint-dockerfiles
 lint-dockerfiles:
-	./scripts/lint-dockerfiles.sh $(HADOLINT_VER) $(HADOLINT_FAILURE_THRESHOLD)
+	./hack/scripts/verify/verify-dockerfiles.sh $(HADOLINT_VER) $(HADOLINT_FAILURE_THRESHOLD)
 
 .PHONY: lint-fix
 lint-fix: $(GOLANGCI_LINT) ## Lint the codebase and run auto-fixers if supported by the linter
@@ -674,7 +664,7 @@ lint-fix: $(GOLANGCI_LINT) ## Lint the codebase and run auto-fixers if supported
 
 .PHONY: lint-api
 lint-api: $(GOLANGCI_LINT_KAL)
-	$(GOLANGCI_LINT_KAL) run -v --config $(ROOT_DIR)/.golangci-kal.yml $(GOLANGCI_LINT_EXTRA_ARGS)
+	cd api; $(GOLANGCI_LINT_KAL) run -v --config $(ROOT_DIR)/.golangci-kal.yml $(GOLANGCI_LINT_EXTRA_ARGS)
 
 .PHONY: lint-api-fix
 lint-api-fix: $(GOLANGCI_LINT_KAL)
@@ -682,7 +672,7 @@ lint-api-fix: $(GOLANGCI_LINT_KAL)
 
 .PHONY: tiltfile-fix
 tiltfile-fix: ## Format the Tiltfile
-	TRACE=$(TRACE) ./hack/verify-starlark.sh fix
+	TRACE=$(TRACE) ./hack/scripts/verify/verify-starlark.sh fix
 
 APIDIFF_OLD_COMMIT ?= $(shell git rev-parse origin/main)
 
@@ -690,18 +680,18 @@ APIDIFF_OLD_COMMIT ?= $(shell git rev-parse origin/main)
 apidiff: $(GO_APIDIFF) ## Check for API differences
 	$(GO_APIDIFF) $(APIDIFF_OLD_COMMIT) --print-compatible
 
-ALL_VERIFY_CHECKS = licenses boilerplate shellcheck tiltfile modules gen conversions doctoc capi-book-summary diagrams import-restrictions go-directive
+ALL_VERIFY_CHECKS = licenses boilerplate shellcheck tiltfile modules gen crd-docs conversions doctoc capi-book-summary diagrams go-directive
 
 .PHONY: verify
 verify: $(addprefix verify-,$(ALL_VERIFY_CHECKS)) lint-dockerfiles ## Run all verify-* targets
 
 .PHONY: verify-go-directive
 verify-go-directive:
-	TRACE=$(TRACE) ./hack/verify-go-directive.sh -g $(GO_DIRECTIVE_VERSION)
+	TRACE=$(TRACE) ./hack/scripts/verify/verify-go-directive.sh -g $(GO_DIRECTIVE_VERSION)
 
 .PHONY: verify-modules
 verify-modules: generate-modules  ## Verify go modules are up to date
-	@if !(git diff --quiet HEAD -- go.sum go.mod $(TOOLS_DIR)/go.mod $(TOOLS_DIR)/go.sum $(TEST_DIR)/go.mod $(TEST_DIR)/go.sum); then \
+	@if !(git diff --quiet HEAD -- go.sum go.mod api/go.mod api/go.sum $(TOOLS_DIR)/go.mod $(TOOLS_DIR)/go.sum $(TEST_DIR)/go.mod $(TEST_DIR)/go.sum); then \
 		git diff; \
 		echo "go module files are out of date"; exit 1; \
 	fi
@@ -717,9 +707,17 @@ verify-gen: generate  ## Verify go generated files are up to date
 		echo "generated files are out of date, run make generate"; exit 1; \
 	fi
 
+.PHONY: verify-crd-docs
+verify-crd-docs: generate-crd-docs ## Verify CRD API docs are up to date
+	@if !(git diff --quiet HEAD); then \
+		git diff; \
+		echo "CRD API docs are out of date, run make generate-crd-docs"; exit 1; \
+	fi
+
 .PHONY: verify-conversions
-verify-conversions: $(CONVERSION_VERIFIER)  ## Verifies expected API conversion are in place
-	$(CONVERSION_VERIFIER)
+verify-conversions: $(CONVERSION_VERIFIER)  ## Verifies expected API conversion are in place. Only run this for CAPDev because api/ is implementing conversion outside of the api/ package
+	$(CONVERSION_VERIFIER) \
+		./test/infrastructure/docker/api/...
 
 .PHONY: verify-doctoc
 verify-doctoc: generate-doctoc
@@ -730,34 +728,35 @@ verify-doctoc: generate-doctoc
 
 .PHONY: verify-capi-book-summary
 verify-capi-book-summary:
-	TRACE=$(TRACE) ./hack/verify-capi-book-summary.sh
+	TRACE=$(TRACE) ./hack/scripts/verify/verify-capi-book-summary.sh
 
 .PHONY: verify-boilerplate
 verify-boilerplate: ## Verify boilerplate text exists in each file
-	TRACE=$(TRACE) ./hack/verify-boilerplate.sh
+	TRACE=$(TRACE) ./hack/scripts/verify/verify-boilerplate.sh
 
 .PHONY: verify-shellcheck
 verify-shellcheck: ## Verify shell files
-	TRACE=$(TRACE) ./hack/verify-shellcheck.sh $(SHELLCHECK_VER)
+	TRACE=$(TRACE) ./hack/scripts/verify/verify-shellcheck.sh $(SHELLCHECK_VER)
 
 .PHONY: verify-tiltfile
 verify-tiltfile: ## Verify Tiltfile format
-	TRACE=$(TRACE) ./hack/verify-starlark.sh
+	TRACE=$(TRACE) ./hack/scripts/verify/verify-starlark.sh
 
 .PHONY: verify-container-images
 verify-container-images: ## Verify container images
-	TRACE=$(TRACE) ./hack/verify-container-images.sh $(TRIVY_VER)
+	TRACE=$(TRACE) ./hack/scripts/verify/verify-container-images.sh $(TRIVY_VER)
 
 .PHONY: verify-licenses
 verify-licenses: ## Verify licenses
-	TRACE=$(TRACE) ./hack/verify-licenses.sh $(TRIVY_VER)
+	TRACE=$(TRACE) ./hack/scripts/verify/verify-licenses.sh $(TRIVY_VER)
 
 .PHONY: verify-govulncheck
 verify-govulncheck: $(GOVULNCHECK) ## Verify code for vulnerabilities
 	$(GOVULNCHECK) ./... && R1=$$? || R1=$$?; \
-	$(GOVULNCHECK) -C "$(TOOLS_DIR)" ./... && R2=$$? || R2=$$?; \
-	$(GOVULNCHECK) -C "$(TEST_DIR)" ./... && R3=$$? || R3=$$?; \
-	if [ "$$R1" -ne "0" ] || [ "$$R2" -ne "0" ] || [ "$$R3" -ne "0" ]; then \
+	$(GOVULNCHECK) -C "api" ./... && R2=$$? || R2=$$?; \
+	$(GOVULNCHECK) -C "$(TOOLS_DIR)" ./... && R3=$$? || R3=$$?; \
+	$(GOVULNCHECK) -C "$(TEST_DIR)" ./... && R4=$$? || R4=$$?; \
+	if [ "$$R1" -ne "0" ] || [ "$$R2" -ne "0" ] || [ "$$R3" -ne "0" ] || [ "$$R4" -ne "0" ]; then \
 		exit 1; \
 	fi
 
@@ -777,10 +776,6 @@ verify-security: ## Verify code and images for vulnerabilities
 		exit 1; \
 	fi
 
-.PHONY: verify-import-restrictions
-verify-import-restrictions: $(IMPORT_BOSS) ## Verify import restrictions with import-boss
-	./hack/verify-import-restrictions.sh
-
 ## --------------------------------------
 ## Binaries
 ## --------------------------------------
@@ -789,32 +784,28 @@ verify-import-restrictions: $(IMPORT_BOSS) ## Verify import restrictions with im
 
 .PHONY: clusterctl
 clusterctl: ## Build the clusterctl binary
-	go build -trimpath -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/clusterctl sigs.k8s.io/cluster-api/cmd/clusterctl
+	go build -trimpath -gcflags "$(GCFLAGS)" -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/clusterctl sigs.k8s.io/cluster-api/cmd/clusterctl
 
-ALL_MANAGERS = core kubeadm-bootstrap kubeadm-control-plane docker-infrastructure in-memory-infrastructure
+ALL_MANAGERS = core kubeadm-bootstrap kubeadm-control-plane docker-infrastructure
 
 .PHONY: managers
 managers: $(addprefix manager-,$(ALL_MANAGERS)) ## Run all manager-* targets
 
 .PHONY: manager-core
 manager-core: ## Build the core manager binary into the ./bin folder
-	go build -trimpath -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/manager sigs.k8s.io/cluster-api
+	go build -trimpath -gcflags "$(GCFLAGS)" -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/manager sigs.k8s.io/cluster-api
 
 .PHONY: manager-kubeadm-bootstrap
 manager-kubeadm-bootstrap: ## Build the kubeadm bootstrap manager binary into the ./bin folder
-	go build -trimpath -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/kubeadm-bootstrap-manager sigs.k8s.io/cluster-api/bootstrap/kubeadm
+	go build -trimpath -gcflags "$(GCFLAGS)" -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/kubeadm-bootstrap-manager sigs.k8s.io/cluster-api/bootstrap/kubeadm
 
 .PHONY: manager-kubeadm-control-plane
 manager-kubeadm-control-plane: ## Build the kubeadm control plane manager binary into the ./bin folder
-	go build -trimpath -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/kubeadm-control-plane-manager sigs.k8s.io/cluster-api/controlplane/kubeadm
+	go build -trimpath -gcflags "$(GCFLAGS)" -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/kubeadm-control-plane-manager sigs.k8s.io/cluster-api/controlplane/kubeadm
 
 .PHONY: manager-docker-infrastructure
 manager-docker-infrastructure: ## Build the docker infrastructure manager binary into the ./bin folder
-	cd $(CAPD_DIR); go build -trimpath -ldflags "$(LDFLAGS)" -o ../../../$(BIN_DIR)/capd-manager sigs.k8s.io/cluster-api/test/infrastructure/docker
-
-.PHONY: manager-in-memory-infrastructure
-manager-in-memory-infrastructure: ## Build the in-memory-infrastructure infrastructure manager binary into the ./bin folder
-	cd $(CAPIM_DIR); go build -trimpath -ldflags "$(LDFLAGS)" -o ../../../$(BIN_DIR)/capim-manager sigs.k8s.io/cluster-api/test/infrastructure/inmemory
+	cd $(CAPD_DIR); go build -trimpath -gcflags "$(GCFLAGS)" -ldflags "$(LDFLAGS)" -o ../../../$(BIN_DIR)/capd-manager sigs.k8s.io/cluster-api/test/infrastructure/docker
 
 .PHONY: docker-pull-prerequisites
 docker-pull-prerequisites:
@@ -829,64 +820,57 @@ docker-build-%:
 	$(MAKE) ARCH=$* docker-build
 
 # Choice of images to build/push
-ALL_DOCKER_BUILD ?= core kubeadm-bootstrap kubeadm-control-plane docker-infrastructure in-memory-infrastructure test-extension clusterctl
+ALL_DOCKER_BUILD ?= core kubeadm-bootstrap kubeadm-control-plane docker-infrastructure test-extension clusterctl
 
 .PHONY: docker-build
 docker-build: docker-pull-prerequisites ## Run docker-build-* targets for all the images
 	$(MAKE) ARCH=$(ARCH) $(addprefix docker-build-,$(ALL_DOCKER_BUILD))
 
-ALL_DOCKER_BUILD_E2E = core kubeadm-bootstrap kubeadm-control-plane docker-infrastructure in-memory-infrastructure test-extension
+ALL_DOCKER_BUILD_E2E = core kubeadm-bootstrap kubeadm-control-plane docker-infrastructure test-extension
 
 .PHONY: docker-build-e2e
 docker-build-e2e: ## Run docker-build-* targets for all the images with settings to be used for the e2e tests
     # please ensure the generated image name matches image names used in the E2E_CONF_FILE;
-    # also the same settings must exist in ci-e2e-lib.sh, capi:buildDockerImage func.
+    # also the same settings must exist in hack/scripts/ci/ci-e2e-lib.sh, capi:buildDockerImage func.
 	$(MAKE) REGISTRY=gcr.io/k8s-staging-cluster-api PULL_POLICY=IfNotPresent TAG=dev $(addprefix docker-build-,$(ALL_DOCKER_BUILD_E2E))
 
 .PHONY: docker-build-core
 docker-build-core: ## Build the docker image for core controller manager
 ## reads Dockerfile from stdin to avoid an incorrectly cached Dockerfile (https://github.com/moby/buildkit/issues/1368)
-	cat ./Dockerfile | DOCKER_BUILDKIT=1 docker build --build-arg builder_image=$(GO_CONTAINER_IMAGE) --build-arg goproxy=$(GOPROXY) --build-arg ARCH=$(ARCH) --build-arg ldflags="$(LDFLAGS)" . -t $(CONTROLLER_IMG)-$(ARCH):$(TAG) --file -
+	cat ./Dockerfile | DOCKER_BUILDKIT=1 docker build --build-arg builder_image=$(GO_CONTAINER_IMAGE) --build-arg goproxy=$(GOPROXY) --build-arg ARCH=$(ARCH) --build-arg gcflags="$(GCFLAGS)" --build-arg ldflags="$(LDFLAGS)" . -t $(CONTROLLER_IMG)-$(ARCH):$(TAG) --file -
 	$(MAKE) set-manifest-image MANIFEST_IMG=$(CONTROLLER_IMG)-$(ARCH) MANIFEST_TAG=$(TAG) TARGET_RESOURCE="./config/default/manager_image_patch.yaml"
 	$(MAKE) set-manifest-pull-policy TARGET_RESOURCE="./config/default/manager_pull_policy.yaml"
 
 .PHONY: docker-build-kubeadm-bootstrap
 docker-build-kubeadm-bootstrap: ## Build the docker image for kubeadm bootstrap controller manager
 ## reads Dockerfile from stdin to avoid an incorrectly cached Dockerfile (https://github.com/moby/buildkit/issues/1368)
-	cat ./Dockerfile | DOCKER_BUILDKIT=1 docker build --build-arg builder_image=$(GO_CONTAINER_IMAGE) --build-arg goproxy=$(GOPROXY) --build-arg ARCH=$(ARCH) --build-arg package=./bootstrap/kubeadm --build-arg ldflags="$(LDFLAGS)" . -t $(KUBEADM_BOOTSTRAP_CONTROLLER_IMG)-$(ARCH):$(TAG) --file -
+	cat ./Dockerfile | DOCKER_BUILDKIT=1 docker build --build-arg builder_image=$(GO_CONTAINER_IMAGE) --build-arg goproxy=$(GOPROXY) --build-arg ARCH=$(ARCH) --build-arg package=./bootstrap/kubeadm --build-arg gcflags="$(GCFLAGS)" --build-arg ldflags="$(LDFLAGS)" . -t $(KUBEADM_BOOTSTRAP_CONTROLLER_IMG)-$(ARCH):$(TAG) --file -
 	$(MAKE) set-manifest-image MANIFEST_IMG=$(KUBEADM_BOOTSTRAP_CONTROLLER_IMG)-$(ARCH) MANIFEST_TAG=$(TAG) TARGET_RESOURCE="./bootstrap/kubeadm/config/default/manager_image_patch.yaml"
 	$(MAKE) set-manifest-pull-policy TARGET_RESOURCE="./bootstrap/kubeadm/config/default/manager_pull_policy.yaml"
 
 .PHONY: docker-build-kubeadm-control-plane
 docker-build-kubeadm-control-plane: ## Build the docker image for kubeadm control plane controller manager
 ## reads Dockerfile from stdin to avoid an incorrectly cached Dockerfile (https://github.com/moby/buildkit/issues/1368)
-	cat ./Dockerfile | DOCKER_BUILDKIT=1 docker build --build-arg builder_image=$(GO_CONTAINER_IMAGE) --build-arg goproxy=$(GOPROXY) --build-arg ARCH=$(ARCH) --build-arg package=./controlplane/kubeadm --build-arg ldflags="$(LDFLAGS)" . -t $(KUBEADM_CONTROL_PLANE_CONTROLLER_IMG)-$(ARCH):$(TAG) --file -
+	cat ./Dockerfile | DOCKER_BUILDKIT=1 docker build --build-arg builder_image=$(GO_CONTAINER_IMAGE) --build-arg goproxy=$(GOPROXY) --build-arg ARCH=$(ARCH) --build-arg package=./controlplane/kubeadm --build-arg gcflags="$(GCFLAGS)" --build-arg ldflags="$(LDFLAGS)" . -t $(KUBEADM_CONTROL_PLANE_CONTROLLER_IMG)-$(ARCH):$(TAG) --file -
 	$(MAKE) set-manifest-image MANIFEST_IMG=$(KUBEADM_CONTROL_PLANE_CONTROLLER_IMG)-$(ARCH) MANIFEST_TAG=$(TAG) TARGET_RESOURCE="./controlplane/kubeadm/config/default/manager_image_patch.yaml"
 	$(MAKE) set-manifest-pull-policy TARGET_RESOURCE="./controlplane/kubeadm/config/default/manager_pull_policy.yaml"
 
 .PHONY: docker-build-docker-infrastructure
 docker-build-docker-infrastructure: ## Build the docker image for docker infrastructure controller manager
 ## reads Dockerfile from stdin to avoid an incorrectly cached Dockerfile (https://github.com/moby/buildkit/issues/1368)
-	cat $(CAPD_DIR)/Dockerfile | DOCKER_BUILDKIT=1 docker build --build-arg builder_image=$(GO_CONTAINER_IMAGE) --build-arg goproxy=$(GOPROXY) --build-arg ARCH=$(ARCH) --build-arg ldflags="$(LDFLAGS)" . -t $(CAPD_CONTROLLER_IMG)-$(ARCH):$(TAG) --file -
+	cat $(CAPD_DIR)/Dockerfile | DOCKER_BUILDKIT=1 docker build --build-arg builder_image=$(GO_CONTAINER_IMAGE) --build-arg goproxy=$(GOPROXY) --build-arg ARCH=$(ARCH) --build-arg gcflags="$(GCFLAGS)" --build-arg ldflags="$(LDFLAGS)" . -t $(CAPD_CONTROLLER_IMG)-$(ARCH):$(TAG) --file -
 	$(MAKE) set-manifest-image MANIFEST_IMG=$(CAPD_CONTROLLER_IMG)-$(ARCH) MANIFEST_TAG=$(TAG) TARGET_RESOURCE="$(CAPD_DIR)/config/default/manager_image_patch.yaml"
 	$(MAKE) set-manifest-pull-policy TARGET_RESOURCE="$(CAPD_DIR)/config/default/manager_pull_policy.yaml"
-
-.PHONY: docker-build-in-memory-infrastructure
-docker-build-in-memory-infrastructure: ## Build the docker image for in-memory infrastructure controller manager
-## reads Dockerfile from stdin to avoid an incorrectly cached Dockerfile (https://github.com/moby/buildkit/issues/1368)
-	cat $(CAPIM_DIR)/Dockerfile | DOCKER_BUILDKIT=1 docker build --build-arg builder_image=$(GO_CONTAINER_IMAGE) --build-arg goproxy=$(GOPROXY) --build-arg ARCH=$(ARCH) --build-arg ldflags="$(LDFLAGS)" . -t $(CAPIM_CONTROLLER_IMG)-$(ARCH):$(TAG) --file -
-	$(MAKE) set-manifest-image MANIFEST_IMG=$(CAPIM_CONTROLLER_IMG)-$(ARCH) MANIFEST_TAG=$(TAG) TARGET_RESOURCE="$(CAPIM_DIR)/config/default/manager_image_patch.yaml"
-	$(MAKE) set-manifest-pull-policy TARGET_RESOURCE="$(CAPIM_DIR)/config/default/manager_pull_policy.yaml"
 
 .PHONY: docker-build-clusterctl
 docker-build-clusterctl: ## Build the docker image for clusterctl
 ## reads Dockerfile from stdin to avoid an incorrectly cached Dockerfile (https://github.com/moby/buildkit/issues/1368)
-	cat ./cmd/clusterctl/Dockerfile | DOCKER_BUILDKIT=1 docker build --build-arg builder_image=$(GO_CONTAINER_IMAGE) --build-arg goproxy=$(GOPROXY) --build-arg ARCH=$(ARCH) --build-arg package=./cmd/clusterctl --build-arg ldflags="$(LDFLAGS)" . -t $(CLUSTERCTL_IMG)-$(ARCH):$(TAG) --file -
+	cat ./cmd/clusterctl/Dockerfile | DOCKER_BUILDKIT=1 docker build --build-arg builder_image=$(GO_CONTAINER_IMAGE) --build-arg goproxy=$(GOPROXY) --build-arg ARCH=$(ARCH) --build-arg package=./cmd/clusterctl --build-arg gcflags="$(GCFLAGS)" --build-arg ldflags="$(LDFLAGS)" . -t $(CLUSTERCTL_IMG)-$(ARCH):$(TAG) --file -
 
 .PHONY: docker-build-test-extension
 docker-build-test-extension: ## Build the docker image for core controller manager
 ## reads Dockerfile from stdin to avoid an incorrectly cached Dockerfile (https://github.com/moby/buildkit/issues/1368)
-	cat ./test/extension/Dockerfile | DOCKER_BUILDKIT=1 docker build --build-arg builder_image=$(GO_CONTAINER_IMAGE) --build-arg goproxy=$(GOPROXY) --build-arg ARCH=$(ARCH) --build-arg ldflags="$(LDFLAGS)" . -t $(TEST_EXTENSION_IMG)-$(ARCH):$(TAG) --file -
+	cat ./test/extension/Dockerfile | DOCKER_BUILDKIT=1 docker build --build-arg builder_image=$(GO_CONTAINER_IMAGE) --build-arg goproxy=$(GOPROXY) --build-arg ARCH=$(ARCH) --build-arg gcflags="$(GCFLAGS)" --build-arg ldflags="$(LDFLAGS)" . -t $(TEST_EXTENSION_IMG)-$(ARCH):$(TAG) --file -
 	$(MAKE) set-manifest-image MANIFEST_IMG=$(TEST_EXTENSION_IMG)-$(ARCH) MANIFEST_TAG=$(TAG) TARGET_RESOURCE="./test/extension/config/default/manager_image_patch.yaml"
 	$(MAKE) set-manifest-pull-policy TARGET_RESOURCE="./test/extension/config/default/manager_pull_policy.yaml"
 
@@ -914,6 +898,7 @@ setup-envtest: $(SETUP_ENVTEST) ## Set up envtest (download kubebuilder assets)
 
 .PHONY: test-no-race
 test-no-race: $(SETUP_ENVTEST) ## Run unit and integration tests
+	cd api; KUBEBUILDER_ASSETS="$(KUBEBUILDER_ASSETS)" go test ./... $(TEST_ARGS)
 	KUBEBUILDER_ASSETS="$(KUBEBUILDER_ASSETS)" go test ./... $(TEST_ARGS)
 
 .PHONY: test
@@ -921,7 +906,12 @@ test: $(SETUP_ENVTEST) ## Run unit and integration tests with race detector
 	# Note: Fuzz tests are not executed with race detector because they would just time out.
 	# To achieve that, all files with fuzz tests have the "!race" build tag, to still run fuzz tests
 	# we have an additional `go test` run that focuses on "TestFuzzyConversion".
+	cd api; KUBEBUILDER_ASSETS="$(KUBEBUILDER_ASSETS)" go test -race ./... $(TEST_ARGS)
 	KUBEBUILDER_ASSETS="$(KUBEBUILDER_ASSETS)" go test -race ./... $(TEST_ARGS)
+	$(MAKE) test-conversions TEST_ARGS="$(TEST_ARGS)"
+
+.PHONY: test-conversions
+test-conversions: $(SETUP_ENVTEST) ## Run conversions test
 	KUBEBUILDER_ASSETS="$(KUBEBUILDER_ASSETS)" go test -run "^TestFuzzyConversion$$" ./... $(TEST_ARGS)
 
 .PHONY: test-verbose
@@ -933,43 +923,52 @@ test-junit: $(SETUP_ENVTEST) $(GOTESTSUM) ## Run unit and integration tests with
 	set +o errexit; (KUBEBUILDER_ASSETS="$(KUBEBUILDER_ASSETS)" go test -race -json ./... $(TEST_ARGS); echo $$? > $(ARTIFACTS)/junit.exitcode) | tee $(ARTIFACTS)/junit.stdout
 	$(GOTESTSUM) --junitfile $(ARTIFACTS)/junit.xml --raw-command cat $(ARTIFACTS)/junit.stdout
 	exit $$(cat $(ARTIFACTS)/junit.exitcode)
+	cd api; set +o errexit; (KUBEBUILDER_ASSETS="$(KUBEBUILDER_ASSETS)" go test -race -json ./... $(TEST_ARGS); echo $$? > $(ARTIFACTS)/junit-api.exitcode) | tee $(ARTIFACTS)/junit-api.stdout
+	$(GOTESTSUM) --junitfile $(ARTIFACTS)/junit-api.xml --raw-command cat $(ARTIFACTS)/junit-api.stdout
+	exit $$(cat $(ARTIFACTS)/junit-api.exitcode)
 	set +o errexit; (KUBEBUILDER_ASSETS="$(KUBEBUILDER_ASSETS)" go test -run "^TestFuzzyConversion$$" -json ./... $(TEST_ARGS); echo $$? > $(ARTIFACTS)/junit-fuzz.exitcode) | tee $(ARTIFACTS)/junit-fuzz.stdout
 	$(GOTESTSUM) --junitfile $(ARTIFACTS)/junit-fuzz.xml --raw-command cat $(ARTIFACTS)/junit-fuzz.stdout
 	exit $$(cat $(ARTIFACTS)/junit-fuzz.exitcode)
 
 .PHONY: test-cover
 test-cover: ## Run unit and integration tests and generate a coverage report
-	$(MAKE) test TEST_ARGS="$(TEST_ARGS) -coverprofile=out/coverage.out"
-	go tool cover -func=out/coverage.out -o out/coverage.txt
-	go tool cover -html=out/coverage.out -o out/coverage.html
+	$(MAKE) test TEST_ARGS="$(TEST_ARGS) -coverprofile=coverage.out"
+	go tool cover -func=coverage.out -o coverage.txt
+	go tool cover -html=coverage.out -o coverage.html
+	go tool cover -func=api/coverage.out -o coverage-api.txt
+	go tool cover -html=api/coverage.out -o coverage-api.html
 
-.PHONY: test-docker-infrastructure
-test-docker-infrastructure: $(SETUP_ENVTEST) ## Run unit and integration tests for docker infrastructure provider
-	cd $(CAPD_DIR); KUBEBUILDER_ASSETS="$(KUBEBUILDER_ASSETS)" go test -race ./... $(TEST_ARGS)
+.PHONY: test-infrastructure
+test-infrastructure: $(SETUP_ENVTEST) ## Run unit and integration tests with race detector for docker infrastructure provider
+	# Note: Fuzz tests are not executed with race detector because they would just time out.
+	# To achieve that, all files with fuzz tests have the "!race" build tag, to still run fuzz tests
+	# we have an additional `go test` run that focuses on "TestFuzzyConversion".
+	cd test/infrastructure; KUBEBUILDER_ASSETS="$(KUBEBUILDER_ASSETS)" go test -race ./... $(TEST_ARGS)
+	$(MAKE) test-infrastructure-conversions TEST_ARGS="$(TEST_ARGS)"
 
-.PHONY: test-docker-infrastructure-verbose
-test-docker-infrastructure-verbose: ## Run unit and integration tests for docker infrastructure provider with verbose flag
-	$(MAKE) test-docker-infrastructure TEST_ARGS="$(TEST_ARGS) -v"
+.PHONY: test-infrastructure-no-race
+test-infrastructure-no-race: $(SETUP_ENVTEST) ## Run unit and integration tests with no race detector for docker infrastructure provider
+	# Note: Fuzz tests are not executed with race detector because they would just time out.
+	# To achieve that, all files with fuzz tests have the "!race" build tag, to still run fuzz tests
+	# we have an additional `go test` run that focuses on "TestFuzzyConversion".
+	cd test/infrastructure; KUBEBUILDER_ASSETS="$(KUBEBUILDER_ASSETS)" go test ./... $(TEST_ARGS)
 
-.PHONY: test-docker-infrastructure-junit
-test-docker-infrastructure-junit: $(SETUP_ENVTEST) $(GOTESTSUM) ## Run unit and integration tests and generate a junit report for docker infrastructure provider
-	cd $(CAPD_DIR); set +o errexit; (KUBEBUILDER_ASSETS="$(KUBEBUILDER_ASSETS)" go test -race -json ./... $(TEST_ARGS); echo $$? > $(ARTIFACTS)/junit.infra_docker.exitcode) | tee $(ARTIFACTS)/junit.infra_docker.stdout
+.PHONY: test-infrastructure-conversions
+test-infrastructure-conversions: $(SETUP_ENVTEST) ## Run conversions test for docker infrastructure provider
+	cd test/infrastructure; KUBEBUILDER_ASSETS="$(KUBEBUILDER_ASSETS)" go test -run "^TestFuzzyConversion$$" ./... $(TEST_ARGS)
+
+.PHONY: test-infrastructure-verbose
+test-infrastructure-verbose: ## Run unit and integration tests with race detector and with verbose flag for docker infrastructure provider
+	$(MAKE) test-infrastructure TEST_ARGS="$(TEST_ARGS) -v"
+
+.PHONY: test-infrastructure-junit
+test-infrastructure-junit: $(SETUP_ENVTEST) $(GOTESTSUM) ## Run unit and integration tests with race detector and generate a junit report for docker infrastructure provider
+	cd test/infrastructure; set +o errexit; (KUBEBUILDER_ASSETS="$(KUBEBUILDER_ASSETS)" go test -race -json ./... $(TEST_ARGS); echo $$? > $(ARTIFACTS)/junit.infra_docker.exitcode) | tee $(ARTIFACTS)/junit.infra_docker.stdout
 	$(GOTESTSUM) --junitfile $(ARTIFACTS)/junit.infra_docker.xml --raw-command cat $(ARTIFACTS)/junit.infra_docker.stdout
 	exit $$(cat $(ARTIFACTS)/junit.infra_docker.exitcode)
-
-.PHONY: test-in-memory-infrastructure
-test-in-memory-infrastructure: $(SETUP_ENVTEST) ## Run unit and integration tests for in-memory infrastructure provider
-	cd $(CAPIM_DIR); KUBEBUILDER_ASSETS="$(KUBEBUILDER_ASSETS)" go test -race ./... $(TEST_ARGS)
-
-.PHONY: test-in-memory-infrastructure-verbose
-test-in-memory-infrastructure-verbose: ## Run unit and integration tests for in-memory infrastructure provider with verbose flag
-	$(MAKE) test-in-memory-infrastructure TEST_ARGS="$(TEST_ARGS) -v"
-
-.PHONY: test-in-memory-infrastructure-junit
-test-in-memory-infrastructure-junit: $(SETUP_ENVTEST) $(GOTESTSUM) ## Run unit and integration tests and generate a junit report for in-memory infrastructure provider
-	cd $(CAPIM_DIR); set +o errexit; (KUBEBUILDER_ASSETS="$(KUBEBUILDER_ASSETS)" go test -race -json ./... $(TEST_ARGS); echo $$? > $(ARTIFACTS)/junit.infra_inmemory.exitcode) | tee $(ARTIFACTS)/junit.infra_inmemory.stdout
-	$(GOTESTSUM) --junitfile $(ARTIFACTS)/junit.infra_inmemory.xml --raw-command cat $(ARTIFACTS)/junit.infra_inmemory.stdout
-	exit $$(cat $(ARTIFACTS)/junit.infra_inmemory.exitcode)
+	cd test/infrastructure; set +o errexit; (KUBEBUILDER_ASSETS="$(KUBEBUILDER_ASSETS)" go test -run "^TestFuzzyConversion$$" -json ./... $(TEST_ARGS); echo $$? > $(ARTIFACTS)/junit-fuzz.infra_docker.exitcode) | tee $(ARTIFACTS)/junit-fuzz.infra_docker.stdout
+	$(GOTESTSUM) --junitfile $(ARTIFACTS)/junit-fuzz.infra_docker.xml --raw-command cat $(ARTIFACTS)/junit-fuzz.infra_docker.stdout
+	exit $$(cat $(ARTIFACTS)/junit-fuzz.infra_docker.exitcode)
 
 .PHONY: test-test-extension
 test-test-extension: $(SETUP_ENVTEST) ## Run unit and integration tests for the test extension
@@ -984,6 +983,12 @@ test-test-extension-junit: $(SETUP_ENVTEST) $(GOTESTSUM) ## Run unit and integra
 	cd $(TEST_EXTENSION_DIR); set +o errexit; (KUBEBUILDER_ASSETS="$(KUBEBUILDER_ASSETS)" go test -race -json ./... $(TEST_ARGS); echo $$? > $(ARTIFACTS)/junit.test_extension.exitcode) | tee $(ARTIFACTS)/junit.test_extension.stdout
 	$(GOTESTSUM) --junitfile $(ARTIFACTS)/junit.test_extension.xml --raw-command cat $(ARTIFACTS)/junit.test_extension.stdout
 	exit $$(cat $(ARTIFACTS)/junit.test_extension.exitcode)
+
+.PHONY: test-framework-junit
+test-framework-junit: $(SETUP_ENVTEST) $(GOTESTSUM) ## Run unit and integration tests and generate a junit report for the test extension
+	cd $(E2E_FRAMEWORK_DIR); set +o errexit; (KUBEBUILDER_ASSETS="$(KUBEBUILDER_ASSETS)" go test -race -json ./... $(TEST_ARGS); echo $$? > $(ARTIFACTS)/junit.test_framework.exitcode) | tee $(ARTIFACTS)/junit.test_framework.stdout
+	$(GOTESTSUM) --junitfile $(ARTIFACTS)/junit.test_framework.xml --raw-command cat $(ARTIFACTS)/junit.test_framework.stdout
+	exit $$(cat $(ARTIFACTS)/junit.test_framework.exitcode)
 
 .PHONY: test-e2e
 test-e2e: $(GINKGO) generate-e2e-templates ## Run the end-to-end tests
@@ -1002,11 +1007,15 @@ test-e2e: $(GINKGO) generate-e2e-templates ## Run the end-to-end tests
 
 .PHONY: kind-cluster
 kind-cluster: ## Create a new kind cluster designed for development with Tilt
-	hack/kind-install-for-capd.sh
+	hack/scripts/dev/kind-create-for-capd.sh
+
+.PHONY: kind-cluster-kubevirt
+kind-cluster-kubevirt: ## Create a new kind cluster with KubeVirt designed for development with Tilt
+	hack/scripts/dev/kind-create-for-capk.sh
 
 .PHONY: tilt-e2e-prerequisites
 tilt-e2e-prerequisites: ## Build the corresponding kindest/node images required for e2e testing and generate the e2e templates
-	scripts/build-kind.sh
+	hack/scripts/dev/kind-build-images.sh
 	$(MAKE) generate-e2e-templates
 
 .PHONY: tilt-up
@@ -1033,7 +1042,7 @@ USER_FORK ?= $(shell git config --get remote.origin.url | cut -d/ -f4) # only wo
 ifeq ($(USER_FORK),)
 USER_FORK := $(shell git config --get remote.origin.url | cut -d: -f2 | cut -d/ -f1) # for git@github.com:<username>/cluster-api.git style URLs
 endif
-IMAGE_REVIEWERS ?= $(shell ./hack/get-project-maintainers.sh)
+IMAGE_REVIEWERS ?= $(shell ./hack/scripts/release/get-project-maintainers.sh)
 
 .PHONY: $(RELEASE_DIR)
 $(RELEASE_DIR):
@@ -1088,10 +1097,6 @@ manifest-modification-dev: # Set the manifest images to the staging bucket.
 		TARGET_RESOURCE="$(CAPD_DIR)/config/default/manager_image_patch.yaml"
 	$(MAKE) set-manifest-pull-policy PULL_POLICY=IfNotPresent TARGET_RESOURCE="$(CAPD_DIR)/config/default/manager_pull_policy.yaml"
 	$(MAKE) set-manifest-image \
-		MANIFEST_IMG=$(REGISTRY)/$(CAPIM_IMAGE_NAME) MANIFEST_TAG=$(RELEASE_TAG) \
-		TARGET_RESOURCE="$(CAPIM_DIR)/config/default/manager_image_patch.yaml"
-	$(MAKE) set-manifest-pull-policy PULL_POLICY=IfNotPresent TARGET_RESOURCE="$(CAPIM_DIR)/config/default/manager_pull_policy.yaml"
-	$(MAKE) set-manifest-image \
 		MANIFEST_IMG=$(REGISTRY)/$(TEST_EXTENSION_IMAGE_NAME) MANIFEST_TAG=$(RELEASE_TAG) \
 		TARGET_RESOURCE="$(TEST_EXTENSION_DIR)/config/default/manager_image_patch.yaml"
 	$(MAKE) set-manifest-pull-policy PULL_POLICY=IfNotPresent TARGET_RESOURCE="$(CAPD_DIR)/config/default/manager_pull_policy.yaml"
@@ -1122,8 +1127,6 @@ release-manifests: $(RELEASE_DIR) $(KUSTOMIZE) $(RUNTIME_OPENAPI_GEN) ## Build t
 release-manifests-dev: $(RELEASE_DIR) $(KUSTOMIZE) ## Build the development manifests and copies them in the release folder
 	cd $(CAPD_DIR); $(KUSTOMIZE) build config/default > ../../../$(RELEASE_DIR)/infrastructure-components-development.yaml
 	cp $(CAPD_DIR)/templates/* $(RELEASE_DIR)/
-	cd $(CAPIM_DIR); $(KUSTOMIZE) build config/default > ../../../$(RELEASE_DIR)/infrastructure-components-in-memory-development.yaml
-	cp $(CAPIM_DIR)/templates/* $(RELEASE_DIR)/
 	cd $(TEST_EXTENSION_DIR); $(KUSTOMIZE) build config/default > ../../$(RELEASE_DIR)/runtime-extension-components-development.yaml
 
 .PHONY: release-binaries
@@ -1145,9 +1148,10 @@ release-binary: $(RELEASE_DIR)
 		-e GOCACHE=/tmp/ \
 		--user $$(id -u):$$(id -g) \
 		-v "$$(pwd):/workspace$(DOCKER_VOL_OPTS)" \
+		-v "$$(go env GOMODCACHE):/go/pkg/mod$(DOCKER_VOL_OPTS)" \
 		-w /workspace \
 		golang:$(GO_VERSION) \
-		go build -a -trimpath -ldflags "$(LDFLAGS) -extldflags '-static'" \
+		go build -a -trimpath -gcflags "$(GCFLAGS)" -ldflags "$(LDFLAGS) -extldflags '-static'" \
 		-o $(RELEASE_DIR)/$(notdir $(RELEASE_BINARY)) $(BUILD_PATH)
 
 .PHONY: release-staging
@@ -1192,7 +1196,6 @@ release-alias-tag: ## Add the release alias tag to the last build tag
 	gcloud container images add-tag $(KUBEADM_CONTROL_PLANE_CONTROLLER_IMG):$(TAG) $(KUBEADM_CONTROL_PLANE_CONTROLLER_IMG):$(RELEASE_ALIAS_TAG)
 	gcloud container images add-tag $(CLUSTERCTL_IMG):$(TAG) $(CLUSTERCTL_IMG):$(RELEASE_ALIAS_TAG)
 	gcloud container images add-tag $(CAPD_CONTROLLER_IMG):$(TAG) $(CAPD_CONTROLLER_IMG):$(RELEASE_ALIAS_TAG)
-	gcloud container images add-tag $(CAPIM_CONTROLLER_IMG):$(TAG) $(CAPIM_CONTROLLER_IMG):$(RELEASE_ALIAS_TAG)
 	gcloud container images add-tag $(TEST_EXTENSION_IMG):$(TAG) $(TEST_EXTENSION_IMG):$(RELEASE_ALIAS_TAG)
 
 .PHONY: release-notes-tool
@@ -1225,7 +1228,7 @@ promote-images: $(KPROMO)
 
 .PHONY: docker-image-verify
 docker-image-verify: ## Verifies all built images to contain the correct binary in the expected arch
-	ALL_ARCH="$(ALL_ARCH)" TAG="$(TAG)" ./hack/docker-image-verify.sh
+	ALL_ARCH="$(ALL_ARCH)" TAG="$(TAG)" ./hack/scripts/verify/verify-docker-images-arch.sh
 
 .PHONY: docker-push-all
 docker-push-all: $(addprefix docker-push-,$(ALL_ARCH))  ## Push the docker images to be included in the release for all architectures + related multiarch manifests
@@ -1284,18 +1287,6 @@ docker-push-manifest-docker-infrastructure: ## Push the multiarch manifest for t
 	docker manifest push --purge $(CAPD_CONTROLLER_IMG):$(TAG)
 	$(MAKE) set-manifest-image MANIFEST_IMG=$(CAPD_CONTROLLER_IMG) MANIFEST_TAG=$(TAG) TARGET_RESOURCE="$(CAPD_DIR)/config/default/manager_image_patch.yaml"
 	$(MAKE) set-manifest-pull-policy TARGET_RESOURCE="$(CAPD_DIR)/config/default/manager_pull_policy.yaml"
-
-.PHONY: docker-push-in-memory-infrastructure
-docker-push-in-memory-infrastructure: ## Push the in-memory infrastructure provider image
-	docker push $(CAPIM_CONTROLLER_IMG)-$(ARCH):$(TAG)
-
-.PHONY: docker-push-manifest-in-memory-infrastructure
-docker-push-manifest-in-memory-infrastructure: ## Push the multiarch manifest for the in-memory infrastructure provider images
-	docker manifest create --amend $(CAPIM_CONTROLLER_IMG):$(TAG) $(shell echo $(ALL_ARCH) | sed -e "s~[^ ]*~$(CAPIM_CONTROLLER_IMG)\-&:$(TAG)~g")
-	@for arch in $(ALL_ARCH); do docker manifest annotate --arch $${arch} ${CAPIM_CONTROLLER_IMG}:${TAG} ${CAPIM_CONTROLLER_IMG}-$${arch}:${TAG}; done
-	docker manifest push --purge $(CAPIM_CONTROLLER_IMG):$(TAG)
-	$(MAKE) set-manifest-image MANIFEST_IMG=$(CAPIM_CONTROLLER_IMG) MANIFEST_TAG=$(TAG) TARGET_RESOURCE="$(CAPIM_DIR)/config/default/manager_image_patch.yaml"
-	$(MAKE) set-manifest-pull-policy TARGET_RESOURCE="$(CAPIM_DIR)/config/default/manager_pull_policy.yaml"
 
 .PHONY: docker-push-test-extension
 docker-push-test-extension: ## Push the test extension provider image
@@ -1357,7 +1348,6 @@ clean-tilt: clean-charts clean-kind ## Remove all files generated by Tilt
 	rm -rf ./controlplane/kubeadm/.tiltbuild
 	rm -rf ./bootstrap/kubeadm/.tiltbuild
 	rm -rf ./test/infrastructure/docker/.tiltbuild
-	rm -rf ./test/infrastructure/inmemory/.tiltbuild
 
 .PHONY: clean-charts
 clean-charts: ## Remove all local copies of Helm charts in ./hack/observability
@@ -1450,11 +1440,14 @@ $(GOLANGCI_LINT_BIN): $(GOLANGCI_LINT) ## Build a local copy of golangci-lint.
 .PHONY: $(GOVULNCHECK_BIN)
 $(GOVULNCHECK_BIN): $(GOVULNCHECK) ## Build a local copy of govulncheck.
 
-.PHONY: $(IMPORT_BOSS_BIN)
-$(IMPORT_BOSS_BIN): $(IMPORT_BOSS)
+.PHONY: $(CRANE_BIN)
+$(CRANE_BIN): $(CRANE) ## Build a local copy of crane.
 
 $(CONTROLLER_GEN): # Build controller-gen from tools folder.
 	GOBIN=$(TOOLS_BIN_DIR) $(GO_INSTALL) $(CONTROLLER_GEN_PKG) $(CONTROLLER_GEN_BIN) $(CONTROLLER_GEN_VER)
+
+$(CRD_REF_DOCS): # Build crd-ref-docs from tools folder.
+	GOBIN=$(TOOLS_BIN_DIR) $(GO_INSTALL) $(CRD_REF_DOCS_PKG) $(CRD_REF_DOCS_BIN) $(CRD_REF_DOCS_VER)
 
 ## We are forcing a rebuilt of conversion-gen via PHONY so that we're always using an up-to-date version.
 ## We can't use a versioned name for the binary, because that would be reflected in generated files.
@@ -1508,11 +1501,34 @@ $(GOLANGCI_LINT): # Build golangci-lint from tools folder.
 $(GOLANGCI_LINT_KAL): $(GOLANGCI_LINT) # Build golangci-lint-kal from custom configuration.
 	cd $(TOOLS_DIR); $(GOLANGCI_LINT) custom
 
-$(GOVULNCHECK): # Build govulncheck.
-	GOBIN=$(TOOLS_BIN_DIR) $(GO_INSTALL) $(GOVULNCHECK_PKG) $(GOVULNCHECK_BIN) $(GOVULNCHECK_VER)
+$(CRANE): # Build crane.
+	GOBIN=$(TOOLS_BIN_DIR) $(GO_INSTALL) $(CRANE_PKG) $(CRANE_BIN) $(CRANE_VER)
 
-$(IMPORT_BOSS): # Build import-boss
-	GOBIN=$(TOOLS_BIN_DIR) $(GO_INSTALL) $(IMPORT_BOSS_PKG) $(IMPORT_BOSS_BIN) $(IMPORT_BOSS_VER)
+## --------------------------------------
+## govulncheck
+## --------------------------------------
+
+$(GOVULNCHECK): # Build govulncheck.
+	@if [ -z "${GOVULNCHECK_VER}" ]; then echo "GOVULNCHECK_VER is not set"; exit 1; fi
+	@if [ -d "$(GOVULNCHECK_TMP_DIR)" ]; then \
+		echo "$(GOVULNCHECK_TMP_DIR) exists, skipping clone"; \
+	else \
+		git clone "https://github.com/golang/vuln.git" "$(GOVULNCHECK_TMP_DIR)"; \
+		cd "$(GOVULNCHECK_TMP_DIR)"; \
+		git checkout "$(GOVULNCHECK_VER)"; \
+		git apply "$(ROOT_DIR)/$(GOVULNCHECK_DIR)/govulncheck.patch"; \
+	fi
+	@cd "$(ROOT_DIR)/$(GOVULNCHECK_TMP_DIR)"; \
+	if [ "$$(git describe --tag 2> /dev/null)" != "$(GOVULNCHECK_VER)" ]; then \
+		echo "ERROR: checked out version $$(git describe --tag 2> /dev/null) does not match expected version $(GOVULNCHECK_VER)"; \
+		exit 1; \
+	fi
+	go build -C $(GOVULNCHECK_TMP_DIR) -o $(TOOLS_BIN_DIR)/$(GOVULNCHECK_BIN) ./cmd/govulncheck
+
+.PHONY: clean-govulncheck
+clean-govulncheck:
+	rm -fr "$(GOVULNCHECK_TMP_DIR)"
+
 
 ## --------------------------------------
 ## triage-party

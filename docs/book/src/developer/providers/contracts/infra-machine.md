@@ -1,6 +1,6 @@
 # Contract rules for InfraMachine
 
-Infrastructure providers SHOULD implement an InfraMachine resource.
+Infrastructure providers SHOULD implement an InfraMachine resource using Kubernetes' CustomResourceDefinition (CRD).
 
 The goal of an InfraMachine resource is to manage the lifecycle of a provider-specific machine instances.
 These may be physical or virtual instances, and they represent the infrastructure for Kubernetes nodes.
@@ -41,7 +41,7 @@ repo or add an item to the agenda in the [Cluster API community meeting](https:/
 
 </aside>
 
-## Rules (contract version v1beta1)
+## Rules (contract version v1beta2)
 
 | Rule                                                                 | Mandatory | Note                                 |
 |----------------------------------------------------------------------|-----------|--------------------------------------|
@@ -55,11 +55,13 @@ repo or add an item to the agenda in the [Cluster API community meeting](https:/
 | [InfraMachine: initialization completed]                             | Yes       |                                      |
 | [InfraMachine: conditions]                                           | No        |                                      |
 | [InfraMachine: terminal failures]                                    | No        |                                      |
+| [InfraMachine: support for in-place changes]                         | No        |                                      |
 | [InfraMachineTemplate, InfraMachineTemplateList resource definition] | Yes       |                                      |
 | [InfraMachineTemplate: support for SSA dry run]                      | No        | Mandatory for ClusterClasses support |
 | [Multi tenancy]                                                      | No        | Mandatory for clusterctl CLI support |
 | [Clusterctl support]                                                 | No        | Mandatory for clusterctl CLI support |
 | [InfraMachine: pausing]                                              | No        |                                      |
+| [InfraMachineTemplate: support cluster autoscaling from zero]        | No        |                                      |
 
 Note:
 - `All resources` refers to all the provider's resources "core" Cluster API interacts with;
@@ -84,8 +86,9 @@ The domain for Cluster API resources is `cluster.x-k8s.io`, and infrastructure p
 generally use `infrastructure.cluster.x-k8s.io` as API group.
 
 If your provider uses a different API group, you MUST grant full read/write RBAC permissions for resources in your API group
-to the Cluster API core controllers. The canonical way to do so is via a `ClusterRole` resource with the [aggregation label]
-`cluster.x-k8s.io/aggregate-to-manager: "true"`.
+to the Cluster API core controllers. If any resource sets another resource as the owner with `blockOwnerDeletion` set,
+additional RBAC to update finalizers on the **owner resource** is required.
+The canonical way to do so is via a `ClusterRole` resource with the [aggregation label] `cluster.x-k8s.io/aggregate-to-manager: "true"`.
 
 The following is an example ClusterRole for a `FooMachine` resource in the `infrastructure.foo.com` API group:
 
@@ -140,12 +143,20 @@ To apply the label to CRDs it’s possible to use labels in your `kustomization.
 ```yaml
 labels:
 - pairs:
-    cluster.x-k8s.io/v1alpha2: v1alpha1
-    cluster.x-k8s.io/v1alpha3: v1alpha2
     cluster.x-k8s.io/v1beta1: v1beta1
+    cluster.x-k8s.io/v1beta2: v1beta2
 ```
 
 An example of this is in the [Kubeadm Bootstrap provider](https://github.com/kubernetes-sigs/cluster-api/blob/release-1.1/controlplane/kubeadm/config/crd/kustomization.yaml).
+
+<aside  class="note warning">
+
+<h1>Important</h1>
+
+If the provider implements the [clusterctl provider contract], the contract version defined in the
+label above must be consistent with the contract version defined in the `metadata.yaml` file.
+
+</aside>
 
 ### InfraMachine, InfraMachineList resource definition
 
@@ -209,13 +220,17 @@ type FooMachineSpec struct {
 	// For Kubernetes Nodes running on the Foo provider, this value is set by the corresponding CPI component 
 	// and it has the format docker:////<vm-name>. 
     // +optional
-    ProviderID *string `json:"providerID,omitempty"`
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=512
+	ProviderID string `json:"providerID,omitempty"`
     
     // See other rules for more details about mandatory/optional fields in InfraMachine spec.
     // Other fields SHOULD be added based on the needs of your provider.
 }
 ```
 
+NOTE: To align with API conventions, we recommend since the v1beta2 contract that the `ProviderID` field should be
+of type `string` (it was `*string` before). Both are compatible with the v1beta2 contract though.
 Once `spec.providerID` is set on the InfraMachine resource and the [InfraMachine initialization completed],
 the Cluster controller will surface this info in Machine's `spec.providerID`.
 
@@ -225,34 +240,38 @@ In case you are developing an infrastructure provider which has a notion of fail
 placed in, the InfraMachine resource MUST comply to the value that exists in the `spec.failureDomain` field of the Machine
 (in other words, the InfraMachine MUST be placed in the failure domain specified at Machine level).
 
-Please note, that for allowing a transparent transition from when there was no failure domain support in Cluster API
-and InfraMachine was authoritative WRT to failure domain placement (before CAPI v0.3.0),
-Cluster API still supports a _deprecated_ reverse process for failure domain management.
-
-In the _deprecated_ reverse process, the failure domain where the machine should be placed is defined in the InfraMachine's 
-`spec.failureDomain` field; the value of this field is then surfaced on the corresponding field at Machine level.
-
-<aside class="note warning">
-
-<h1>Heads up! this will change with the v1beta2 contract</h1>
-
-Machine's controller will stop supporting the _deprecated_ reverse process; the InfraMachine's `spec.failureDomain`,
-if still present, will be ignored.
-
-However, InfraMachine will be allowed to surface the failure domain where the machine is actually placed in by 
-implementing a new, optional `status.failureDomain`; this info, if present, will then surface at Machine level in a 
-new corresponding field (also in status).
+Also, InfraMachine providers are allowed to surface the failure domain where the machine is actually placed by
+implementing the `status.failureDomain` field; this info, if present, will then surface at Machine level in a 
+corresponding field (also in status).
 
 ```go
 type FooMachineStatus struct {
     // failureDomain is the unique identifier of the failure domain where this Machine has been placed in.
-    // For this Foo infrastructure provider, the name is equivalent to the name of one of the available regions.
-    FailureDomain *string `json:"failureDomain,omitempty"`
+    // +optional
+    // +kubebuilder:validation:MinLength=1
+    // +kubebuilder:validation:MaxLength=256
+    FailureDomain string `json:"failureDomain,omitempty"`
 
     // See other rules for more details about mandatory/optional fields in InfraMachineStatus.
     // Other fields SHOULD be added based on the needs of your provider.
 }
 ```
+
+<aside class="note warning">
+
+<h1>Compatibility with the deprecated v1beta1 contract</h1>
+
+In order to ease the transition for providers, the v1beta2 version of the Cluster API contract _temporarily_
+preserves compatibility with the deprecated v1beta1 contract; compatibility will be removed tentatively in April 2027.
+
+With regard to failure domain:
+
+Cluster API will continue to temporarily support InfraMachine resource using `spec.failureDomain` to
+set the failure domain. Note that this field has been preserved only for allowing transparent transition from when there 
+was no failure domain support in Cluster API and InfraMachine was authoritative WRT to failure domain placement (before CAPI v0.3.0).
+
+After compatibility with the deprecated v1beta1 contract will be removed, `spec.failureDomain` field in
+the InfraMachine resource will be ignored.
 
 </aside>
 
@@ -282,34 +301,47 @@ the Machine controller will surface this info in Machine's `status.addresses`.
 ### InfraMachine: initialization completed
 
 Each InfraMachine MUST report when Machine's infrastructure is fully provisioned (initialization) by setting
-`status.ready` in the InfraMachine resource.
+`status.initialization.provisioned` in the InfraMachine resource.
 
 ```go
 type FooMachineStatus struct {
-    // ready denotes that the foo machine infrastructure is fully provisioned.
-	// NOTE: this field is part of the Cluster API contract and it is used to orchestrate provisioning.
-	// The value of this field is never updated after provisioning is completed. Please use conditions
-	// to check the operational state of the infra machine.
+    // initialization provides observations of the FooMachine initialization process.
+    // NOTE: Fields in this struct are part of the Cluster API contract and are used to orchestrate initial Machine provisioning.
     // +optional
-    Ready bool `json:"ready"`
+    Initialization FooMachineInitializationStatus `json:"initialization,omitempty,omitzero"`
     
     // See other rules for more details about mandatory/optional fields in InfraMachine status.
     // Other fields SHOULD be added based on the needs of your provider.
 }
+
+// FooMachineInitializationStatus provides observations of the FooMachine initialization process.
+// +kubebuilder:validation:MinProperties=1
+type FooMachineInitializationStatus struct {
+	// provisioned is true when the infrastructure provider reports that the Machine's infrastructure is fully provisioned.
+	// NOTE: this field is part of the Cluster API contract, and it is used to orchestrate initial Machine provisioning.
+	// +optional
+	Provisioned *bool `json:"provisioned,omitempty"`
+}
 ```
 
-Once `status.ready` the Machine "core" controller will bubble up this info in Machine's `status.infrastructureReady`;
-Also InfraMachine's `spec.providerID` and `status.addresses` will be surfaced on Machine's
-corresponding fields at the same time.
+Once `status.initialization.provisioned` is set the Machine "core" controller will bubble up this info in Machine's
+`status.initialization.infrastructureProvisioned`; also InfraMachine's `spec.providerID`, `status.failureDomain` and `status.addresses` will 
+be surfaced on Machine's corresponding fields at the same time.
 
 <aside class="note warning">
 
-<h1>Heads up! this will change with the v1beta2 contract</h1>
+<h1>Compatibility with the deprecated v1beta1 contract</h1>
 
-When the v1beta2 contract will be released (tentative Apr 2025), `status.initialization.provisioned` will be used
-instead of `status.ready`. However, `status.ready` will be supported until v1beta1 removal (~one year later).
+In order to ease the transition for providers, the v1beta2 version of the Cluster API contract _temporarily_
+preserves compatibility with the deprecated v1beta1 contract; compatibility will be removed tentatively in April 2027.
 
-See [Improving status in CAPI resources].
+With regard to initialization completed:
+
+Cluster API will continue to temporarily support InfraMachine resource using `status.ready` field to
+report initialization completed.
+
+After compatibility with the deprecated v1beta1 contract will be removed, `status.ready` field in
+the InfraMachine resource will be ignored.
 
 </aside>
 
@@ -319,84 +351,88 @@ According to [Kubernetes API Conventions], Conditions provide a standard mechani
 status reporting from a controller.
 
 Providers implementers SHOULD implement `status.conditions` for their InfraMachine resource.
-In case conditions are implemented, Cluster API condition type MUST be used.
+In case conditions are implemented on a InfraMachine resource, Cluster API will only consider conditions providing the following information:
+- `type` (required)
+- `status` (required, one of True, False, Unknown)
+- `reason` (optional, if omitted a default one will be used)
+- `message` (optional, if omitted an empty message will be used)
+- `lastTransitionTime` (optional, if omitted time.Now will be used)
+- `observedGeneration` (optional, if omitted the generation of the InfraMachine resource will be used)
+
+Other fields will be ignored.
 
 If a condition with type `Ready` exist, such condition will be mirrored in Machine's `InfrastructureReady` condition.
 
 Please note that the `Ready` condition is expected to surface the status of the InfraMachine during its own entire lifecycle,
 including initial provisioning, the final deletion process, and the period in between these two moments.
 
-See [Cluster API condition proposal] for more context.
+See [Improving status in CAPI resources] for more context.
 
 <aside class="note warning">
 
-<h1>Heads up! this will change with the v1beta2 contract</h1>
+<h1>Compatibility with the deprecated v1beta1 contract</h1>
 
-When the v1beta2 contract will be released (tentative Apr 2025), Cluster API will start using Kubernetes metav1.Condition
-types and fully comply to [Kubernetes API Conventions].
+In order to ease the transition for providers, the v1beta2 version of the Cluster API contract _temporarily_
+preserves compatibility with the deprecated v1beta1 contract; compatibility will be removed tentatively in April 2027.
 
-In order to support providers continuing to use legacy Cluster API condition types, providers transitioning to
-metav1.Condition or even providers adopting custom condition types, Cluster API will start to accept `Ready` condition that
-provides following information:
-- `type`
-- `status`
-- `reason` ((optional, if omitted, a default one will be used)
-- `message` (optional)
-- `lastTransitionTime` (optional, if omitted, time.Now will be used)
+With regards to conditions:
 
-Other fields will be ignored
+Cluster API will continue to read conditions from providers using deprecated Cluster API condition types.
 
-See [Improving status in CAPI resources] for more context.
-
-Please note that provider that will continue to use legacy Cluster API condition types MUST carefully take into account
-the implication of this choice which are described both in the document above and in the notice at the beginning of the [Cluster API condition proposal]..
+Please note that provider that will continue to use deprecated Cluster API condition types MUST carefully take into account
+the implication of this choice which are described both in the [Cluster API v1.11 migration notes] and in the [Improving status in CAPI resources] proposal.
 
 </aside>
 
 ### InfraMachine: terminal failures
 
-Each InfraMachine SHOULD report when Machine's enter in a state that cannot be recovered (terminal failure) by
-setting `status.failureReason` and `status.failureMessage` in the InfraMachine resource.
+Starting from the v1beta2 contract version, there is no more special treatment for provider's terminal failures within Cluster API.
 
-```go
-type FooMachineStatus struct {
-    // failureReason will be set in the event that there is a terminal problem reconciling the FooMachine 
-    // and will contain a succinct value suitable for machine interpretation.
-    //
-    // This field should not be set for transitive errors that can be fixed automatically or with manual intervention,
-    // but instead indicate that something is fundamentally wrong with the FooMachine and that it cannot be recovered.
-    // +optional
-    FailureReason *capierrors.ClusterStatusError `json:"failureReason,omitempty"`
-    
-    // failureMessage will be set in the event that there is a terminal problem reconciling the FooMachine
-    // and will contain a more verbose string suitable for logging and human consumption.
-    //
-    // This field should not be set for transitive errors that can be fixed automatically or with manual intervention,
-    // but instead indicate that something is fundamentally wrong with the FooMachine and that it cannot be recovered.
-    // +optional
-    FailureMessage *string `json:"failureMessage,omitempty"`
-    
-    // See other rules for more details about mandatory/optional fields in InfraMachine status.
-    // Other fields SHOULD be added based on the needs of your provider.
-}
-```
+In case necessary, "terminal failures" should be surfaced using conditions, with a well documented type/reason;
+it is up to consumers to treat them accordingly.
 
-Once `status.failureReason` and `status.failureMessage` are set on the InfraMachine resource, the Machine "core" controller
-will surface those info in the corresponding fields in Machine's `status`.
-
-Please note that once failureReason/failureMessage is set in Machine's `status`, the only way to recover is to delete and
-recreate the Machine (it is a terminal failure).
+See [Improving status in CAPI resources] for more context.
 
 <aside class="note warning">
 
-<h1>Heads up! this will change with the v1beta2 contract</h1>
+<h1>Compatibility with the deprecated v1beta1 contract</h1>
 
-When the v1beta2 contract will be released (tentative Apr 2025), support for `status.failureReason` and `status.failureMessage`
-will be dropped.
+In order to ease the transition for providers, the v1beta2 version of the Cluster API contract _temporarily_
+preserves compatibility with the deprecated v1beta1 contract; compatibility will be removed tentatively in April 2027.
 
-See [Improving status in CAPI resources].
+With regards to terminal failures:
+
+In case an infrastructure provider reports that a InfraMachine resource is in a state that cannot be recovered (terminal failure) by
+setting `status.failureReason` and `status.failureMessage` as defined by the deprecated v1beta1 contract,
+the "core" Machine controller will surface those info in the corresponding fields in the Machine's `status.deprecated.v1beta1` struct.
+
+However, those info won't have any impact on the Machine lifecycle as before (the Machine controller won't consider the
+presence of `status.failureReason` and `status.failureMessage` info as "terminal failures"; similarly, the
+MachineHealthCheck controller won't consider the presence of `status.failureReason` and `status.failureMessage` to
+determine when a Machine needs remediation).
+
+After compatibility with the deprecated v1beta1 contract will be removed, `status.failureReason` and `status.failureMessage`
+fields in the InfraMachine resource will be ignored and Machine's `status.deprecated.v1beta1` struct will be dropped.
 
 </aside>
+
+### InfraMachine: support for in-place changes
+
+In case you are developing an infrastructure provider with support for in-place updates of the Machine infrastructure,
+you should consider following recommendations during implementation.
+
+- The `Update Extension` is the component responsible for orchestrating in-place changes on Machines.
+  Accordingly, the InfraMachine controller should ignore in-place changes. As alternative the InfraMachine controller
+  must orchestrate those changes with the `Update Extension` (e.g. the `Update Extension` must report change progress).
+- It might be useful to start thinking about the InfraMachine API surface as a set of fields with one of the following behaviors:
+    - "Immutable" fields that can only be changed by performing a rollout.
+    - "Mutable" fields that will be “reconciled” by the `Update Extension`.
+    - Fields written back to spec by the infra provider (e.g. ProviderID).
+- The validation webhook for the InfraMachine CR should allow changes to "mutable" fields; in case an infra provider
+  wants to allow this change selectively, e.g. only when applied by core CAPI, please reach out to maintainers to discuss options.
+- Please note that the above field classification do not apply to the InfraMachineTemplate object.
+
+See [Proposal](https://github.com/kubernetes-sigs/cluster-api/blob/main/docs/proposals/20240807-in-place-updates.md).
 
 ### InfraMachineTemplate, InfraMachineTemplateList resource definition
 
@@ -426,7 +462,7 @@ type FooMachineTemplateResource struct {
     // Standard object's metadata.
     // More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
     // +optional
-    ObjectMeta clusterv1.ObjectMeta `json:"metadata,omitempty"`
+    ObjectMeta clusterv1.ObjectMeta `json:"metadata,omitempty,omitzero"`
     Spec FooMachineSpec `json:"spec"`
 }
 ```
@@ -493,6 +529,84 @@ Providers SHOULD implement the pause behaviour for every object with a reconcili
 
 If implementing the pause behavior, providers SHOULD surface the paused status of an object using the Paused condition: `Status.Conditions[Paused]`.
 
+### InfraMachineTemplate: support cluster autoscaling from zero
+
+As described in the enhancement [Opt-in Autoscaling from Zero][Opt-in Autoscaling from Zero], providers may implement the `capacity` and `nodeInfo` fields in machine templates to inform the cluster autoscaler about the resources available on that machine type, the architecture, and the operating system it runs.
+
+Building on the `FooMachineTemplate` example from above, this shows the addition of a status and capacity field:
+
+```
+import corev1 "k8s.io/api/core/v1"
+
+// FooMachineTemplate is the Schema for the foomachinetemplates API.
+type FooMachineTemplate struct {
+    metav1.TypeMeta   `json:",inline"`
+    metav1.ObjectMeta `json:"metadata,omitempty"`
+
+    Spec   FooMachineTemplateSpec `json:"spec,omitempty"`
+    Status FooMachineTemplateStatus `json:"status,omitempty"`
+}
+
+// FooMachineTemplateStatus defines the observed state of FooMachineTemplate.
+type FooMachineTemplateStatus struct {
+	// Capacity defines the resource capacity for this machine.
+	// This value is used for autoscaling from zero operations as defined in:
+	// https://github.com/kubernetes-sigs/cluster-api/blob/main/docs/proposals/20210310-opt-in-autoscaling-from-zero.md
+	// +optional
+	Capacity corev1.ResourceList `json:"capacity,omitempty"`
+	// +optional
+	NodeInfo NodeInfo `json:"nodeInfo,omitempty,omitzero"`
+}
+
+// Architecture represents the CPU architecture of the node.
+// Its underlying type is a string and its value can be any of amd64, arm64, s390x, ppc64le.
+// +kubebuilder:validation:Enum=amd64;arm64;s390x;ppc64le
+// +enum
+type Architecture string
+
+// Example architecture constants defined for better readability and maintainability.
+const (
+    ArchitectureAmd64 Architecture = "amd64"
+    ArchitectureArm64 Architecture = "arm64"
+    ArchitectureS390x Architecture = "s390x"
+    ArchitecturePpc64le Architecture = "ppc64le"
+)
+
+// NodeInfo contains information about the node's architecture and operating system.
+// +kubebuilder:validation:MinProperties=1
+type NodeInfo struct {
+    // architecture is the CPU architecture of the node. 
+    // Its underlying type is a string and its value can be any of amd64, arm64, s390x, ppc64le.
+    // +optional
+    Architecture Architecture `json:"architecture,omitempty"`
+    // operatingSystem is a string representing the operating system of the node.
+    // This may be a string like 'linux' or 'windows'.
+    // +optional
+    OperatingSystem string `json:"operatingSystem,omitempty"`
+}
+
+```
+
+When rendered to a manifest, the machine template status capacity field representing an amd64 linux instance with 500 megabytes of RAM, 1 CPU core, and 1 NVidia GPU should look like this:
+
+```
+status:
+  capacity:
+    memory: 500mb
+    cpu: "1"
+    nvidia.com/gpu: "1"
+   nodeInfo:
+    architecture: amd64
+    operatingSystem: linux
+```
+
+If the information in the `nodeInfo` field is not available, the result of the autoscaling from zero operation will depend
+on the cluster autoscaler implementation. For example, the Cluster API implementation of the Kubernetes Cluster Autoscaler 
+will assume the host is running either the architecture set in the `CAPI_SCALE_ZERO_DEFAULT_ARCH` environment variable of
+the cluster autoscaler pod environment, or the amd64 architecture and Linux operating system as default values.
+
+See [autoscaling](../../../tasks/automated-machine-management/autoscaling.md).
+
 ## Typical InfraMachine reconciliation workflow
 
 A machine infrastructure provider must respond to changes to its InfraMachine resources. This process is
@@ -509,7 +623,6 @@ is implemented in InfraMachine controllers:
 1. If the resource does not have a `Machine` owner, exit the reconciliation
     1. The Cluster API `Machine` reconciler populates this based on the value in the `Machines`'s
        `spec.infrastructureRef` field
-1. If the resource has `status.failureReason` or `status.failureMessage` set, exit the reconciliation
 1. If the `Cluster` to which this resource belongs cannot be found, exit the reconciliation
 1. Add the provider-specific finalizer, if needed
 1. If the associated `Cluster`'s `status.infrastructureReady` is `false`, exit the reconciliation
@@ -517,15 +630,12 @@ is implemented in InfraMachine controllers:
     1. **Note**: This check should only be performed after appropriate owner references (if any) are updated.
 1. If the associated `Machine`'s `spec.bootstrap.dataSecretName` is `nil`, exit the reconciliation
 1. Reconcile provider-specific machine infrastructure
-    1. If any errors are encountered:
-        1. If they are terminal failures, set `status.failureReason` and `status.failureMessage`
-        1. Exit the reconciliation
     1. If this is a control plane machine, register the instance with the provider's control plane load balancer
        (optional)
 1. Set `spec.providerID` to the provider-specific identifier for the provider's machine instance
-1. Set `status.ready` to `true`
+1. Set `status.infrastructure.provisioned` to `true`
 1. Set `status.addresses` to the provider-specific set of instance addresses (optional)
-1. Set `spec.failureDomain` to the provider-specific failure domain the instance is running in (optional)
+1. Set `status.failureDomain` to the provider-specific failure domain the instance is running in (optional)
 1. Patch the resource to persist changes
 
 ### Deleted resource
@@ -548,10 +658,10 @@ is implemented in InfraMachine controllers:
 [InfraMachine: failure domain]: #inframachine-failure-domain
 [InfraMachine: addresses]: #inframachine-addresses
 [InfraMachine: initialization completed]: #inframachine-initialization-completed
+[InfraMachine: support for in-place changes]: #inframachine-support-for-in-place-changes
 [Improving status in CAPI resources]: https://github.com/kubernetes-sigs/cluster-api/blob/main/docs/proposals/20240916-improve-status-in-CAPI-resources.md
 [InfraMachine: conditions]: #inframachine-conditions
 [Kubernetes API Conventions]: https://github.com/kubernetes/community/blob/master/contributors/devel/sig-architecture/api-conventions.md#typical-status-properties
-[Cluster API condition proposal]: https://github.com/kubernetes-sigs/cluster-api/blob/main/docs/proposals/20200506-conditions.md
 [InfraMachine: terminal failures]: #inframachine-terminal-failures
 [InfraMachineTemplate, InfraMachineTemplateList resource definition]: #inframachinetemplate-inframachinetemplatelist-resource-definition
 [InfraMachineTemplate: support for SSA dry run]: #inframachinetemplate-support-for-ssa-dry-run
@@ -562,5 +672,8 @@ is implemented in InfraMachine controllers:
 [implementation best practices]: ../best-practices.md
 [infrastructure Provider Security Guidance]: ../security-guidelines.md
 [Server Side Apply]: https://kubernetes.io/docs/reference/using-api/server-side-apply/
-[the DockerMachineTemplate webhook]: https://github.com/kubernetes-sigs/cluster-api/blob/main/test/infrastructure/docker/internal/webhooks/dockermachinetemplate_webhook.go
-[InfraMachine: pausing] #inframachine-pausing
+[the DockerMachineTemplate webhook]: https://github.com/kubernetes-sigs/cluster-api/blob/main/test/infrastructure/docker/internal/webhooks/dockermachinetemplate.go
+[Cluster API v1.11 migration notes]: ../migrations/v1.10-to-v1.11.md
+[Opt-in Autoscaling from Zero]: https://github.com/kubernetes-sigs/cluster-api/blob/main/docs/proposals/20210310-opt-in-autoscaling-from-zero.md
+[InfraMachine: pausing]: #inframachine-pausing
+[InfraMachineTemplate: support cluster autoscaling from zero]: #inframachinetemplate-support-cluster-autoscaling-from-zero

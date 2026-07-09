@@ -37,7 +37,7 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
+	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	clusterctlv1 "sigs.k8s.io/cluster-api/cmd/clusterctl/api/v1alpha3"
 	"sigs.k8s.io/cluster-api/cmd/clusterctl/internal/scheme"
 	"sigs.k8s.io/cluster-api/version"
@@ -152,9 +152,11 @@ func (k *proxy) GetConfig() (*rest.Config, error) {
 	}
 	restConfig.UserAgent = fmt.Sprintf("clusterctl/%s (%s)", version.Get().GitVersion, version.Get().Platform)
 
-	// Set QPS and Burst to a threshold that ensures the controller runtime client/client go doesn't generate throttling log messages
-	restConfig.QPS = 20
-	restConfig.Burst = 100
+	// Set QPS and Burst high enough that clusterctl doesn't get throttled when it enumerates large
+	// resource sets such as many CRDs, while still relying on API Priority and Fairness for
+	// server-side protection.
+	restConfig.QPS = 500
+	restConfig.Burst = 1000
 
 	restConfig.WarningHandler = k.warningHandler
 

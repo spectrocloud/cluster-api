@@ -40,6 +40,7 @@ const (
 	AWSProviderName        = "aws"
 	AzureProviderName      = "azure"
 	BYOHProviderName       = "byoh"
+	CloudscaleProviderName = "cloudscale-ch-cloudscale"
 	CloudStackProviderName = "cloudstack"
 	DockerProviderName     = "docker"
 	DOProviderName         = "digitalocean"
@@ -48,16 +49,15 @@ const (
 	HarvesterProviderName      = "harvester-harvester"
 	HetznerProviderName        = "hetzner"
 	HivelocityProviderName     = "hivelocity-hivelocity"
+	HuaweiProviderName         = "huawei"
 	OutscaleProviderName       = "outscale"
 	IBMCloudProviderName       = "ibmcloud"
-	InMemoryProviderName       = "in-memory"
 	LinodeProviderName         = "linode-linode"
 	Metal3ProviderName         = "metal3"
 	NestedProviderName         = "nested"
 	NutanixProviderName        = "nutanix"
 	OCIProviderName            = "oci"
 	OpenStackProviderName      = "openstack"
-	PacketProviderName         = "packet"
 	TinkerbellProviderName     = "tinkerbell-tinkerbell"
 	SideroProviderName         = "sidero"
 	VCloudDirectorProviderName = "vcd"
@@ -72,6 +72,9 @@ const (
 	K0smotronProviderName      = "k0sproject-k0smotron"
 	IonosCloudProviderName     = "ionoscloud-ionoscloud"
 	VultrProviderName          = "vultr-vultr"
+	OpenNebulaProviderName     = "opennebula"
+	ScalewayProviderName       = "scaleway"
+	MetalStackProviderName     = "metal-stack"
 )
 
 // Bootstrap providers.
@@ -96,16 +99,19 @@ const (
 	RKE2ControlPlaneProviderName                = "rke2"
 	K0smotronControlPlaneProviderName           = "k0sproject-k0smotron"
 	CanonicalKubernetesControlPlaneProviderName = "canonical-kubernetes"
+	HCPControlPlaneProviderName                 = "hosted-control-plane"
 )
 
 // IPAM providers.
 const (
 	InClusterIPAMProviderName = "in-cluster"
 	NutanixIPAMProviderName   = "nutanix"
+	Metal3IPAMProviderName    = "metal3"
 )
 
 // Add-on providers.
 const (
+	Cdk8sAddonProviderName = "eitco-cdk8s"
 	HelmAddonProviderName  = "helm"
 	FleetAddonProviderName = "rancher-fleet"
 )
@@ -184,6 +190,11 @@ func (p *providersClient) defaults() []Provider {
 			providerType: clusterctlv1.InfrastructureProviderType,
 		},
 		&provider{
+			name:         CloudscaleProviderName,
+			url:          "https://github.com/cloudscale-ch/cluster-api-provider-cloudscale/releases/latest/infrastructure-components.yaml",
+			providerType: clusterctlv1.InfrastructureProviderType,
+		},
+		&provider{
 			name:         CloudStackProviderName,
 			url:          "https://github.com/kubernetes-sigs/cluster-api-provider-cloudstack/releases/latest/infrastructure-components.yaml",
 			providerType: clusterctlv1.InfrastructureProviderType,
@@ -196,11 +207,6 @@ func (p *providersClient) defaults() []Provider {
 		&provider{
 			name:         GCPProviderName,
 			url:          "https://github.com/kubernetes-sigs/cluster-api-provider-gcp/releases/latest/infrastructure-components.yaml",
-			providerType: clusterctlv1.InfrastructureProviderType,
-		},
-		&provider{
-			name:         PacketProviderName,
-			url:          "https://github.com/kubernetes-sigs/cluster-api-provider-packet/releases/latest/infrastructure-components.yaml",
 			providerType: clusterctlv1.InfrastructureProviderType,
 		},
 		&provider{
@@ -274,6 +280,11 @@ func (p *providersClient) defaults() []Provider {
 			providerType: clusterctlv1.InfrastructureProviderType,
 		},
 		&provider{
+			name:         HuaweiProviderName,
+			url:          "https://github.com/HuaweiCloudDeveloper/cluster-api-provider-huawei/releases/latest/infrastructure-components.yaml",
+			providerType: clusterctlv1.InfrastructureProviderType,
+		},
+		&provider{
 			name:         OutscaleProviderName,
 			url:          "https://github.com/outscale/cluster-api-provider-outscale/releases/latest/infrastructure-components.yaml",
 			providerType: clusterctlv1.InfrastructureProviderType,
@@ -281,11 +292,6 @@ func (p *providersClient) defaults() []Provider {
 		&provider{
 			name:         IBMCloudProviderName,
 			url:          "https://github.com/kubernetes-sigs/cluster-api-provider-ibmcloud/releases/latest/infrastructure-components.yaml",
-			providerType: clusterctlv1.InfrastructureProviderType,
-		},
-		&provider{
-			name:         InMemoryProviderName,
-			url:          "https://github.com/kubernetes-sigs/cluster-api/releases/latest/infrastructure-components-in-memory-development.yaml",
 			providerType: clusterctlv1.InfrastructureProviderType,
 		},
 		&provider{
@@ -331,6 +337,21 @@ func (p *providersClient) defaults() []Provider {
 		&provider{
 			name:         VultrProviderName,
 			url:          "https://github.com/vultr/cluster-api-provider-vultr/releases/latest/infrastructure-components.yaml",
+			providerType: clusterctlv1.InfrastructureProviderType,
+		},
+		&provider{
+			name:         OpenNebulaProviderName,
+			url:          "https://github.com/OpenNebula/cluster-api-provider-opennebula/releases/latest/infrastructure-components.yaml",
+			providerType: clusterctlv1.InfrastructureProviderType,
+		},
+		&provider{
+			name:         ScalewayProviderName,
+			url:          "https://github.com/scaleway/cluster-api-provider-scaleway/releases/latest/infrastructure-components.yaml",
+			providerType: clusterctlv1.InfrastructureProviderType,
+		},
+		&provider{
+			name:         MetalStackProviderName,
+			url:          "https://github.com/metal-stack/cluster-api-provider-metal-stack/releases/latest/infrastructure-components.yaml",
 			providerType: clusterctlv1.InfrastructureProviderType,
 		},
 
@@ -417,11 +438,21 @@ func (p *providersClient) defaults() []Provider {
 			url:          "https://github.com/canonical/cluster-api-k8s/releases/latest/control-plane-components.yaml",
 			providerType: clusterctlv1.ControlPlaneProviderType,
 		},
+		&provider{
+			name:         HCPControlPlaneProviderName,
+			url:          "https://github.com/teutonet/cluster-api-provider-hosted-control-plane/releases/latest/control-plane-components.yaml",
+			providerType: clusterctlv1.ControlPlaneProviderType,
+		},
 
 		// IPAM providers
 		&provider{
 			name:         InClusterIPAMProviderName,
 			url:          "https://github.com/kubernetes-sigs/cluster-api-ipam-provider-in-cluster/releases/latest/ipam-components.yaml",
+			providerType: clusterctlv1.IPAMProviderType,
+		},
+		&provider{
+			name:         Metal3IPAMProviderName,
+			url:          "https://github.com/metal3-io/ip-address-manager/releases/latest/ipam-components.yaml",
 			providerType: clusterctlv1.IPAMProviderType,
 		},
 		&provider{
@@ -433,12 +464,17 @@ func (p *providersClient) defaults() []Provider {
 		// Add-on providers
 		&provider{
 			name:         FleetAddonProviderName,
-			url:          "https://github.com/rancher-sandbox/cluster-api-addon-provider-fleet/releases/latest/addon-components.yaml",
+			url:          "https://github.com/rancher/cluster-api-addon-provider-fleet/releases/latest/addon-components.yaml",
 			providerType: clusterctlv1.AddonProviderType,
 		},
 		&provider{
 			name:         HelmAddonProviderName,
 			url:          "https://github.com/kubernetes-sigs/cluster-api-addon-provider-helm/releases/latest/addon-components.yaml",
+			providerType: clusterctlv1.AddonProviderType,
+		},
+		&provider{
+			name:         Cdk8sAddonProviderName,
+			url:          "https://github.com/eitco/cluster-api-addon-provider-cdk8s/releases/latest/addon-components.yaml",
 			providerType: clusterctlv1.AddonProviderType,
 		},
 
@@ -524,6 +560,10 @@ func (p *providersClient) Get(name string, providerType clusterctlv1.ProviderTyp
 func validateProvider(r Provider) error {
 	if r.Name() == "" {
 		return errors.New("name value cannot be empty")
+	}
+
+	if r.Name() != strings.ToLower(r.Name()) {
+		return errors.Errorf("provider name %s must be in lower case", r.Name())
 	}
 
 	if (r.Name() == ClusterAPIProviderName) != (r.Type() == clusterctlv1.CoreProviderType) {

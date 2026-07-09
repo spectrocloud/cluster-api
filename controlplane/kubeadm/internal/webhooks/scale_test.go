@@ -19,11 +19,9 @@ package webhooks
 import (
 	"context"
 	"testing"
-	"time"
 
 	. "github.com/onsi/gomega"
 	admissionv1 "k8s.io/api/admission/v1"
-	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/intstr"
@@ -32,8 +30,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
-	bootstrapv1 "sigs.k8s.io/cluster-api/bootstrap/kubeadm/api/v1beta1"
-	controlplanev1 "sigs.k8s.io/cluster-api/controlplane/kubeadm/api/v1beta1"
+	bootstrapv1 "sigs.k8s.io/cluster-api/api/bootstrap/kubeadm/v1beta2"
+	controlplanev1 "sigs.k8s.io/cluster-api/api/controlplane/kubeadm/v1beta2"
+	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 )
 
 func init() {
@@ -54,25 +53,30 @@ func TestKubeadmControlPlaneValidateScale(t *testing.T) {
 		},
 		Spec: controlplanev1.KubeadmControlPlaneSpec{
 			MachineTemplate: controlplanev1.KubeadmControlPlaneMachineTemplate{
-				InfrastructureRef: corev1.ObjectReference{
-					APIVersion: "test/v1alpha1",
-					Kind:       "UnknownInfraMachine",
-					Namespace:  "foo",
-					Name:       "infraTemplate",
+				Spec: controlplanev1.KubeadmControlPlaneMachineTemplateSpec{
+					InfrastructureRef: clusterv1.ContractVersionedObjectReference{
+						APIGroup: "test",
+						Kind:     "UnknownInfraMachine",
+						Name:     "infraTemplate",
+					},
+					Deletion: controlplanev1.KubeadmControlPlaneMachineTemplateDeletionSpec{
+						NodeDrainTimeoutSeconds: ptr.To(int32(1)),
+					},
 				},
-				NodeDrainTimeout: &metav1.Duration{Duration: time.Second},
 			},
 			Replicas: ptr.To[int32](1),
-			RolloutStrategy: &controlplanev1.RolloutStrategy{
-				Type: controlplanev1.RollingUpdateStrategyType,
-				RollingUpdate: &controlplanev1.RollingUpdate{
-					MaxSurge: &intstr.IntOrString{
-						IntVal: 1,
+			Rollout: controlplanev1.KubeadmControlPlaneRolloutSpec{
+				Strategy: controlplanev1.KubeadmControlPlaneRolloutStrategy{
+					Type: controlplanev1.RollingUpdateStrategyType,
+					RollingUpdate: controlplanev1.KubeadmControlPlaneRolloutStrategyRollingUpdate{
+						MaxSurge: &intstr.IntOrString{
+							IntVal: 1,
+						},
 					},
 				},
 			},
 			KubeadmConfigSpec: bootstrapv1.KubeadmConfigSpec{
-				InitConfiguration: &bootstrapv1.InitConfiguration{
+				InitConfiguration: bootstrapv1.InitConfiguration{
 					LocalAPIEndpoint: bootstrapv1.APIEndpoint{
 						AdvertiseAddress: "127.0.0.1",
 						BindPort:         int32(443),
@@ -81,21 +85,13 @@ func TestKubeadmControlPlaneValidateScale(t *testing.T) {
 						Name: "kcp-managed-etcd",
 					},
 				},
-				ClusterConfiguration: &bootstrapv1.ClusterConfiguration{
-					ClusterName: "kcp-managed-etcd",
+				ClusterConfiguration: bootstrapv1.ClusterConfiguration{
 					DNS: bootstrapv1.DNS{
-						ImageMeta: bootstrapv1.ImageMeta{
-							ImageRepository: "registry.k8s.io/coredns",
-							ImageTag:        "1.6.5",
-						},
+						ImageRepository: "registry.k8s.io/coredns",
+						ImageTag:        "1.6.5",
 					},
 				},
-				JoinConfiguration: &bootstrapv1.JoinConfiguration{
-					Discovery: bootstrapv1.Discovery{
-						Timeout: &metav1.Duration{
-							Duration: 10 * time.Minute,
-						},
-					},
+				JoinConfiguration: bootstrapv1.JoinConfiguration{
 					NodeRegistration: bootstrapv1.NodeRegistrationOptions{
 						Name: "kcp-managed-etcd",
 					},
@@ -119,7 +115,7 @@ func TestKubeadmControlPlaneValidateScale(t *testing.T) {
 						},
 					},
 				},
-				NTP: &bootstrapv1.NTP{
+				NTP: bootstrapv1.NTP{
 					Servers: []string{"test-server-1", "test-server-2"},
 					Enabled: ptr.To(true),
 				},
@@ -129,8 +125,10 @@ func TestKubeadmControlPlaneValidateScale(t *testing.T) {
 	}
 
 	kcpExternalEtcd := kcpManagedEtcd.DeepCopy()
-	kcpExternalEtcd.ObjectMeta.Name = "kcp-external-etcd"
-	kcpExternalEtcd.Spec.KubeadmConfigSpec.ClusterConfiguration.Etcd.External = &bootstrapv1.ExternalEtcd{}
+	kcpExternalEtcd.Name = "kcp-external-etcd"
+	kcpExternalEtcd.Spec.KubeadmConfigSpec.ClusterConfiguration.Etcd.External = bootstrapv1.ExternalEtcd{
+		Endpoints: []string{"1.2.3.4"},
+	}
 
 	tests := []struct {
 		name              string

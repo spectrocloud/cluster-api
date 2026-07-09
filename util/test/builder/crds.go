@@ -25,7 +25,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/utils/ptr"
 
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
+	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/cluster-api/util/contract"
 )
 
@@ -44,14 +44,10 @@ func untypedCRD(gvk schema.GroupVersionKind) *apiextensionsv1.CustomResourceDefi
 
 func generateCRD(gvk schema.GroupVersionKind, properties map[string]apiextensionsv1.JSONSchemaProps) *apiextensionsv1.CustomResourceDefinition {
 	return &apiextensionsv1.CustomResourceDefinition{
-		TypeMeta: metav1.TypeMeta{
-			APIVersion: apiextensionsv1.SchemeGroupVersion.String(),
-			Kind:       "CustomResourceDefinition",
-		},
 		ObjectMeta: metav1.ObjectMeta{
 			Name: contract.CalculateCRDName(gvk.Group, gvk.Kind),
 			Labels: map[string]string{
-				clusterv1.GroupVersion.String(): "v1beta1",
+				clusterv1.GroupVersion.String(): gvk.Version,
 			},
 		},
 		Spec: apiextensionsv1.CustomResourceDefinitionSpec{
@@ -82,17 +78,6 @@ func generateCRD(gvk schema.GroupVersionKind, properties map[string]apiextension
 }
 
 var (
-	refSchema = apiextensionsv1.JSONSchemaProps{
-		Type: "object",
-		Properties: map[string]apiextensionsv1.JSONSchemaProps{
-			"apiVersion": {Type: "string"},
-			"kind":       {Type: "string"},
-			"name":       {Type: "string"},
-			"namespace":  {Type: "string"},
-			// NOTE: omitting fields not used for sake of simplicity.
-		},
-	}
-
 	metadataSchema = apiextensionsv1.JSONSchemaProps{
 		Type: "object",
 		Properties: map[string]apiextensionsv1.JSONSchemaProps{

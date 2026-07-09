@@ -29,6 +29,7 @@ const (
     owner: root:root
     permissions: '0640'
     content: "This placeholder file is used to create the /run/cluster-api sub directory in a way that is compatible with both Linux and Windows (mkdir -p /run/cluster-api does not work with Windows)"
+{{- template "boot_commands" .BootCommands }}
 runcmd:
 {{- template "commands" .PreKubeadmCommands }}
   - {{ .KubeadmCommand }} && {{ .SentinelFileCommand }}
@@ -49,9 +50,7 @@ type NodeInput struct {
 
 // NewNode returns the user data string to be used on a node instance.
 func NewNode(input *NodeInput) ([]byte, error) {
-	if err := input.prepare(); err != nil {
-		return nil, err
-	}
+	input.prepare()
 	input.Header = cloudConfigHeader
 	return generate("Node", nodeCloudInit, input)
 }

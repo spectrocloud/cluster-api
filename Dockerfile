@@ -37,6 +37,9 @@ ENV GOPROXY=$goproxy
 COPY go.mod go.mod
 COPY go.sum go.sum
 
+COPY api/go.mod api/go.mod
+COPY api/go.sum api/go.sum
+
 # Cache deps before building and copying source so that we don't need to re-download as much
 # and so that source changes don't invalidate our downloaded layer
 RUN --mount=type=cache,target=/go/pkg/mod \
@@ -53,13 +56,15 @@ RUN --mount=type=cache,target=/root/.cache/go-build \
 # Build
 ARG package=.
 ARG ARCH
+ARG gcflags
 ARG ldflags
 
 # Do not force rebuild of up-to-date packages (do not use -a) and use the compiler cache folder
+# TODO: Remove fieldsv1string once build tag is switched (https://github.com/kubernetes/kubernetes/issues/137109#issuecomment-4697742098)
 RUN --mount=type=cache,target=/root/.cache/go-build \
     --mount=type=cache,target=/go/pkg/mod \
     CGO_ENABLED=0 GOOS=linux GOARCH=${ARCH} \
-    go build -trimpath -ldflags "${ldflags} -extldflags '-static'" \
+    go build -tags=fieldsv1string -trimpath -gcflags "${gcflags}" -ldflags "${ldflags} -extldflags '-static'" \
     -o manager ${package}
 
 # Production image

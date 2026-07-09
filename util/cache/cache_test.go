@@ -17,19 +17,21 @@ limitations under the License.
 package cache
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
 	. "github.com/onsi/gomega"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
+	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
+	runtimehooksv1 "sigs.k8s.io/cluster-api/api/runtime/hooks/v1alpha1"
 )
 
 func TestCache(t *testing.T) {
 	g := NewWithT(t)
 
-	c := New[ReconcileEntry]()
+	c := New[HookEntry](t.Context(), DefaultTTL)
 
 	machine := &clusterv1.Machine{
 		ObjectMeta: metav1.ObjectMeta{
@@ -37,9 +39,12 @@ func TestCache(t *testing.T) {
 			Name:      "test-machine",
 		},
 	}
-	entry := NewReconcileEntry(machine, time.Now())
-
+	entry := NewHookEntry(machine, runtimehooksv1.UpdateMachine, time.Now(), "response message")
 	_, ok := c.Has(entry.Key())
+	g.Expect(ok).To(BeFalse())
+
+	entryKey := NewHookEntryKey(machine, runtimehooksv1.UpdateMachine)
+	_, ok = c.Has(entryKey)
 	g.Expect(ok).To(BeFalse())
 
 	c.Add(entry)
@@ -47,6 +52,54 @@ func TestCache(t *testing.T) {
 	entryFromCache, ok := c.Has(entry.Key())
 	g.Expect(ok).To(BeTrue())
 	g.Expect(entryFromCache).To(Equal(entry))
+
+	entryFromCache, ok = c.Has(entryKey)
+	g.Expect(ok).To(BeTrue())
+	g.Expect(entryFromCache).To(Equal(entry))
+
+	tests := []struct {
+		requeueAfter              time.Duration
+		expectedRetryAfterSeconds int32
+	}{
+		{
+			requeueAfter:              0,
+			expectedRetryAfterSeconds: 0,
+		},
+		{
+			requeueAfter:              1 * time.Millisecond,
+			expectedRetryAfterSeconds: 1, // rounded up.
+		},
+		{
+			requeueAfter:              1500 * time.Millisecond,
+			expectedRetryAfterSeconds: 2, // rounded up.
+		},
+		{
+			requeueAfter:              3 * time.Second,
+			expectedRetryAfterSeconds: 3,
+		},
+	}
+	for i := range tests {
+		tt := tests[i]
+		t.Run(fmt.Sprintf("requeueAfter: %s", tt.requeueAfter), func(t *testing.T) {
+			g := NewWithT(t)
+
+			g.Expect(entryFromCache.ToResponse(&runtimehooksv1.UpdateMachineResponse{}, tt.requeueAfter)).To(Equal(
+				&runtimehooksv1.UpdateMachineResponse{
+					CommonRetryResponse: runtimehooksv1.CommonRetryResponse{
+						CommonResponse: runtimehooksv1.CommonResponse{
+							Status:  runtimehooksv1.ResponseStatusSuccess,
+							Message: entry.ResponseMessage,
+						},
+						RetryAfterSeconds: tt.expectedRetryAfterSeconds,
+					},
+				},
+			))
+		})
+	}
+
+	g.Expect(c.Len()).To(Equal(1))
+	c.DeleteAll()
+	g.Expect(c.Len()).To(Equal(0))
 }
 
 func TestShouldRequeueDrain(t *testing.T) {
@@ -92,7 +145,7 @@ func TestShouldRequeueDrain(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			g := NewWithT(t)
 
-			gotRequeueAfter, gotRequeue := ReconcileEntry{ReconcileAfter: tt.reconcileAfter}.ShouldRequeue(tt.now)
+			gotRequeueAfter, gotRequeue := HookEntry{ReconcileAfter: tt.reconcileAfter}.ShouldRequeue(tt.now)
 			g.Expect(gotRequeue).To(Equal(tt.wantRequeue))
 			g.Expect(gotRequeueAfter).To(Equal(tt.wantRequeueAfter))
 		})

@@ -22,15 +22,16 @@ import (
 	"testing"
 
 	. "github.com/onsi/gomega"
+	corev1 "k8s.io/api/core/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/ptr"
 
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
-	expv1 "sigs.k8s.io/cluster-api/exp/api/v1beta1"
-	runtimehooksv1 "sigs.k8s.io/cluster-api/exp/runtime/hooks/api/v1alpha1"
+	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
+	runtimehooksv1 "sigs.k8s.io/cluster-api/api/runtime/hooks/v1alpha1"
+	conversionutil "sigs.k8s.io/cluster-api/util/conversion"
 	"sigs.k8s.io/cluster-api/util/test/builder"
 )
 
@@ -38,7 +39,7 @@ func TestGlobal(t *testing.T) {
 	clusterUID := "8a35f406-6b9b-4b78-8c93-a7f878d90623"
 	tests := []struct {
 		name                        string
-		clusterTopology             *clusterv1.Topology
+		clusterTopology             clusterv1.Topology
 		cluster                     *clusterv1.Cluster
 		variableDefinitionsForPatch map[string]bool
 		want                        []runtimehooksv1.Variable
@@ -46,7 +47,7 @@ func TestGlobal(t *testing.T) {
 		{
 			name:                        "Should calculate global variables",
 			variableDefinitionsForPatch: map[string]bool{"location": true, "cpu": true},
-			clusterTopology: &clusterv1.Topology{
+			clusterTopology: clusterv1.Topology{
 				Variables: []clusterv1.ClusterVariable{
 					{
 						Name:  "location",
@@ -69,17 +70,25 @@ func TestGlobal(t *testing.T) {
 					Name:      "cluster1",
 					Namespace: metav1.NamespaceDefault,
 					UID:       types.UID(clusterUID),
+					Labels:    map[string]string{"foo": "bar"},
+					Annotations: map[string]string{
+						"fizz":                             "buzz",
+						corev1.LastAppliedConfigAnnotation: "should not be copied to builtin variables",
+						conversionutil.DataAnnotation:      "should not be copied to builtin variables",
+					},
 				},
 				Spec: clusterv1.ClusterSpec{
-					Topology: &clusterv1.Topology{
-						Class:   "clusterClass1",
+					Topology: clusterv1.Topology{
+						ClassRef: clusterv1.ClusterClassRef{
+							Name: "clusterClass1",
+						},
 						Version: "v1.21.1",
 					},
-					ClusterNetwork: &clusterv1.ClusterNetwork{
-						Services: &clusterv1.NetworkRanges{
+					ClusterNetwork: clusterv1.ClusterNetwork{
+						Services: clusterv1.NetworkRanges{
 							CIDRBlocks: []string{"10.10.10.1/24"},
 						},
-						Pods: &clusterv1.NetworkRanges{
+						Pods: clusterv1.NetworkRanges{
 							CIDRBlocks: []string{"11.10.10.1/24"},
 						},
 						ServiceDomain: "cluster.local",
@@ -102,15 +111,20 @@ func TestGlobal(t *testing.T) {
 						"name": "cluster1",
   						"namespace": "default",
 						"uid": "8a35f406-6b9b-4b78-8c93-a7f878d90623",
+						"metadata": {"labels":{"foo":"bar"}, "annotations":{"fizz":"buzz"}},
  						 "topology":{
   						  	"version": "v1.21.1",
- 						   	"class": "clusterClass1"
+							"classRef": {
+								"name": "clusterClass1",
+								"namespace": "default"
+							},
+							"class": "clusterClass1",
+							"classNamespace": "default"
   						},
   						"network":{
 							"serviceDomain":"cluster.local",
   						 	"services":["10.10.10.1/24"],
-   							"pods":["11.10.10.1/24"],
-    						"ipFamily": "IPv4"
+   							"pods":["11.10.10.1/24"]
 						}
 					}}`),
 				},
@@ -119,7 +133,7 @@ func TestGlobal(t *testing.T) {
 		{
 			name:                        "Should calculate global variables based on the variables defined for the patch",
 			variableDefinitionsForPatch: map[string]bool{"location": true, "cpu": true},
-			clusterTopology: &clusterv1.Topology{
+			clusterTopology: clusterv1.Topology{
 				Variables: []clusterv1.ClusterVariable{
 					{
 						Name:  "location",
@@ -143,15 +157,17 @@ func TestGlobal(t *testing.T) {
 					UID:       types.UID(clusterUID),
 				},
 				Spec: clusterv1.ClusterSpec{
-					Topology: &clusterv1.Topology{
-						Class:   "clusterClass1",
+					Topology: clusterv1.Topology{
+						ClassRef: clusterv1.ClusterClassRef{
+							Name: "clusterClass1",
+						},
 						Version: "v1.21.1",
 					},
-					ClusterNetwork: &clusterv1.ClusterNetwork{
-						Services: &clusterv1.NetworkRanges{
+					ClusterNetwork: clusterv1.ClusterNetwork{
+						Services: clusterv1.NetworkRanges{
 							CIDRBlocks: []string{"10.10.10.1/24"},
 						},
-						Pods: &clusterv1.NetworkRanges{
+						Pods: clusterv1.NetworkRanges{
 							CIDRBlocks: []string{"11.10.10.1/24"},
 						},
 						ServiceDomain: "cluster.local",
@@ -176,13 +192,17 @@ func TestGlobal(t *testing.T) {
 						"uid": "8a35f406-6b9b-4b78-8c93-a7f878d90623",
  						 "topology":{
   						  	"version": "v1.21.1",
- 						   	"class": "clusterClass1"
+							"classRef": {
+								"name": "clusterClass1",
+								"namespace": "default"
+							},
+							"class": "clusterClass1",
+							"classNamespace": "default"
   						},
   						"network":{
 							"serviceDomain":"cluster.local",
   						 	"services":["10.10.10.1/24"],
-   							"pods":["11.10.10.1/24"],
-    						"ipFamily": "IPv4"
+   							"pods":["11.10.10.1/24"]
 						}
 					}}`),
 				},
@@ -191,7 +211,7 @@ func TestGlobal(t *testing.T) {
 		{
 			name:                        "Should calculate when serviceDomain is not set",
 			variableDefinitionsForPatch: map[string]bool{"location": true, "cpu": true},
-			clusterTopology: &clusterv1.Topology{
+			clusterTopology: clusterv1.Topology{
 				Variables: []clusterv1.ClusterVariable{
 					{
 						Name:  "location",
@@ -216,15 +236,17 @@ func TestGlobal(t *testing.T) {
 					UID:       types.UID(clusterUID),
 				},
 				Spec: clusterv1.ClusterSpec{
-					Topology: &clusterv1.Topology{
-						Class:   "clusterClass1",
+					Topology: clusterv1.Topology{
+						ClassRef: clusterv1.ClusterClassRef{
+							Name: "clusterClass1",
+						},
 						Version: "v1.21.1",
 					},
-					ClusterNetwork: &clusterv1.ClusterNetwork{
-						Services: &clusterv1.NetworkRanges{
+					ClusterNetwork: clusterv1.ClusterNetwork{
+						Services: clusterv1.NetworkRanges{
 							CIDRBlocks: []string{"10.10.10.1/24"},
 						},
-						Pods: &clusterv1.NetworkRanges{
+						Pods: clusterv1.NetworkRanges{
 							CIDRBlocks: []string{"11.10.10.1/24"},
 						},
 					},
@@ -247,13 +269,17 @@ func TestGlobal(t *testing.T) {
   						"namespace": "default",
 						"uid": "8a35f406-6b9b-4b78-8c93-a7f878d90623",
  						 "topology":{
-  						  	"version": "v1.21.1",
- 						   	"class": "clusterClass1"
+							"version": "v1.21.1",
+							"classRef": {
+								"name": "clusterClass1",
+								"namespace": "default"
+							},
+							"class": "clusterClass1",
+							"classNamespace": "default"
   						},
   						"network":{
   						 	"services":["10.10.10.1/24"],
-   							"pods":["11.10.10.1/24"],
-    						"ipFamily": "IPv4"
+   							"pods":["11.10.10.1/24"]
 						}
 					}}`),
 				},
@@ -262,7 +288,7 @@ func TestGlobal(t *testing.T) {
 		{
 			name:                        "Should calculate where some variables are nil",
 			variableDefinitionsForPatch: map[string]bool{"location": true, "cpu": true},
-			clusterTopology: &clusterv1.Topology{
+			clusterTopology: clusterv1.Topology{
 				Variables: []clusterv1.ClusterVariable{
 					{
 						Name:  "location",
@@ -287,13 +313,15 @@ func TestGlobal(t *testing.T) {
 					UID:       types.UID(clusterUID),
 				},
 				Spec: clusterv1.ClusterSpec{
-					Topology: &clusterv1.Topology{
-						Class:   "clusterClass1",
+					Topology: clusterv1.Topology{
+						ClassRef: clusterv1.ClusterClassRef{
+							Name: "clusterClass1",
+						},
 						Version: "v1.21.1",
 					},
-					ClusterNetwork: &clusterv1.ClusterNetwork{
-						Services:      nil,
-						Pods:          &clusterv1.NetworkRanges{},
+					ClusterNetwork: clusterv1.ClusterNetwork{
+						Services:      clusterv1.NetworkRanges{},
+						Pods:          clusterv1.NetworkRanges{},
 						ServiceDomain: "cluster.local",
 					},
 				},
@@ -315,12 +343,16 @@ func TestGlobal(t *testing.T) {
   						"namespace": "default",
 						"uid": "8a35f406-6b9b-4b78-8c93-a7f878d90623",
  						"topology":{
-    						"version": "v1.21.1",
-    						"class": "clusterClass1"
+							"version": "v1.21.1",
+							"classRef": {
+								"name": "clusterClass1",
+								"namespace": "default"
+							},
+							"class": "clusterClass1",
+							"classNamespace": "default"
   						},
   						"network":{
-    						"serviceDomain":"cluster.local",
-    						"ipFamily": "IPv4"
+    						"serviceDomain":"cluster.local"
 						}
 					}}`),
 				},
@@ -329,7 +361,7 @@ func TestGlobal(t *testing.T) {
 		{
 			name:                        "Should calculate where ClusterNetwork is nil",
 			variableDefinitionsForPatch: map[string]bool{"location": true, "cpu": true},
-			clusterTopology: &clusterv1.Topology{
+			clusterTopology: clusterv1.Topology{
 				Variables: []clusterv1.ClusterVariable{
 					{
 						Name:  "location",
@@ -354,11 +386,13 @@ func TestGlobal(t *testing.T) {
 					UID:       types.UID(clusterUID),
 				},
 				Spec: clusterv1.ClusterSpec{
-					Topology: &clusterv1.Topology{
-						Class:   "clusterClass1",
+					Topology: clusterv1.Topology{
+						ClassRef: clusterv1.ClusterClassRef{
+							Name: "clusterClass1",
+						},
 						Version: "v1.21.1",
 					},
-					ClusterNetwork: nil,
+					ClusterNetwork: clusterv1.ClusterNetwork{},
 				},
 			},
 			want: []runtimehooksv1.Variable{
@@ -379,7 +413,12 @@ func TestGlobal(t *testing.T) {
 						"uid": "8a35f406-6b9b-4b78-8c93-a7f878d90623",
   						"topology":{
 							"version": "v1.21.1",
-   						 	"class": "clusterClass1"
+							"classRef": {
+								"name": "clusterClass1",
+								"namespace": "default"
+							},
+							"class": "clusterClass1",
+							"classNamespace": "default"
 						}
 					}}`),
 				},
@@ -411,7 +450,7 @@ func TestControlPlane(t *testing.T) {
 			variableDefinitionsForPatch: map[string]bool{"location": true, "cpu": true},
 			controlPlaneTopology: &clusterv1.ControlPlaneTopology{
 				Replicas: ptr.To[int32](3),
-				Variables: &clusterv1.ControlPlaneVariables{
+				Variables: clusterv1.ControlPlaneVariables{
 					Overrides: []clusterv1.ClusterVariable{
 						{
 							Name:  "location",
@@ -428,7 +467,11 @@ func TestControlPlane(t *testing.T) {
 				WithReplicas(3).
 				WithVersion("v1.21.1").
 				WithLabels(map[string]string{"foo": "bar"}).
-				WithAnnotations(map[string]string{"fizz": "buzz"}).
+				WithAnnotations(map[string]string{
+					"fizz":                             "buzz",
+					corev1.LastAppliedConfigAnnotation: "should not be copied to builtin variables",
+					conversionutil.DataAnnotation:      "should not be copied to builtin variables",
+				}).
 				Build(),
 			want: []runtimehooksv1.Variable{
 				{
@@ -456,7 +499,7 @@ func TestControlPlane(t *testing.T) {
 			variableDefinitionsForPatch: map[string]bool{"location": true, "cpu": true},
 			controlPlaneTopology: &clusterv1.ControlPlaneTopology{
 				Replicas: ptr.To[int32](3),
-				Variables: &clusterv1.ControlPlaneVariables{
+				Variables: clusterv1.ControlPlaneVariables{
 					Overrides: []clusterv1.ClusterVariable{
 						{
 							Name:  "location",
@@ -526,7 +569,7 @@ func TestControlPlane(t *testing.T) {
 			name:                        "Should calculate ControlPlane variables, replicas not set",
 			variableDefinitionsForPatch: map[string]bool{"location": true, "cpu": true},
 			controlPlaneTopology: &clusterv1.ControlPlaneTopology{
-				Variables: &clusterv1.ControlPlaneVariables{
+				Variables: clusterv1.ControlPlaneVariables{
 					Overrides: []clusterv1.ClusterVariable{
 						{
 							Name:  "location",
@@ -566,7 +609,7 @@ func TestControlPlane(t *testing.T) {
 			variableDefinitionsForPatch: map[string]bool{"location": true, "cpu": true},
 			controlPlaneTopology: &clusterv1.ControlPlaneTopology{
 				Replicas: ptr.To[int32](3),
-				Variables: &clusterv1.ControlPlaneVariables{
+				Variables: clusterv1.ControlPlaneVariables{
 					Overrides: []clusterv1.ClusterVariable{
 						{
 							Name:  "location",
@@ -639,7 +682,7 @@ func TestMachineDeployment(t *testing.T) {
 				Replicas: ptr.To[int32](3),
 				Name:     "md-topology",
 				Class:    "md-class",
-				Variables: &clusterv1.MachineDeploymentVariables{
+				Variables: clusterv1.MachineDeploymentVariables{
 					Overrides: []clusterv1.ClusterVariable{
 						{
 							Name:  "location",
@@ -656,7 +699,11 @@ func TestMachineDeployment(t *testing.T) {
 				WithReplicas(3).
 				WithVersion("v1.21.1").
 				WithLabels(map[string]string{"foo": "bar"}).
-				WithAnnotations(map[string]string{"fizz": "buzz"}).
+				WithAnnotations(map[string]string{
+					"fizz":                             "buzz",
+					corev1.LastAppliedConfigAnnotation: "should not be copied to builtin variables",
+					conversionutil.DataAnnotation:      "should not be copied to builtin variables",
+				}).
 				Build(),
 			want: []runtimehooksv1.Variable{
 				{
@@ -691,7 +738,7 @@ func TestMachineDeployment(t *testing.T) {
 				Replicas: ptr.To[int32](3),
 				Name:     "md-topology",
 				Class:    "md-class",
-				Variables: &clusterv1.MachineDeploymentVariables{
+				Variables: clusterv1.MachineDeploymentVariables{
 					Overrides: []clusterv1.ClusterVariable{
 						{
 							Name:  "location",
@@ -767,7 +814,7 @@ func TestMachineDeployment(t *testing.T) {
 			mdTopology: &clusterv1.MachineDeploymentTopology{
 				Name:  "md-topology",
 				Class: "md-class",
-				Variables: &clusterv1.MachineDeploymentVariables{
+				Variables: clusterv1.MachineDeploymentVariables{
 					Overrides: []clusterv1.ClusterVariable{
 						{
 							Name:  "location",
@@ -811,7 +858,7 @@ func TestMachineDeployment(t *testing.T) {
 				Replicas: ptr.To[int32](3),
 				Name:     "md-topology",
 				Class:    "md-class",
-				Variables: &clusterv1.MachineDeploymentVariables{
+				Variables: clusterv1.MachineDeploymentVariables{
 					Overrides: []clusterv1.ClusterVariable{
 						{
 							Name:  "location",
@@ -863,7 +910,7 @@ func TestMachineDeployment(t *testing.T) {
 				Replicas: ptr.To[int32](3),
 				Name:     "md-topology",
 				Class:    "md-class",
-				Variables: &clusterv1.MachineDeploymentVariables{
+				Variables: clusterv1.MachineDeploymentVariables{
 					Overrides: []clusterv1.ClusterVariable{
 						{
 							Name:  "location",
@@ -913,7 +960,7 @@ func TestMachineDeployment(t *testing.T) {
 				Replicas: ptr.To[int32](3),
 				Name:     "md-topology",
 				Class:    "md-class",
-				Variables: &clusterv1.MachineDeploymentVariables{
+				Variables: clusterv1.MachineDeploymentVariables{
 					Overrides: []clusterv1.ClusterVariable{
 						{
 							Name:  "location",
@@ -979,7 +1026,7 @@ func TestMachinePool(t *testing.T) {
 		name                        string
 		mpTopology                  *clusterv1.MachinePoolTopology
 		variableDefinitionsForPatch map[string]bool
-		mp                          *expv1.MachinePool
+		mp                          *clusterv1.MachinePool
 		mpBootstrapConfig           *unstructured.Unstructured
 		mpInfrastructureMachinePool *unstructured.Unstructured
 		want                        []runtimehooksv1.Variable
@@ -991,7 +1038,7 @@ func TestMachinePool(t *testing.T) {
 				Replicas: ptr.To[int32](3),
 				Name:     "mp-topology",
 				Class:    "mp-class",
-				Variables: &clusterv1.MachinePoolVariables{
+				Variables: clusterv1.MachinePoolVariables{
 					Overrides: []clusterv1.ClusterVariable{
 						{
 							Name:  "location",
@@ -1008,7 +1055,11 @@ func TestMachinePool(t *testing.T) {
 				WithReplicas(3).
 				WithVersion("v1.21.1").
 				WithLabels(map[string]string{"foo": "bar"}).
-				WithAnnotations(map[string]string{"fizz": "buzz"}).
+				WithAnnotations(map[string]string{
+					"fizz":                             "buzz",
+					corev1.LastAppliedConfigAnnotation: "should not be copied to builtin variables",
+					conversionutil.DataAnnotation:      "should not be copied to builtin variables",
+				}).
 				Build(),
 			want: []runtimehooksv1.Variable{
 				{
@@ -1043,7 +1094,7 @@ func TestMachinePool(t *testing.T) {
 				Replicas: ptr.To[int32](3),
 				Name:     "mp-topology",
 				Class:    "mp-class",
-				Variables: &clusterv1.MachinePoolVariables{
+				Variables: clusterv1.MachinePoolVariables{
 					Overrides: []clusterv1.ClusterVariable{
 						{
 							Name:  "location",
@@ -1119,7 +1170,7 @@ func TestMachinePool(t *testing.T) {
 			mpTopology: &clusterv1.MachinePoolTopology{
 				Name:  "mp-topology",
 				Class: "mp-class",
-				Variables: &clusterv1.MachinePoolVariables{
+				Variables: clusterv1.MachinePoolVariables{
 					Overrides: []clusterv1.ClusterVariable{
 						{
 							Name:  "location",
@@ -1163,7 +1214,7 @@ func TestMachinePool(t *testing.T) {
 				Replicas: ptr.To[int32](3),
 				Name:     "mp-topology",
 				Class:    "mp-class",
-				Variables: &clusterv1.MachinePoolVariables{
+				Variables: clusterv1.MachinePoolVariables{
 					Overrides: []clusterv1.ClusterVariable{
 						{
 							Name:  "location",
@@ -1215,7 +1266,7 @@ func TestMachinePool(t *testing.T) {
 				Replicas: ptr.To[int32](3),
 				Name:     "mp-topology",
 				Class:    "mp-class",
-				Variables: &clusterv1.MachinePoolVariables{
+				Variables: clusterv1.MachinePoolVariables{
 					Overrides: []clusterv1.ClusterVariable{
 						{
 							Name:  "location",
@@ -1265,7 +1316,7 @@ func TestMachinePool(t *testing.T) {
 				Replicas: ptr.To[int32](3),
 				Name:     "mp-topology",
 				Class:    "mp-class",
-				Variables: &clusterv1.MachinePoolVariables{
+				Variables: clusterv1.MachinePoolVariables{
 					Overrides: []clusterv1.ClusterVariable{
 						{
 							Name:  "location",

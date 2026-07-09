@@ -20,22 +20,27 @@ import (
 	"context"
 	"time"
 
+	"go.uber.org/zap"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 
 	"sigs.k8s.io/cluster-api/controllers/clustercache"
 	kubeadmcontrolplanecontrollers "sigs.k8s.io/cluster-api/controlplane/kubeadm/internal/controllers"
+	runtimeclient "sigs.k8s.io/cluster-api/exp/runtime/client"
 )
 
 // KubeadmControlPlaneReconciler reconciles a KubeadmControlPlane object.
 type KubeadmControlPlaneReconciler struct {
 	Client              client.Client
+	APIReader           client.Reader
 	SecretCachingClient client.Client
+	RuntimeClient       runtimeclient.Client
 	ClusterCache        clustercache.ClusterCache
 
 	EtcdDialTimeout time.Duration
 	EtcdCallTimeout time.Duration
+	EtcdLogger      *zap.Logger
 
 	// WatchFilterValue is the label value used to filter events prior to reconciliation.
 	WatchFilterValue string
@@ -47,10 +52,13 @@ type KubeadmControlPlaneReconciler struct {
 func (r *KubeadmControlPlaneReconciler) SetupWithManager(ctx context.Context, mgr ctrl.Manager, options controller.Options) error {
 	return (&kubeadmcontrolplanecontrollers.KubeadmControlPlaneReconciler{
 		Client:                      r.Client,
+		APIReader:                   r.APIReader,
 		SecretCachingClient:         r.SecretCachingClient,
+		RuntimeClient:               r.RuntimeClient,
 		ClusterCache:                r.ClusterCache,
 		EtcdDialTimeout:             r.EtcdDialTimeout,
 		EtcdCallTimeout:             r.EtcdCallTimeout,
+		EtcdLogger:                  r.EtcdLogger,
 		WatchFilterValue:            r.WatchFilterValue,
 		RemoteConditionsGracePeriod: r.RemoteConditionsGracePeriod,
 	}).SetupWithManager(ctx, mgr, options)

@@ -17,33 +17,41 @@ limitations under the License.
 package cluster
 
 import (
+	"encoding/json"
 	"fmt"
+	"maps"
 	"testing"
 	"time"
 
+	"github.com/google/go-cmp/cmp"
 	. "github.com/onsi/gomega"
+	"github.com/pkg/errors"
 	corev1 "k8s.io/api/core/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	utilfeature "k8s.io/component-base/featuregate/testing"
+	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
-	expv1 "sigs.k8s.io/cluster-api/exp/api/v1beta1"
-	runtimev1 "sigs.k8s.io/cluster-api/exp/runtime/api/v1alpha1"
-	runtimecatalog "sigs.k8s.io/cluster-api/exp/runtime/catalog"
-	runtimehooksv1 "sigs.k8s.io/cluster-api/exp/runtime/hooks/api/v1alpha1"
+	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
+	runtimecatalog "sigs.k8s.io/cluster-api/api/runtime/catalog"
+	runtimehooksv1 "sigs.k8s.io/cluster-api/api/runtime/hooks/v1alpha1"
+	runtimev1 "sigs.k8s.io/cluster-api/api/runtime/v1beta2"
+	"sigs.k8s.io/cluster-api/controllers/external"
 	"sigs.k8s.io/cluster-api/exp/topology/scope"
 	"sigs.k8s.io/cluster-api/feature"
 	"sigs.k8s.io/cluster-api/internal/contract"
 	"sigs.k8s.io/cluster-api/internal/hooks"
 	fakeruntimeclient "sigs.k8s.io/cluster-api/internal/runtime/client/fake"
+	"sigs.k8s.io/cluster-api/util/cache"
 	"sigs.k8s.io/cluster-api/util/conditions"
+	conversionutil "sigs.k8s.io/cluster-api/util/conversion"
 	"sigs.k8s.io/cluster-api/util/kubeconfig"
 	"sigs.k8s.io/cluster-api/util/patch"
 	"sigs.k8s.io/cluster-api/util/test/builder"
@@ -80,9 +88,9 @@ func TestClusterReconciler_reconcileNewlyCreatedCluster(t *testing.T) {
 		g.Expect(cleanup()).To(Succeed())
 	}()
 
+	actualCluster := &clusterv1.Cluster{}
 	g.Eventually(func(g Gomega) error {
 		// Get the cluster object.
-		actualCluster := &clusterv1.Cluster{}
 		if err := env.GetAPIReader().Get(ctx, client.ObjectKey{Name: clusterName1, Namespace: ns.Name}, actualCluster); err != nil {
 			return err
 		}
@@ -106,6 +114,55 @@ func TestClusterReconciler_reconcileNewlyCreatedCluster(t *testing.T) {
 		g.Expect(assertClusterTopologyReconciledCondition(actualCluster)).Should(Succeed())
 
 		return nil
+	}, timeout).Should(Succeed())
+
+	s := scope.New(actualCluster)
+	r := &Reconciler{
+		Client: env.GetClient(),
+	}
+	cc := &clusterv1.ClusterClass{}
+	g.Expect(env.GetAPIReader().Get(ctx, actualCluster.GetClassKey(), cc)).To(Succeed())
+	s.Blueprint, err = r.getBlueprint(ctx, actualCluster, cc)
+	g.Expect(err).ToNot(HaveOccurred())
+	s.Current, err = r.getCurrentState(ctx, s)
+	g.Expect(err).ToNot(HaveOccurred())
+
+	//
+	// Verify managedField mitigation (purge managedFields and verify they are re-added)
+	//
+	objects := []client.Object{
+		s.Current.Cluster,
+		s.Current.InfrastructureCluster,
+		s.Current.ControlPlane.Object,
+		s.Current.ControlPlane.InfrastructureMachineTemplate,
+	}
+	for _, md := range s.Current.MachineDeployments {
+		objects = append(objects, md.Object, // TODO: MHC omitted for now as this test does not use MHC
+			md.InfrastructureMachineTemplate, md.BootstrapTemplate)
+	}
+	for _, mp := range s.Current.MachinePools {
+		objects = append(objects, mp.Object,
+			mp.InfrastructureMachinePoolObject, mp.BootstrapObject)
+	}
+	jsonPatch := []map[string]interface{}{
+		{
+			"op":    "replace",
+			"path":  "/metadata/managedFields",
+			"value": []metav1.ManagedFieldsEntry{{}},
+		},
+	}
+	patch, err := json.Marshal(jsonPatch)
+	g.Expect(err).ToNot(HaveOccurred())
+	for _, object := range objects {
+		g.Expect(env.Client.Patch(ctx, object, client.RawPatch(types.JSONPatchType, patch))).To(Succeed())
+		g.Expect(object.GetManagedFields()).To(BeEmpty())
+	}
+
+	g.Eventually(func(g Gomega) {
+		for _, object := range objects {
+			g.Expect(env.GetAPIReader().Get(ctx, client.ObjectKeyFromObject(object), object)).To(Succeed())
+			g.Expect(object.GetManagedFields()).ToNot(BeEmpty())
+		}
 	}, timeout).Should(Succeed())
 }
 
@@ -309,9 +366,9 @@ func TestClusterReconciler_reconcileUpdatesOnClusterClass(t *testing.T) {
 	patchHelper, err := patch.NewHelper(clusterClass, env.Client)
 	g.Expect(err).ToNot(HaveOccurred())
 	// Change the infrastructureMachineTemplateName for the first of our MachineDeployments and update in the API.
-	clusterClass.Spec.Workers.MachineDeployments[0].Template.Infrastructure.Ref.Name = infrastructureMachineTemplateName2
+	clusterClass.Spec.Workers.MachineDeployments[0].Infrastructure.TemplateRef.Name = infrastructureMachineTemplateName2
 	// Change the infrastructureMachinePoolTemplateName for the first of our MachinePools and update in the API.
-	clusterClass.Spec.Workers.MachinePools[0].Template.Infrastructure.Ref.Name = infrastructureMachinePoolTemplateName2
+	clusterClass.Spec.Workers.MachinePools[0].Infrastructure.TemplateRef.Name = infrastructureMachinePoolTemplateName2
 	g.Expect(patchHelper.Patch(ctx, clusterClass)).To(Succeed())
 
 	g.Eventually(func(g Gomega) error {
@@ -319,8 +376,8 @@ func TestClusterReconciler_reconcileUpdatesOnClusterClass(t *testing.T) {
 		// This is necessary as sometimes the cache can take a little time to update.
 		class := &clusterv1.ClusterClass{}
 		g.Expect(env.Get(ctx, actualCluster.GetClassKey(), class)).To(Succeed())
-		g.Expect(class.Spec.Workers.MachineDeployments[0].Template.Infrastructure.Ref.Name).To(Equal(infrastructureMachineTemplateName2))
-		g.Expect(class.Spec.Workers.MachinePools[0].Template.Infrastructure.Ref.Name).To(Equal(infrastructureMachinePoolTemplateName2))
+		g.Expect(class.Spec.Workers.MachineDeployments[0].Infrastructure.TemplateRef.Name).To(Equal(infrastructureMachineTemplateName2))
+		g.Expect(class.Spec.Workers.MachinePools[0].Infrastructure.TemplateRef.Name).To(Equal(infrastructureMachinePoolTemplateName2))
 
 		// For each cluster check that the clusterClass changes have been correctly reconciled.
 		for _, name := range []string{clusterName1, clusterName2} {
@@ -402,7 +459,7 @@ func TestClusterReconciler_reconcileClusterClassRebase(t *testing.T) {
 	g.Expect(err).ToNot(HaveOccurred())
 	// Change the ClusterClass pointed to in the Cluster's Topology. This is a ClusterClass rebase operation.
 	clusterWithRebase := actualCluster.DeepCopy()
-	clusterWithRebase.Spec.Topology.Class = clusterClassName2
+	clusterWithRebase.Spec.Topology.ClassRef.Name = clusterClassName2
 	g.Expect(patchHelper.Patch(ctx, clusterWithRebase)).Should(Succeed())
 
 	// Check to ensure all objects are correctly reconciled with the new ClusterClass.
@@ -448,7 +505,8 @@ func TestClusterReconciler_reconcileDelete(t *testing.T) {
 		CommonRetryResponse: runtimehooksv1.CommonRetryResponse{
 			RetryAfterSeconds: int32(10),
 			CommonResponse: runtimehooksv1.CommonResponse{
-				Status: runtimehooksv1.ResponseStatusSuccess,
+				Status:  runtimehooksv1.ResponseStatusSuccess,
+				Message: "hook is blocking",
 			},
 		},
 	}
@@ -476,6 +534,7 @@ func TestClusterReconciler_reconcileDelete(t *testing.T) {
 		wantResult         ctrl.Result
 		wantOkToDelete     bool
 		wantErr            bool
+		wantHookCacheEntry *cache.HookEntry
 	}{
 		{
 			name: "should apply the ok-to-delete annotation if the BeforeClusterDelete hook returns a non-blocking response",
@@ -485,7 +544,7 @@ func TestClusterReconciler_reconcileDelete(t *testing.T) {
 					Namespace: "test-ns",
 				},
 				Spec: clusterv1.ClusterSpec{
-					Topology: &clusterv1.Topology{},
+					Topology: clusterv1.Topology{},
 				},
 			},
 			hookResponse:       nonBlockingResponse,
@@ -502,7 +561,7 @@ func TestClusterReconciler_reconcileDelete(t *testing.T) {
 					Namespace: "test-ns",
 				},
 				Spec: clusterv1.ClusterSpec{
-					Topology: &clusterv1.Topology{},
+					Topology: clusterv1.Topology{},
 				},
 			},
 			hookResponse:       blockingResponse,
@@ -510,6 +569,13 @@ func TestClusterReconciler_reconcileDelete(t *testing.T) {
 			wantHookToBeCalled: true,
 			wantOkToDelete:     false,
 			wantErr:            false,
+			wantHookCacheEntry: ptr.To(cache.NewHookEntry(&clusterv1.Cluster{
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace: "test-ns",
+					Name:      "test-cluster",
+				},
+			}, runtimehooksv1.BeforeClusterDelete,
+				time.Now().Add(time.Duration(blockingResponse.RetryAfterSeconds)*time.Second), blockingResponse.Message)),
 		},
 		{
 			name: "should fail if the BeforeClusterDelete hook returns a failure response",
@@ -519,7 +585,7 @@ func TestClusterReconciler_reconcileDelete(t *testing.T) {
 					Namespace: "test-ns",
 				},
 				Spec: clusterv1.ClusterSpec{
-					Topology: &clusterv1.Topology{},
+					Topology: clusterv1.Topology{},
 				},
 			},
 			hookResponse:       failureResponse,
@@ -540,7 +606,7 @@ func TestClusterReconciler_reconcileDelete(t *testing.T) {
 					},
 				},
 				Spec: clusterv1.ClusterSpec{
-					Topology: &clusterv1.Topology{},
+					Topology: clusterv1.Topology{},
 				},
 			},
 			// Using a blocking response here should not matter as the hook should never be called.
@@ -557,11 +623,31 @@ func TestClusterReconciler_reconcileDelete(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			g := NewWithT(t)
 
+			// Add managedFields and annotations that should be cleaned up before the Cluster is sent to the RuntimeExtension.
+			tt.cluster.SetManagedFields([]metav1.ManagedFieldsEntry{
+				{
+					APIVersion: builder.InfrastructureGroupVersion.String(),
+					Manager:    "manager",
+					Operation:  "Apply",
+					Time:       ptr.To(metav1.Now()),
+					FieldsType: "FieldsV1",
+				},
+			})
+			if tt.cluster.Annotations == nil {
+				tt.cluster.Annotations = map[string]string{}
+			}
+			tt.cluster.Annotations[corev1.LastAppliedConfigAnnotation] = "should be cleaned up"
+			tt.cluster.Annotations[conversionutil.DataAnnotation] = "should be cleaned up"
+
 			fakeClient := fake.NewClientBuilder().WithObjects(tt.cluster).Build()
-			fakeRuntimeClient := fakeruntimeclient.NewRuntimeClientBuilder().
+			fakeRuntimeClient := (fakeruntimeclient.NewRuntimeClientBuilder().
+				WithGetAllExtensionResponses(map[runtimecatalog.GroupVersionHook][]string{
+					beforeClusterDeleteGVH: {"foo"},
+				})).
 				WithCallAllExtensionResponses(map[runtimecatalog.GroupVersionHook]runtimehooksv1.ResponseObject{
 					beforeClusterDeleteGVH: tt.hookResponse,
 				}).
+				WithCallAllExtensionValidations(validateClusterParameter(tt.cluster)).
 				WithCatalog(catalog).
 				Build()
 
@@ -569,9 +655,12 @@ func TestClusterReconciler_reconcileDelete(t *testing.T) {
 				Client:        fakeClient,
 				APIReader:     fakeClient,
 				RuntimeClient: fakeRuntimeClient,
+				hookCache:     cache.New[cache.HookEntry](ctx, cache.HookCacheDefaultTTL),
 			}
 
-			res, err := r.reconcileDelete(ctx, tt.cluster)
+			s := scope.New(tt.cluster)
+
+			res, err := r.reconcileDelete(ctx, s)
 			if tt.wantErr {
 				g.Expect(err).To(HaveOccurred())
 			} else {
@@ -581,9 +670,35 @@ func TestClusterReconciler_reconcileDelete(t *testing.T) {
 
 				if tt.wantHookToBeCalled {
 					g.Expect(fakeRuntimeClient.CallAllCount(runtimehooksv1.BeforeClusterDelete)).To(Equal(1), "Expected hook to be called once")
+					if !tt.wantOkToDelete {
+						g.Expect(s.HookResponseTracker.AggregateRetryAfter()).ToNot(BeZero())
+						g.Expect(s.HookResponseTracker.AggregateMessage("delete")).To(Equal("Following hooks are blocking delete: BeforeClusterDelete: hook is blocking"))
+					}
 				} else {
 					g.Expect(fakeRuntimeClient.CallAllCount(runtimehooksv1.BeforeClusterDelete)).To(Equal(0), "Did not expect hook to be called")
 				}
+			}
+
+			if tt.wantHookCacheEntry != nil {
+				// Verify the cache entry.
+				cacheEntry, ok := r.hookCache.Has(tt.wantHookCacheEntry.Key())
+				g.Expect(ok).To(BeTrue())
+				g.Expect(cacheEntry.ObjectKey).To(Equal(tt.wantHookCacheEntry.ObjectKey))
+				g.Expect(cacheEntry.HookName).To(Equal(tt.wantHookCacheEntry.HookName))
+				g.Expect(cacheEntry.ReconcileAfter).To(BeTemporally("~", tt.wantHookCacheEntry.ReconcileAfter, 5*time.Second))
+				g.Expect(cacheEntry.ResponseMessage).To(Equal(tt.wantHookCacheEntry.ResponseMessage))
+
+				// Call reconcileDelete again and verify the cache hit.
+				g.Expect(fakeRuntimeClient.CallAllCount(runtimehooksv1.BeforeClusterDelete)).To(Equal(1))
+				secondResult, err := r.reconcileDelete(ctx, s)
+				g.Expect(err).ToNot(HaveOccurred())
+				g.Expect(fakeRuntimeClient.CallAllCount(runtimehooksv1.BeforeClusterDelete)).To(Equal(1))
+				g.Expect(s.HookResponseTracker.AggregateMessage("delete")).To(Equal(
+					fmt.Sprintf("Following hooks are blocking delete: BeforeClusterDelete: %s", tt.wantHookCacheEntry.ResponseMessage)))
+				// RequeueAfter should be now < then the previous RequeueAfter.
+				g.Expect(secondResult.RequeueAfter).To(BeNumerically("<", res.RequeueAfter))
+			} else {
+				g.Expect(r.hookCache.Len()).To(Equal(0))
 			}
 		})
 	}
@@ -656,7 +771,8 @@ func TestReconciler_callBeforeClusterCreateHook(t *testing.T) {
 	blockingResponse := &runtimehooksv1.BeforeClusterCreateResponse{
 		CommonRetryResponse: runtimehooksv1.CommonRetryResponse{
 			CommonResponse: runtimehooksv1.CommonResponse{
-				Status: runtimehooksv1.ResponseStatusSuccess,
+				Status:  runtimehooksv1.ResponseStatusSuccess,
+				Message: "processing",
 			},
 			RetryAfterSeconds: int32(10),
 		},
@@ -678,16 +794,24 @@ func TestReconciler_callBeforeClusterCreateHook(t *testing.T) {
 	}
 
 	tests := []struct {
-		name         string
-		hookResponse *runtimehooksv1.BeforeClusterCreateResponse
-		wantResult   reconcile.Result
-		wantErr      bool
+		name               string
+		hookResponse       *runtimehooksv1.BeforeClusterCreateResponse
+		wantResult         reconcile.Result
+		wantErr            bool
+		wantHookCacheEntry *cache.HookEntry
 	}{
 		{
 			name:         "should return a requeue response when the BeforeClusterCreate hook is blocking",
 			hookResponse: blockingResponse,
 			wantResult:   ctrl.Result{RequeueAfter: time.Duration(10) * time.Second},
 			wantErr:      false,
+			wantHookCacheEntry: ptr.To(cache.NewHookEntry(&clusterv1.Cluster{
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace: metav1.NamespaceDefault,
+					Name:      "cluster-1",
+				},
+			}, runtimehooksv1.BeforeClusterCreate,
+				time.Now().Add(time.Duration(blockingResponse.RetryAfterSeconds)*time.Second), blockingResponse.Message)),
 		},
 		{
 			name:         "should return an empty response when the BeforeClusterCreate hook is not blocking",
@@ -706,22 +830,48 @@ func TestReconciler_callBeforeClusterCreateHook(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			g := NewWithT(t)
+			s := &scope.Scope{
+				Current: &scope.ClusterState{
+					Cluster: &clusterv1.Cluster{
+						ObjectMeta: metav1.ObjectMeta{
+							Namespace: metav1.NamespaceDefault,
+							Name:      "cluster-1",
+							// Add managedFields and annotations that should be cleaned up before the Cluster is sent to the RuntimeExtension.
+							ManagedFields: []metav1.ManagedFieldsEntry{
+								{
+									APIVersion: builder.InfrastructureGroupVersion.String(),
+									Manager:    "manager",
+									Operation:  "Apply",
+									Time:       ptr.To(metav1.Now()),
+									FieldsType: "FieldsV1",
+								},
+							},
+							Annotations: map[string]string{
+								"fizz":                             "buzz",
+								corev1.LastAppliedConfigAnnotation: "should be cleaned up",
+								conversionutil.DataAnnotation:      "should be cleaned up",
+							},
+						},
+					},
+				},
+				HookResponseTracker: scope.NewHookResponseTracker(),
+			}
 
 			runtimeClient := fakeruntimeclient.NewRuntimeClientBuilder().
 				WithCatalog(catalog).
+				WithGetAllExtensionResponses(map[runtimecatalog.GroupVersionHook][]string{
+					gvh: {"foo"},
+				}).
 				WithCallAllExtensionResponses(map[runtimecatalog.GroupVersionHook]runtimehooksv1.ResponseObject{
 					gvh: tt.hookResponse,
 				}).
+				WithCallAllExtensionValidations(validateClusterParameter(s.Current.Cluster)).
 				Build()
 
 			r := &Reconciler{
 				RuntimeClient: runtimeClient,
-			}
-			s := &scope.Scope{
-				Current: &scope.ClusterState{
-					Cluster: &clusterv1.Cluster{},
-				},
-				HookResponseTracker: scope.NewHookResponseTracker(),
+				Client:        fake.NewClientBuilder().WithScheme(fakeScheme).WithObjects(s.Current.Cluster).Build(),
+				hookCache:     cache.New[cache.HookEntry](ctx, cache.HookCacheDefaultTTL),
 			}
 			res, err := r.callBeforeClusterCreateHook(ctx, s)
 			if tt.wantErr {
@@ -729,6 +879,28 @@ func TestReconciler_callBeforeClusterCreateHook(t *testing.T) {
 			} else {
 				g.Expect(err).ToNot(HaveOccurred())
 				g.Expect(res).To(BeComparableTo(tt.wantResult))
+			}
+
+			if tt.wantHookCacheEntry != nil {
+				// Verify the cache entry.
+				cacheEntry, ok := r.hookCache.Has(tt.wantHookCacheEntry.Key())
+				g.Expect(ok).To(BeTrue())
+				g.Expect(cacheEntry.ObjectKey).To(Equal(tt.wantHookCacheEntry.ObjectKey))
+				g.Expect(cacheEntry.HookName).To(Equal(tt.wantHookCacheEntry.HookName))
+				g.Expect(cacheEntry.ReconcileAfter).To(BeTemporally("~", tt.wantHookCacheEntry.ReconcileAfter, 5*time.Second))
+				g.Expect(cacheEntry.ResponseMessage).To(Equal(tt.wantHookCacheEntry.ResponseMessage))
+
+				// Call callBeforeClusterCreateHook again and verify the cache hit.
+				g.Expect(runtimeClient.CallAllCount(runtimehooksv1.BeforeClusterCreate)).To(Equal(1))
+				secondResult, err := r.callBeforeClusterCreateHook(ctx, s)
+				g.Expect(err).ToNot(HaveOccurred())
+				g.Expect(runtimeClient.CallAllCount(runtimehooksv1.BeforeClusterCreate)).To(Equal(1))
+				g.Expect(s.HookResponseTracker.AggregateMessage("Cluster topology creation")).To(Equal(
+					fmt.Sprintf("Following hooks are blocking Cluster topology creation: BeforeClusterCreate: %s", tt.wantHookCacheEntry.ResponseMessage)))
+				// RequeueAfter should be now < then the previous RequeueAfter.
+				g.Expect(secondResult.RequeueAfter).To(BeNumerically("<", res.RequeueAfter))
+			} else {
+				g.Expect(r.hookCache.Len()).To(Equal(0))
 			}
 		})
 	}
@@ -764,7 +936,6 @@ func setupTestEnvForIntegrationTests(ns *corev1.Namespace) (func() error, error)
 		WithSpecFields(map[string]interface{}{"spec.template.spec.alteredSetting": true}).
 		Build()
 	controlPlaneTemplate := builder.TestControlPlaneTemplate(ns.Name, "cp1").
-		WithInfrastructureMachineTemplate(infrastructureMachineTemplate1).
 		Build()
 	bootstrapTemplate := builder.TestBootstrapTemplate(ns.Name, "bootstraptemplate").Build()
 
@@ -877,8 +1048,8 @@ func setupTestEnvForIntegrationTests(ns *corev1.Namespace) (func() error, error)
 	cluster1Secret := kubeconfig.GenerateSecret(cluster1, kubeconfig.FromEnvTestConfig(env.Config, cluster1))
 	cluster2Secret := kubeconfig.GenerateSecret(cluster2, kubeconfig.FromEnvTestConfig(env.Config, cluster2))
 	// Unset the ownerrefs otherwise they are invalid because they contain an empty uid.
-	cluster1Secret.ObjectMeta.OwnerReferences = nil
-	cluster2Secret.ObjectMeta.OwnerReferences = nil
+	cluster1Secret.OwnerReferences = nil
+	cluster2Secret.OwnerReferences = nil
 
 	// Create a set of setupTestEnvForIntegrationTests from the objects above to add to the API server when the test environment starts.
 	// The objects are created for every test, though some e.g. infrastructureMachineTemplate2 may not be used in every test.
@@ -916,12 +1087,12 @@ func setupTestEnvForIntegrationTests(ns *corev1.Namespace) (func() error, error)
 	}
 	// Set InfrastructureReady to true so ClusterCache creates the clusterAccessors.
 	patch := client.MergeFrom(cluster1.DeepCopy())
-	cluster1.Status.InfrastructureReady = true
+	cluster1.Status.Initialization.InfrastructureProvisioned = ptr.To(true)
 	if err := env.Status().Patch(ctx, cluster1, patch); err != nil {
 		return nil, err
 	}
 	patch = client.MergeFrom(cluster2.DeepCopy())
-	cluster2.Status.InfrastructureReady = true
+	cluster2.Status.Initialization.InfrastructureProvisioned = ptr.To(true)
 	if err := env.Status().Patch(ctx, cluster2, patch); err != nil {
 		return nil, err
 	}
@@ -930,7 +1101,7 @@ func setupTestEnvForIntegrationTests(ns *corev1.Namespace) (func() error, error)
 }
 
 func assertClusterTopologyReconciledCondition(cluster *clusterv1.Cluster) error {
-	if !conditions.Has(cluster, clusterv1.TopologyReconciledCondition) {
+	if !conditions.Has(cluster, clusterv1.ClusterTopologyReconciledCondition) {
 		return fmt.Errorf("cluster should have the TopologyReconciled condition set")
 	}
 	return nil
@@ -946,23 +1117,23 @@ func assertClusterReconcile(cluster *clusterv1.Cluster) error {
 	}
 
 	// Check if InfrastructureRef exists and is of the expected Kind and APIVersion.
-	if err := referenceExistsWithCorrectKindAndAPIVersion(cluster.Spec.InfrastructureRef,
+	if err := referenceExistsWithCorrectKindAndAPIGroup(cluster.Spec.InfrastructureRef,
 		builder.TestInfrastructureClusterKind,
-		builder.InfrastructureGroupVersion); err != nil {
+		builder.InfrastructureGroupVersion.Group); err != nil {
 		return err
 	}
 
 	// Check if ControlPlaneRef exists is of the expected Kind and APIVersion.
-	return referenceExistsWithCorrectKindAndAPIVersion(cluster.Spec.ControlPlaneRef,
+	return referenceExistsWithCorrectKindAndAPIGroup(cluster.Spec.ControlPlaneRef,
 		builder.TestControlPlaneKind,
-		builder.ControlPlaneGroupVersion)
+		builder.ControlPlaneGroupVersion.Group)
 }
 
 // assertInfrastructureClusterReconcile checks if the infrastructureCluster object:
 // 1) Is created.
 // 2) Has the correct labels and annotations.
 func assertInfrastructureClusterReconcile(cluster *clusterv1.Cluster) error {
-	_, err := getAndAssertLabelsAndAnnotations(*cluster.Spec.InfrastructureRef, cluster.Name)
+	_, err := getAndAssertLabelsAndAnnotations(cluster.Spec.InfrastructureRef, cluster.Name, cluster.Namespace)
 	return err
 }
 
@@ -973,7 +1144,7 @@ func assertInfrastructureClusterReconcile(cluster *clusterv1.Cluster) error {
 //     i) That the infrastructureMachineTemplate is created correctly.
 //     ii) That the infrastructureMachineTemplate has the correct labels and annotations
 func assertControlPlaneReconcile(cluster *clusterv1.Cluster) error {
-	cp, err := getAndAssertLabelsAndAnnotations(*cluster.Spec.ControlPlaneRef, cluster.Name)
+	cp, err := getAndAssertLabelsAndAnnotations(cluster.Spec.ControlPlaneRef, cluster.Name, cluster.Namespace)
 	if err != nil {
 		return err
 	}
@@ -995,8 +1166,8 @@ func assertControlPlaneReconcile(cluster *clusterv1.Cluster) error {
 		}
 
 		// Check for Control Plane replicase if it's set in the Cluster.Spec.Topology
-		if int32(*replicas) != *cluster.Spec.Topology.ControlPlane.Replicas {
-			return fmt.Errorf("replicas %v do not match expected %v", int32(*replicas), *cluster.Spec.Topology.ControlPlane.Replicas)
+		if *replicas != *cluster.Spec.Topology.ControlPlane.Replicas {
+			return fmt.Errorf("replicas %v do not match expected %v", *replicas, *cluster.Spec.Topology.ControlPlane.Replicas)
 		}
 	}
 	clusterClass := &clusterv1.ClusterClass{}
@@ -1004,17 +1175,17 @@ func assertControlPlaneReconcile(cluster *clusterv1.Cluster) error {
 		return err
 	}
 	// Check for the ControlPlaneInfrastructure if it's referenced in the clusterClass.
-	if clusterClass.Spec.ControlPlane.MachineInfrastructure != nil && clusterClass.Spec.ControlPlane.MachineInfrastructure.Ref != nil {
+	if clusterClass.Spec.ControlPlane.MachineInfrastructure.TemplateRef.IsDefined() {
 		cpInfra, err := contract.ControlPlane().MachineTemplate().InfrastructureRef().Get(cp)
 		if err != nil {
 			return err
 		}
-		if err := referenceExistsWithCorrectKindAndAPIVersion(cpInfra,
+		if err := referenceExistsWithCorrectKindAndAPIGroup(*cpInfra,
 			builder.TestInfrastructureMachineTemplateKind,
-			builder.InfrastructureGroupVersion); err != nil {
+			builder.InfrastructureGroupVersion.Group); err != nil {
 			return err
 		}
-		if _, err := getAndAssertLabelsAndAnnotations(*cpInfra, cluster.Name); err != nil {
+		if _, err := getAndAssertLabelsAndAnnotations(*cpInfra, cluster.Name, cluster.Namespace); err != nil {
 			return err
 		}
 	}
@@ -1075,31 +1246,31 @@ func assertMachineDeploymentsReconcile(cluster *clusterv1.Cluster) error {
 			if *md.Spec.Replicas != *topologyMD.Replicas {
 				return fmt.Errorf("replicas %v does not match expected %v", *md.Spec.Replicas, *topologyMD.Replicas)
 			}
-			if *md.Spec.Template.Spec.Version != cluster.Spec.Topology.Version {
-				return fmt.Errorf("version %v does not match expected %v", *md.Spec.Template.Spec.Version, cluster.Spec.Topology.Version)
+			if md.Spec.Template.Spec.Version != cluster.Spec.Topology.Version {
+				return fmt.Errorf("version %v does not match expected %v", md.Spec.Template.Spec.Version, cluster.Spec.Topology.Version)
 			}
 
 			// Check if the InfrastructureReference exists.
-			if err := referenceExistsWithCorrectKindAndAPIVersion(&md.Spec.Template.Spec.InfrastructureRef,
+			if err := referenceExistsWithCorrectKindAndAPIGroup(md.Spec.Template.Spec.InfrastructureRef,
 				builder.TestInfrastructureMachineTemplateKind,
-				builder.InfrastructureGroupVersion); err != nil {
+				builder.InfrastructureGroupVersion.Group); err != nil {
 				return err
 			}
 
 			// Check if the InfrastructureReference has the expected labels and annotations.
-			if _, err := getAndAssertLabelsAndAnnotations(md.Spec.Template.Spec.InfrastructureRef, cluster.Name); err != nil {
+			if _, err := getAndAssertLabelsAndAnnotations(md.Spec.Template.Spec.InfrastructureRef, cluster.Name, md.Namespace); err != nil {
 				return err
 			}
 
 			// Check if the Bootstrap reference has the expected Kind and APIVersion.
-			if err := referenceExistsWithCorrectKindAndAPIVersion(md.Spec.Template.Spec.Bootstrap.ConfigRef,
+			if err := referenceExistsWithCorrectKindAndAPIGroup(md.Spec.Template.Spec.Bootstrap.ConfigRef,
 				builder.TestBootstrapConfigTemplateKind,
-				builder.BootstrapGroupVersion); err != nil {
+				builder.BootstrapGroupVersion.Group); err != nil {
 				return err
 			}
 
 			// Check if the Bootstrap reference has the expected labels and annotations.
-			if _, err := getAndAssertLabelsAndAnnotations(*md.Spec.Template.Spec.Bootstrap.ConfigRef, cluster.Name); err != nil {
+			if _, err := getAndAssertLabelsAndAnnotations(md.Spec.Template.Spec.Bootstrap.ConfigRef, cluster.Name, md.Namespace); err != nil {
 				return err
 			}
 		}
@@ -1114,13 +1285,13 @@ func assertMachineDeploymentsReconcile(cluster *clusterv1.Cluster) error {
 // 4) Have the correct Kind/APIVersion and Labels/Annotations for BoostrapRef and InfrastructureRef templates.
 func assertMachinePoolsReconcile(cluster *clusterv1.Cluster) error {
 	// List all created machine pools to assert the expected numbers are created.
-	machinePools := &expv1.MachinePoolList{}
+	machinePools := &clusterv1.MachinePoolList{}
 	if err := env.List(ctx, machinePools, client.InNamespace(cluster.Namespace)); err != nil {
 		return err
 	}
 
 	// clusterMPs will hold the MachinePools that have labels associating them with the cluster.
-	clusterMPs := []expv1.MachinePool{}
+	clusterMPs := []clusterv1.MachinePool{}
 
 	// Run through all machine pools and add only those with the TopologyOwnedLabel and the correct
 	// ClusterNameLabel to the items for further testing.
@@ -1161,31 +1332,31 @@ func assertMachinePoolsReconcile(cluster *clusterv1.Cluster) error {
 			if *mp.Spec.Replicas != *topologyMP.Replicas {
 				return fmt.Errorf("replicas %v does not match expected %v", mp.Spec.Replicas, topologyMP.Replicas)
 			}
-			if *mp.Spec.Template.Spec.Version != cluster.Spec.Topology.Version {
-				return fmt.Errorf("version %v does not match expected %v", *mp.Spec.Template.Spec.Version, cluster.Spec.Topology.Version)
+			if mp.Spec.Template.Spec.Version != cluster.Spec.Topology.Version {
+				return fmt.Errorf("version %v does not match expected %v", mp.Spec.Template.Spec.Version, cluster.Spec.Topology.Version)
 			}
 
 			// Check if the InfrastructureReference exists.
-			if err := referenceExistsWithCorrectKindAndAPIVersion(&mp.Spec.Template.Spec.InfrastructureRef,
+			if err := referenceExistsWithCorrectKindAndAPIGroup(mp.Spec.Template.Spec.InfrastructureRef,
 				builder.TestInfrastructureMachinePoolKind,
-				builder.InfrastructureGroupVersion); err != nil {
+				builder.InfrastructureGroupVersion.Group); err != nil {
 				return err
 			}
 
 			// Check if the InfrastructureReference has the expected labels and annotations.
-			if _, err := getAndAssertLabelsAndAnnotations(mp.Spec.Template.Spec.InfrastructureRef, cluster.Name); err != nil {
+			if _, err := getAndAssertLabelsAndAnnotations(mp.Spec.Template.Spec.InfrastructureRef, cluster.Name, mp.Namespace); err != nil {
 				return err
 			}
 
 			// Check if the Bootstrap reference has the expected Kind and APIVersion.
-			if err := referenceExistsWithCorrectKindAndAPIVersion(mp.Spec.Template.Spec.Bootstrap.ConfigRef,
+			if err := referenceExistsWithCorrectKindAndAPIGroup(mp.Spec.Template.Spec.Bootstrap.ConfigRef,
 				builder.TestBootstrapConfigKind,
-				builder.BootstrapGroupVersion); err != nil {
+				builder.BootstrapGroupVersion.Group); err != nil {
 				return err
 			}
 
 			// Check if the Bootstrap reference has the expected labels and annotations.
-			if _, err := getAndAssertLabelsAndAnnotations(*mp.Spec.Template.Spec.Bootstrap.ConfigRef, cluster.Name); err != nil {
+			if _, err := getAndAssertLabelsAndAnnotations(mp.Spec.Template.Spec.Bootstrap.ConfigRef, cluster.Name, mp.Namespace); err != nil {
 				return err
 			}
 		}
@@ -1193,17 +1364,14 @@ func assertMachinePoolsReconcile(cluster *clusterv1.Cluster) error {
 	return nil
 }
 
-// getAndAssertLabelsAndAnnotations pulls the template referenced in the ObjectReference from the API server, checks for:
+// getAndAssertLabelsAndAnnotations pulls the template referenced in the ContractVersionedObjectReference from the API server, checks for:
 // 1) The ClusterTopologyOwnedLabel.
 // 2) The correct ClusterNameLabel.
 // 3) The annotation stating where the template was cloned from.
 // The function returns the unstructured object and a bool indicating if it passed all tests.
-func getAndAssertLabelsAndAnnotations(template corev1.ObjectReference, clusterName string) (*unstructured.Unstructured, error) {
-	got := &unstructured.Unstructured{}
-	got.SetKind(template.Kind)
-	got.SetAPIVersion(template.APIVersion)
-
-	if err := env.Get(ctx, client.ObjectKey{Name: template.Name, Namespace: template.Namespace}, got); err != nil {
+func getAndAssertLabelsAndAnnotations(templateRef clusterv1.ContractVersionedObjectReference, clusterName, namespace string) (*unstructured.Unstructured, error) {
+	got, err := external.GetObjectFromContractVersionedRef(ctx, env.Client, templateRef, namespace)
+	if err != nil {
 		return nil, err
 	}
 
@@ -1256,16 +1424,16 @@ func assertTemplateClonedFromNameAnnotation(got client.Object) error {
 	return nil
 }
 
-// referenceExistsWithCorrectKindAndAPIVersion asserts that the passed ObjectReference is not nil and that it has the correct kind and apiVersion.
-func referenceExistsWithCorrectKindAndAPIVersion(reference *corev1.ObjectReference, kind string, apiVersion schema.GroupVersion) error {
-	if reference == nil {
+// referenceExistsWithCorrectKindAndAPIGroup asserts that the passed ContractVersionedObjectReference is not nil and that it has the correct kind and apiGroup.
+func referenceExistsWithCorrectKindAndAPIGroup(reference clusterv1.ContractVersionedObjectReference, kind string, apiGroup string) error {
+	if !reference.IsDefined() {
 		return fmt.Errorf("object reference passed was nil")
 	}
 	if reference.Kind != kind {
 		return fmt.Errorf("object reference kind %v does not match expected %v", reference.Kind, kind)
 	}
-	if reference.APIVersion != apiVersion.String() {
-		return fmt.Errorf("apiVersion %v does not match expected %v", reference.APIVersion, apiVersion.String())
+	if reference.APIGroup != apiGroup {
+		return fmt.Errorf("object reference apiGroup %v does not match expected %v", reference.APIGroup, apiGroup)
 	}
 	return nil
 }
@@ -1303,7 +1471,7 @@ func TestReconciler_DefaultCluster(t *testing.T) {
 					Name: "location",
 					Definitions: []clusterv1.ClusterClassStatusVariableDefinition{
 						{
-							Required: true,
+							Required: ptr.To(true),
 							From:     clusterv1.VariableDefinitionFromInline,
 							Schema: clusterv1.VariableSchema{
 								OpenAPIV3Schema: clusterv1.JSONSchemaProps{
@@ -1314,7 +1482,11 @@ func TestReconciler_DefaultCluster(t *testing.T) {
 						},
 					},
 				}).
-				WithConditions(*conditions.TrueCondition(clusterv1.ClusterClassVariablesReconciledCondition)).
+				WithConditions(metav1.Condition{
+					Type:   clusterv1.ClusterClassVariablesReadyCondition,
+					Status: metav1.ConditionTrue,
+					Reason: clusterv1.ClusterClassVariablesReadyReason,
+				}).
 				Build(),
 			initialCluster: clusterBuilder.DeepCopy().
 				Build(),
@@ -1331,7 +1503,7 @@ func TestReconciler_DefaultCluster(t *testing.T) {
 					Name: "location",
 					Definitions: []clusterv1.ClusterClassStatusVariableDefinition{
 						{
-							Required: true,
+							Required: ptr.To(true),
 							From:     clusterv1.VariableDefinitionFromInline,
 							Schema: clusterv1.VariableSchema{
 								OpenAPIV3Schema: clusterv1.JSONSchemaProps{
@@ -1342,7 +1514,11 @@ func TestReconciler_DefaultCluster(t *testing.T) {
 						},
 					},
 				}).
-				WithConditions(*conditions.TrueCondition(clusterv1.ClusterClassVariablesReconciledCondition)).
+				WithConditions(metav1.Condition{
+					Type:   clusterv1.ClusterClassVariablesReadyCondition,
+					Status: metav1.ConditionTrue,
+					Reason: clusterv1.ClusterClassVariablesReadyReason,
+				}).
 				Build(),
 			initialCluster: clusterBuilder.DeepCopy().WithTopology(topologyBase.DeepCopy().WithVariables(
 				clusterv1.ClusterVariable{Name: "location", Value: apiextensionsv1.JSON{Raw: []byte(`"us-west"`)}}).
@@ -1363,7 +1539,7 @@ func TestReconciler_DefaultCluster(t *testing.T) {
 						Name: "location",
 						Definitions: []clusterv1.ClusterClassStatusVariableDefinition{
 							{
-								Required: true,
+								Required: ptr.To(true),
 								From:     clusterv1.VariableDefinitionFromInline,
 								Schema: clusterv1.VariableSchema{
 									OpenAPIV3Schema: clusterv1.JSONSchemaProps{
@@ -1378,7 +1554,7 @@ func TestReconciler_DefaultCluster(t *testing.T) {
 						Name: "httpProxy",
 						Definitions: []clusterv1.ClusterClassStatusVariableDefinition{
 							{
-								Required: true,
+								Required: ptr.To(true),
 								From:     clusterv1.VariableDefinitionFromInline,
 								Schema: clusterv1.VariableSchema{
 									OpenAPIV3Schema: clusterv1.JSONSchemaProps{
@@ -1398,7 +1574,11 @@ func TestReconciler_DefaultCluster(t *testing.T) {
 						},
 					},
 				}...).
-				WithConditions(*conditions.TrueCondition(clusterv1.ClusterClassVariablesReconciledCondition)).
+				WithConditions(metav1.Condition{
+					Type:   clusterv1.ClusterClassVariablesReadyCondition,
+					Status: metav1.ConditionTrue,
+					Reason: clusterv1.ClusterClassVariablesReadyReason,
+				}).
 				Build(),
 			initialCluster: clusterBuilder.DeepCopy().
 				WithTopology(topologyBase.DeepCopy().
@@ -1500,12 +1680,16 @@ func TestReconciler_ValidateCluster(t *testing.T) {
 					Name: "httpProxy",
 					Definitions: []clusterv1.ClusterClassStatusVariableDefinition{
 						{
-							Required: false, // variable is not required.
+							Required: ptr.To(false), // variable is not required.
 							From:     clusterv1.VariableDefinitionFromInline,
 						},
 					},
 				}).
-				WithConditions(*conditions.TrueCondition(clusterv1.ClusterClassVariablesReconciledCondition)).
+				WithConditions(metav1.Condition{
+					Type:   clusterv1.ClusterClassVariablesReadyCondition,
+					Status: metav1.ConditionTrue,
+					Reason: clusterv1.ClusterClassVariablesReadyReason,
+				}).
 				Build(),
 			cluster: clusterBuilder.DeepCopy().
 				Build(),
@@ -1518,12 +1702,16 @@ func TestReconciler_ValidateCluster(t *testing.T) {
 					Name: "httpProxy",
 					Definitions: []clusterv1.ClusterClassStatusVariableDefinition{
 						{
-							Required: true,
+							Required: ptr.To(true),
 							From:     clusterv1.VariableDefinitionFromInline,
 						},
 					},
 				}).
-				WithConditions(*conditions.TrueCondition(clusterv1.ClusterClassVariablesReconciledCondition)).
+				WithConditions(metav1.Condition{
+					Type:   clusterv1.ClusterClassVariablesReadyCondition,
+					Status: metav1.ConditionTrue,
+					Reason: clusterv1.ClusterClassVariablesReadyReason,
+				}).
 				Build(),
 			cluster: clusterBuilder.
 				Build(),
@@ -1536,17 +1724,21 @@ func TestReconciler_ValidateCluster(t *testing.T) {
 					Name: "httpProxy",
 					Definitions: []clusterv1.ClusterClassStatusVariableDefinition{
 						{
-							Required: true,
+							Required: ptr.To(true),
 							From:     clusterv1.VariableDefinitionFromInline,
 						},
 					},
 				}).
-				WithConditions(*conditions.FalseCondition(clusterv1.ClusterClassVariablesReconciledCondition, clusterv1.VariableDiscoveryFailedReason, clusterv1.ConditionSeverityError, "error message")).
+				WithConditions(metav1.Condition{
+					Type:   clusterv1.ClusterClassVariablesReadyCondition,
+					Status: metav1.ConditionFalse,
+					Reason: clusterv1.ClusterClassVariablesReadyVariableDiscoveryFailedReason,
+				}).
 				Build(),
 			cluster: clusterBuilder.
 				Build(),
 			wantValidationErr:        true,
-			wantValidationErrMessage: "ClusterClass is not successfully reconciled: status of VariablesReconciled condition on ClusterClass must be \"True\"",
+			wantValidationErrMessage: "ClusterClass is not successfully reconciled: status of VariablesReady condition on ClusterClass must be \"True\"",
 		},
 		{
 			name: "Cluster invalid as it defines an MDTopology without a corresponding MDClass",
@@ -1555,12 +1747,16 @@ func TestReconciler_ValidateCluster(t *testing.T) {
 					Name: "httpProxy",
 					Definitions: []clusterv1.ClusterClassStatusVariableDefinition{
 						{
-							Required: true,
+							Required: ptr.To(true),
 							From:     clusterv1.VariableDefinitionFromInline,
 						},
 					},
 				}).
-				WithConditions(*conditions.TrueCondition(clusterv1.ClusterClassVariablesReconciledCondition)).
+				WithConditions(metav1.Condition{
+					Type:   clusterv1.ClusterClassVariablesReadyCondition,
+					Status: metav1.ConditionTrue,
+					Reason: clusterv1.ClusterClassVariablesReadyReason,
+				}).
 				Build(),
 			cluster: clusterBuilder.WithTopology(
 				builder.ClusterTopology().DeepCopy().
@@ -1648,5 +1844,55 @@ func TestClusterClassToCluster(t *testing.T) {
 			requests := r.clusterClassToCluster(ctx, tt.clusterClass)
 			g.Expect(requests).To(ConsistOf(tt.expected))
 		})
+	}
+}
+
+func validateClusterParameter(originalCluster *clusterv1.Cluster) func(req runtimehooksv1.RequestObject) error {
+	// return a func that allows to check if expected transformations are applied to the Cluster parameter which is
+	// included in the payload for lifecycle hooks calls.
+	return func(req runtimehooksv1.RequestObject) error {
+		var cluster clusterv1.Cluster
+		switch req := req.(type) {
+		case *runtimehooksv1.BeforeClusterCreateRequest:
+			cluster = req.Cluster
+		case *runtimehooksv1.AfterControlPlaneInitializedRequest:
+			cluster = req.Cluster
+		case *runtimehooksv1.AfterClusterUpgradeRequest:
+			cluster = req.Cluster
+		case *runtimehooksv1.BeforeClusterDeleteRequest:
+			cluster = req.Cluster
+		default:
+			return fmt.Errorf("unhandled request type %T", req)
+		}
+
+		// check if managed fields and well know annotations have been removed from the Cluster parameter included in the payload lifecycle hooks calls.
+		if cluster.GetManagedFields() != nil {
+			return errors.New("managedFields should have been cleaned up")
+		}
+		if _, ok := cluster.Annotations[corev1.LastAppliedConfigAnnotation]; ok {
+			return errors.New("last-applied-configuration annotation should have been cleaned up")
+		}
+		if _, ok := cluster.Annotations[conversionutil.DataAnnotation]; ok {
+			return errors.New("conversion annotation should have been cleaned up")
+		}
+
+		// Check the Cluster parameter has been cleaned up as expected.
+
+		originalClusterCopy := originalCluster.DeepCopy()
+		originalClusterCopy.SetManagedFields(nil)
+		if originalClusterCopy.Annotations != nil {
+			annotations := maps.Clone(cluster.Annotations)
+			delete(annotations, corev1.LastAppliedConfigAnnotation)
+			delete(annotations, conversionutil.DataAnnotation)
+			originalClusterCopy.Annotations = annotations
+		}
+
+		// drop conditions, it is not possible to round trip without the data annotation.
+		originalClusterCopy.Status.Conditions = nil
+
+		if !apiequality.Semantic.DeepEqual(originalClusterCopy, &cluster) {
+			return errors.Errorf("call to extension is not passing the expected cluster object: %s", cmp.Diff(originalClusterCopy, &cluster))
+		}
+		return nil
 	}
 }

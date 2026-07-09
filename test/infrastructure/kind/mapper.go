@@ -36,6 +36,7 @@ package kind
 
 import (
 	"fmt"
+	"sort"
 
 	"github.com/blang/semver/v4"
 
@@ -78,8 +79,125 @@ type Mapping struct {
 // a given Kubernetes version is rebuilt with a newer kind version, we are using the latest image.
 var preBuiltMappings = []Mapping{
 
-	// TODO: Add pre-built images for newer Kind versions on top
-	// Pre-built images for Kind v1.26.
+	// TODO: Add pre-built images for newer Kind versions.
+
+	// Pre-built images for Kind v0.32.
+	{
+		KubernetesVersion: semver.MustParse("1.36.1"),
+		Mode:              Mode0_20,
+		Image:             "kindest/node:v1.36.1@sha256:3489c7674813ba5d8b1a9977baea8a6e553784dab7b84759d1014dbd78f7ebd5",
+	},
+	{
+		KubernetesVersion: semver.MustParse("1.35.5"),
+		Mode:              Mode0_20,
+		Image:             "kindest/node:v1.35.5@sha256:ce977ae6d65918d0b58a5f8b5e940429c2ce42fa3a5619ec2bbc60b949c0ac95",
+	},
+	{
+		KubernetesVersion: semver.MustParse("1.34.8"),
+		Mode:              Mode0_20,
+		Image:             "kindest/node:v1.34.8@sha256:02722c2dedddcfc00febf5d27fbeb9b7b2c14294c82109ff4a85d89ac9ba3256",
+	},
+	{
+		KubernetesVersion: semver.MustParse("1.33.12"),
+		Mode:              Mode0_20,
+		Image:             "kindest/node:v1.33.12@sha256:3f5c8443c620245e4d355cfe09e96a91ead32ceaa569d3f1ca9edf0cb2fe2ff4",
+	},
+	// Pre-built images for Kind v0.31.
+	{
+		KubernetesVersion: semver.MustParse("1.35.0"),
+		Mode:              Mode0_20,
+		Image:             "kindest/node:v1.35.0@sha256:452d707d4862f52530247495d180205e029056831160e22870e37e3f6c1ac31f",
+	},
+	{
+		KubernetesVersion: semver.MustParse("1.34.3"),
+		Mode:              Mode0_20,
+		Image:             "kindest/node:v1.34.3@sha256:08497ee19eace7b4b5348db5c6a1591d7752b164530a36f855cb0f2bdcbadd48",
+	},
+	{
+		KubernetesVersion: semver.MustParse("1.33.7"),
+		Mode:              Mode0_20,
+		Image:             "kindest/node:v1.33.7@sha256:d26ef333bdb2cbe9862a0f7c3803ecc7b4303d8cea8e814b481b09949d353040",
+	},
+	{
+		KubernetesVersion: semver.MustParse("1.32.11"),
+		Mode:              Mode0_20,
+		Image:             "kindest/node:v1.32.11@sha256:5fc52d52a7b9574015299724bd68f183702956aa4a2116ae75a63cb574b35af8",
+	},
+	{
+		KubernetesVersion: semver.MustParse("1.31.14"),
+		Mode:              Mode0_20,
+		Image:             "kindest/node:v1.31.14@sha256:6f86cf509dbb42767b6e79debc3f2c32e4ee01386f0489b3b2be24b0a55aac2b",
+	},
+	// Pre-built images for Kind v0.30.
+	{
+		KubernetesVersion: semver.MustParse("1.34.0"),
+		Mode:              Mode0_20,
+		Image:             "kindest/node:v1.34.0@sha256:7416a61b42b1662ca6ca89f02028ac133a309a2a30ba309614e8ec94d976dc5a",
+	},
+	{
+		KubernetesVersion: semver.MustParse("1.33.4"),
+		Mode:              Mode0_20,
+		Image:             "kindest/node:v1.33.4@sha256:25a6018e48dfcaee478f4a59af81157a437f15e6e140bf103f85a2e7cd0cbbf2",
+	},
+	{
+		KubernetesVersion: semver.MustParse("1.32.8"),
+		Mode:              Mode0_20,
+		Image:             "kindest/node:v1.32.8@sha256:abd489f042d2b644e2d033f5c2d900bc707798d075e8186cb65e3f1367a9d5a1",
+	},
+	{
+		KubernetesVersion: semver.MustParse("1.31.12"),
+		Mode:              Mode0_20,
+		Image:             "kindest/node:v1.31.12@sha256:0f5cc49c5e73c0c2bb6e2df56e7df189240d83cf94edfa30946482eb08ec57d2",
+	},
+	// Pre-built images for Kind v0.29.
+	{
+		KubernetesVersion: semver.MustParse("1.33.1"),
+		Mode:              Mode0_20,
+		Image:             "kindest/node:v1.33.1@sha256:050072256b9a903bd914c0b2866828150cb229cea0efe5892e2b644d5dd3b34f",
+	},
+	{
+		KubernetesVersion: semver.MustParse("1.32.5"),
+		Mode:              Mode0_20,
+		Image:             "kindest/node:v1.32.5@sha256:e3b2327e3a5ab8c76f5ece68936e4cafaa82edf58486b769727ab0b3b97a5b0d",
+	},
+	{
+		KubernetesVersion: semver.MustParse("1.31.9"),
+		Mode:              Mode0_20,
+		Image:             "kindest/node:v1.31.9@sha256:b94a3a6c06198d17f59cca8c6f486236fa05e2fb359cbd75dabbfc348a10b211",
+	},
+	{
+		KubernetesVersion: semver.MustParse("1.30.13"),
+		Mode:              Mode0_20,
+		Image:             "kindest/node:v1.30.13@sha256:397209b3d947d154f6641f2d0ce8d473732bd91c87d9575ade99049aa33cd648",
+	},
+	// Pre-built images for Kind v0.27.
+	{
+		KubernetesVersion: semver.MustParse("1.33.0"),
+		Mode:              Mode0_20,
+		Image:             "kindest/node:v1.33.0@sha256:02f73d6ae3f11ad5d543f16736a2cb2a63a300ad60e81dac22099b0b04784a4e",
+	},
+	{
+		KubernetesVersion: semver.MustParse("1.32.2"),
+		Mode:              Mode0_20,
+		Image:             "kindest/node:v1.32.2@sha256:f226345927d7e348497136874b6d207e0b32cc52154ad8323129352923a3142f",
+	},
+	{
+		KubernetesVersion: semver.MustParse("1.31.6"),
+		Mode:              Mode0_20,
+		Image:             "kindest/node:v1.31.6@sha256:28b7cbb993dfe093c76641a0c95807637213c9109b761f1d422c2400e22b8e87",
+	},
+	{
+		KubernetesVersion: semver.MustParse("1.30.10"),
+		Mode:              Mode0_20,
+		Image:             "kindest/node:v1.30.10@sha256:4de75d0e82481ea846c0ed1de86328d821c1e6a6a91ac37bf804e5313670e507",
+	},
+	{
+		KubernetesVersion: semver.MustParse("1.29.14"),
+		Mode:              Mode0_20,
+		Image:             "kindest/node:v1.29.14@sha256:8703bd94ee24e51b778d5556ae310c6c0fa67d761fae6379c8e0bb480e6fea29",
+	},
+
+	// Pre-built images for Kind v0.26.
 	{
 		KubernetesVersion: semver.MustParse("1.32.0"),
 		Mode:              Mode0_20,
@@ -101,7 +219,7 @@ var preBuiltMappings = []Mapping{
 		Image:             "kindest/node:v1.29.12@sha256:62c0672ba99a4afd7396512848d6fc382906b8f33349ae68fb1dbfe549f70dec",
 	},
 
-	// Pre-built images for Kind v1.25.
+	// Pre-built images for Kind v0.25.
 	{
 		KubernetesVersion: semver.MustParse("1.32.0"),
 		Mode:              Mode0_20,
@@ -138,7 +256,7 @@ var preBuiltMappings = []Mapping{
 		Image:             "kindest/node:v1.26.15@sha256:c79602a44b4056d7e48dc20f7504350f1e87530fe953428b792def00bc1076dd",
 	},
 
-	// Pre-built images for Kind v1.24.
+	// Pre-built images for Kind v0.24.
 	{
 		KubernetesVersion: semver.MustParse("1.31.0"),
 		Mode:              Mode0_20,
@@ -190,7 +308,7 @@ var preBuiltMappings = []Mapping{
 		Image:             "kindest/node:v1.25.16@sha256:6110314339b3b44d10da7d27881849a87e092124afab5956f2e10ecdb463b025",
 	},
 
-	// Pre-built images for Kind v1.23.
+	// Pre-built images for Kind v0.23.
 	{
 		KubernetesVersion: semver.MustParse("1.30.0"),
 		Mode:              Mode0_20,
@@ -222,7 +340,7 @@ var preBuiltMappings = []Mapping{
 		Image:             "kindest/node:v1.25.16@sha256:5da57dfc290ac3599e775e63b8b6c49c0c85d3fec771cd7d55b45fae14b38d3b",
 	},
 
-	// Pre-built images for Kind v1.22.
+	// Pre-built images for Kind v0.22.
 	{
 		KubernetesVersion: semver.MustParse("1.29.2"),
 		Mode:              Mode0_20,
@@ -279,7 +397,7 @@ var preBuiltMappings = []Mapping{
 		Image:             "kindest/node:v1.23.17@sha256:14d0a9a892b943866d7e6be119a06871291c517d279aedb816a4b4bc0ec0a5b3",
 	},
 
-	// Pre-built images for Kind v1.21.
+	// Pre-built images for Kind v0.21.
 	{
 		KubernetesVersion: semver.MustParse("1.29.1"),
 		Mode:              Mode0_20,
@@ -316,7 +434,7 @@ var preBuiltMappings = []Mapping{
 		Image:             "kindest/node:v1.23.17@sha256:fbb92ac580fce498473762419df27fa8664dbaa1c5a361b5957e123b4035bdcf",
 	},
 
-	// Pre-built images for Kind v1.20.
+	// Pre-built images for Kind v0.20.
 	{
 		KubernetesVersion: semver.MustParse("1.29.0"),
 		Mode:              Mode0_20,
@@ -363,7 +481,7 @@ var preBuiltMappings = []Mapping{
 		Image:             "kindest/node:v1.21.14@sha256:8a4e9bb3f415d2bb81629ce33ef9c76ba514c14d707f9797a01e3216376ba093",
 	},
 
-	// Pre-built images for Kind v1.19.
+	// Pre-built images for Kind v0.19.
 	{
 		KubernetesVersion: semver.MustParse("1.27.1"),
 		Mode:              Mode0_19,
@@ -400,9 +518,9 @@ var preBuiltMappings = []Mapping{
 		Image:             "kindest/node:v1.21.14@sha256:220cfafdf6e3915fbce50e13d1655425558cb98872c53f802605aa2fb2d569cf",
 	},
 
-	// Pre-built and additional images for Kind v1.18.
+	// Pre-built and additional images for Kind v0.18.
 	// NOTE: This version predates the introduction of this change, but we are including it to expand
-	// the list of supported K8s versions; since they can be started with the same approach used up to kind 1.19,
+	// the list of supported K8s versions; since they can be started with the same approach used up to kind 0.19,
 	// we are considering this version part of the Mode0_19 group.
 	{
 		KubernetesVersion: semver.MustParse("1.26.3"),
@@ -445,9 +563,9 @@ var preBuiltMappings = []Mapping{
 		Image:             "kindest/node:v1.27.0@sha256:c6b22e613523b1af67d4bc8a0c38a4c3ea3a2b8fbc5b367ae36345c9cb844518",
 	},
 
-	// Pre-built and additional images for Kind v1.17.
+	// Pre-built and additional images for Kind v0.17.
 	// NOTE: This version predates the introduction of this change, but we are including it to expand
-	// the list of supported K8s versions; since they can be started with the same approach used up to kind 1.19,
+	// the list of supported K8s versions; since they can be started with the same approach used up to kind 0.19,
 	// we are considering this version part of the Mode0_19 group.
 
 	{
@@ -515,7 +633,7 @@ func GetMapping(k8sVersion semver.Version, customImage string) Mapping {
 	}
 	for _, m := range preBuiltMappings {
 		// If the mapping isn't for the right Major/Minor, ignore it.
-		if !(k8sVersion.Major == m.KubernetesVersion.Major && k8sVersion.Minor == m.KubernetesVersion.Minor) {
+		if k8sVersion.Major != m.KubernetesVersion.Major || k8sVersion.Minor != m.KubernetesVersion.Minor {
 			continue
 		}
 
@@ -555,4 +673,28 @@ func pickFirstNotEmpty(a, b string) string {
 		return a
 	}
 	return b
+}
+
+// GetKubernetesVersions returns a sorted list with all the Kubernetes version know by the kind mapper.
+// Note: we are returning only Kubernetes version for the latest kind mode.
+func GetKubernetesVersions() []string {
+	versionMap := map[string]semver.Version{}
+	for _, m := range preBuiltMappings {
+		if m.Mode != latestMode {
+			continue
+		}
+		versionMap[m.KubernetesVersion.String()] = m.KubernetesVersion
+	}
+
+	semVersions := make([]semver.Version, 0, len(versionMap))
+	for _, v := range versionMap {
+		semVersions = append(semVersions, v)
+	}
+	sort.Slice(semVersions, func(i, j int) bool { return semVersions[i].LT(semVersions[j]) })
+
+	versions := make([]string, len(semVersions))
+	for i, s := range semVersions {
+		versions[i] = fmt.Sprintf("v%s", s)
+	}
+	return versions
 }

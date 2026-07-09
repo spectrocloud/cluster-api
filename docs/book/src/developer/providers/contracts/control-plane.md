@@ -1,6 +1,6 @@
 # Contract rules for ControlPlane
 
-Control plane providers MUST implement a ControlPlane resource.
+Control plane providers MUST implement a ControlPlane resource using Kubernetes' CustomResourceDefinition (CRD).
 
 The goal of a ControlPlane resource is to instantiate a Kubernetes control plane; a Kubernetes control plane
 at least contains the following components:
@@ -55,7 +55,7 @@ repo or add an item to the agenda in the [Cluster API community meeting](https:/
 
 </aside>
 
-## Rules (contract version v1beta1)
+## Rules (contract version v1beta2)
 
 | Rule                                                                 | Mandatory | Note                                                                                                                       |
 |----------------------------------------------------------------------|-----------|----------------------------------------------------------------------------------------------------------------------------|
@@ -67,7 +67,9 @@ repo or add an item to the agenda in the [Cluster API community meeting](https:/
 | [ControlPlane: replicas]                                             | No        | Mandatory if control plane has a notion of number of instances.                                                            |
 | [ControlPlane: version]                                              | No        | Mandatory if control plane allows direct management of the Kubernetes version in use; Mandatory for cluster class support. |
 | [ControlPlane: machines]                                             | No        | Mandatory if control plane instances are represented with a set of Cluster API Machines.                                   |
+| [ControlPlane: rolloutAfter]                                         | No        |                                                                                                                            |
 | [ControlPlane: initialization completed]                             | Yes       |                                                                                                                            |
+| [ControlPlane: in-place updates]                                     | No        | Only supported for control plane providers with control plane machines                                                     |
 | [ControlPlane: conditions]                                           | No        |                                                                                                                            |
 | [ControlPlane: terminal failures]                                    | No        |                                                                                                                            |
 | [ControlPlaneTemplate, ControlPlaneTemplateList resource definition] | No        | Mandatory for ClusterClasses support                                                                                       |
@@ -99,8 +101,9 @@ The domain for Cluster API resources is `cluster.x-k8s.io`, and control plane pr
 generally use `controlplane.cluster.x-k8s.io` as API group.
 
 If your provider uses a different API group, you MUST grant full read/write RBAC permissions for resources in your API group
-to the Cluster API core controllers. The canonical way to do so is via a `ClusterRole` resource with the [aggregation label]
-`cluster.x-k8s.io/aggregate-to-manager: "true"`.
+to the Cluster API core controllers. If any resource sets another resource as the owner with `blockOwnerDeletion` set,
+additional RBAC to update finalizers on the **owner resource** is required.
+The canonical way to do so is via a `ClusterRole` resource with the [aggregation label] `cluster.x-k8s.io/aggregate-to-manager: "true"`.
 
 The following is an example ClusterRole for a `FooControlPlane` resource in the `controlplane.foo.com` API group:
 
@@ -165,12 +168,20 @@ To apply the label to CRDs it’s possible to use labels in your `kustomization.
 ```yaml
 labels:
 - pairs:
-    cluster.x-k8s.io/v1alpha2: v1alpha1
-    cluster.x-k8s.io/v1alpha3: v1alpha2
     cluster.x-k8s.io/v1beta1: v1beta1
+    cluster.x-k8s.io/v1beta2: v1beta2
 ```
 
 An example of this is in the [Kubeadm Bootstrap provider](https://github.com/kubernetes-sigs/cluster-api/blob/release-1.1/controlplane/kubeadm/config/crd/kustomization.yaml).
+
+<aside  class="note warning">
+
+<h1>Important</h1>
+
+If the provider implements the [clusterctl provider contract], the contract version defined in the
+label above must be consistent with the contract version defined in the `metadata.yaml` file.
+
+</aside>
 
 ### ControlPlane, ControlPlaneList resource definition
 
@@ -234,7 +245,47 @@ each Cluster, the host and port of the generated control plane endpoint MUST sur
 in the ControlPlane resource.
 
 ```go
-type FooControlPlane struct {
+type FooControlPlaneSpec struct {
+    // controlPlaneEndpoint represents the endpoint used to communicate with the control plane.
+    // +optional
+    ControlPlaneEndpoint APIEndpoint `json:"controlPlaneEndpoint,omitempty,omitzero"`
+    
+    // See other rules for more details about mandatory/optional fields in ControlPlane spec.
+    // Other fields SHOULD be added based on the needs of your provider.
+}
+
+// APIEndpoint represents a reachable Kubernetes API endpoint.
+// +kubebuilder:validation:MinProperties=1
+type APIEndpoint struct {
+    // host is the hostname on which the API server is serving.
+    // +optional
+    // +kubebuilder:validation:MinLength=1
+    // +kubebuilder:validation:MaxLength=512
+    Host string `json:"host,omitempty"`
+
+    // port is the port on which the API server is serving.
+    // +optional
+    // +kubebuilder:validation:Minimum=1
+    // +kubebuilder:validation:Maximum=65535
+    Port int32 `json:"port,omitempty"`
+}
+```
+
+Once `spec.controlPlaneEndpoint` is set on the ControlPlane resource and the [ControlPlane: initialization completed],
+the Cluster controller will surface this info in Cluster's `spec.controlPlaneEndpoint`.
+
+If instead you are developing a control plane provider which is NOT responsible to provide a control plane endpoint,
+the implementer should exit reconciliation until it sees Cluster's `spec.controlPlaneEndpoint` populated.
+
+<aside class="note warning">
+
+<h1>Compatibility with the deprecated v1beta1 contract</h1>
+
+In order to ease the transition for providers, the v1beta2 version of the Cluster API contract _temporarily_
+preserves compatibility with the deprecated v1beta1 contract; compatibility will be removed tentatively in April 2027.
+
+```go
+type FooControlPlaneSpec struct {
     // controlPlaneEndpoint represents the endpoint used to communicate with the control plane.
     // +optional
     ControlPlaneEndpoint APIEndpoint `json:"controlPlaneEndpoint"`
@@ -253,11 +304,7 @@ type APIEndpoint struct {
 }
 ```
 
-Once `spec.controlPlaneEndpoint` is set on the ControlPlane resource and the [ControlPlane: initialization completed],
-the Cluster controller will surface this info in Cluster's `spec.controlPlaneEndpoint`.
-
-If instead you are developing a control plane provider which is NOT responsible to provide a control plane endpoint,
-the implementer should exit reconciliation until it sees Cluster's `spec.controlPlaneEndpoint` populated.
+</aside>
 
 ### ControlPlane: replicas
 
@@ -288,67 +335,7 @@ type FooControlPlaneStatus struct {
     // More info about label selectors: http://kubernetes.io/docs/user-guide/labels#label-selectors
     // +optional
     Selector string `json:"selector,omitempty"`
-    
-    // replicas is the total number of machines targeted by this control plane
-    // (their labels match the selector).
-    // +optional
-    Replicas int32 `json:"replicas"`
-	
-    // updatedReplicas is the total number of machines targeted by this control plane
-    // that have the desired template spec.
-    // +optional
-    UpdatedReplicas int32 `json:"updatedReplicas"`
-    
-    // readyReplicas is the total number of fully running and ready control plane machines.
-    // +optional
-    ReadyReplicas int32 `json:"readyReplicas"`
-    
-    // unavailableReplicas is the total number of unavailable machines targeted by this control plane.
-    // This is the total number of machines that are still required for the deployment to have 100% available capacity. 
-    // They may either be machines that are running but not yet ready or machines
-    // that still have not been created.
-    // +optional
-    UnavailableReplicas int32 `json:"unavailableReplicas"`
 
-    // See other rules for more details about mandatory/optional fields in ControlPlane status.
-    // Other fields SHOULD be added based on the needs of your provider.
-}
-```
-
-As you might have already noticed from the `status.selector` field, the ControlPlane custom resource definition MUST
-support the `scale` subresource with the following signature:
-
-``` yaml
-scale:
-  labelSelectorPath: .status.selector
-  specReplicasPath: .spec.replicas
-  statusReplicasPath: .status.replicas
-status: {}
-```
-
-More information about the [scale subresource can be found in the Kubernetes
-documentation][scale].
-
-<aside class="note warning">
-
-<h1>Heads up! this will change with the v1beta2 contract</h1>
-
-When the v1beta2 contract will be released (tentative Apr 2025), Cluster API is going to standardize replica 
-counters across all the API resources.
-
-In order to ensure a nice and consistent user experience across the entire Cluster, also ControlPlane providers 
-are expected to align to this effort and implement the following replica counter fields / field semantic.
-
-```go
-type FooControlPlaneStatus struct {
-    // selector is the label selector in string format to avoid introspection
-    // by clients, and is used to provide the CRD-based integration for the
-    // scale subresource and additional integrations for things like kubectl
-    // describe. The string will be in the same format as the query-param syntax.
-    // More info about label selectors: http://kubernetes.io/docs/user-guide/labels#label-selectors
-    // +optional
-    Selector string `json:"selector,omitempty"`
-    
     // replicas is the total number of machines targeted by this control plane
     // (their labels match the selector).
     // +optional
@@ -371,9 +358,31 @@ type FooControlPlaneStatus struct {
 }
 ```
 
-Other fields will be ignored.
+As you might have already noticed from the `status.selector` field, the ControlPlane custom resource definition MUST
+support the `scale` subresource with the following signature:
 
-See [Improving status in CAPI resources] for more context.
+``` yaml
+scale:
+  labelSelectorPath: .status.selector
+  specReplicasPath: .spec.replicas
+  statusReplicasPath: .status.replicas
+status: {}
+```
+
+More information about the [scale subresource can be found in the Kubernetes
+documentation][scale].
+
+
+<aside class="note warning">
+
+<h1>Compatibility with the deprecated v1beta1 contract</h1>
+
+In order to ease the transition for providers, the v1beta2 version of the Cluster API contract _temporarily_
+preserves compatibility with the deprecated v1beta1 contract; compatibility will be removed tentatively in April 2027.
+
+With regards to v1beta1 replica counters, the Cluster controller with temporarily continue to read
+`status.readyReplicas`,  `status.updatedReplicas` and `status.unavailableReplicas`, even if the semantic of the 
+field might be different from what expected.
 
 </aside>
 
@@ -388,6 +397,9 @@ type FooControlPlaneSpec struct {
     // version defines the desired Kubernetes version for the control plane. 
     // The value must be a valid semantic version; also if the value provided by the user does not start with the v prefix, it
     // must be added.
+    // +required
+    // +kubebuilder:validation:MinLength=1
+    // +kubebuilder:validation:MaxLength=256
     Version string `json:"version"`
     
     // See other rules for more details about mandatory/optional fields in ControlPlane spec.
@@ -395,34 +407,68 @@ type FooControlPlaneSpec struct {
 }
 ```
 
-Following fields MUST be implemented in the ControlPlane `status`.
+ControlPlane providers MUST report version information in the ControlPlane `status` by implementing
+at least one of the following fields.
+
+`status.versions` is the preferred source of truth for surfacing control plane versions.
+Entries in this list MUST be ordered from the older to the newer version.
+Each entry MUST include a valid semantic version and if control of the number of replicas is supported
+the number of replicas at that version must be set as well.
+
+```go
+type FooControlPlaneStatus struct {
+    // versions is the aggregated Kubernetes versions in this control plane.
+    // +optional
+    // +listType=map
+    // +listMapKey=version
+    // +kubebuilder:validation:MinItems=1
+    // +kubebuilder:validation:MaxItems=100
+    Versions []clusterv1.StatusVersion `json:"versions,omitempty"`
+
+    // See other rules for more details about mandatory/optional fields in ControlPlane status.
+    // Other fields SHOULD be added based on the needs of your provider.
+}
+```
+
+`status.version` can be used as an alternative or as a fallback mechanism, but support
+for this field will be removed in the next Cluster API contract version.
 
 ```go
 type FooControlPlaneStatus struct {
     // version represents the minimum Kubernetes version for the control plane machines
     // in the cluster.
+    //
+    // Deprecated: This field is deprecated and is going to be removed in a future API version.
+    // Please use status.versions instead.
     // +optional
-    Version *string `json:"version,omitempty"`
+    // +kubebuilder:validation:MinLength=1
+    // +kubebuilder:validation:MaxLength=256
+    Version string `json:"version,omitempty"`
     
     // See other rules for more details about mandatory/optional fields in ControlPlane status.
     // Other fields SHOULD be added based on the needs of your provider.
 }
 ```
 
-NOTE: The minimum Kubernetes version, and more specifically the API server version, will be used to determine 
-when a control plane is fully upgraded (spec.version == status.version) and for enforcing Kubernetes version skew 
-policies when a Cluster derived from a ClusterClass is managed by the Topology controller.
+NOTE: To align with API conventions, we recommend since the v1beta2 contract that the `Version` field should be
+of type `string` (it was `*string` before). Both are compatible with the v1beta2 contract though.
+NOTE: The minimum Kubernetes version, and more specifically the API server version, will be used to determine
+when a control plane is fully upgraded and for enforcing Kubernetes version skew policies when a Cluster derived
+from a ClusterClass is managed by the Topology controller.
 
 ### ControlPlane: machines
 
 In case you are developing a control plane provider which uses a Cluster API Machine object to represent each
-control plane instance, following fields MUST be implemented in
+control plane instance, the providers MUST set the `cluster.x-k8s.io/control-plane` label with an empty value on the created Machines.
+
+Additionally following the fields MUST be implemented in
 the ControlPlane `spec`.
 
 ```go
 type FooControlPlaneSpec struct {
     // machineTemplate contains information about how machines
     // should be shaped when creating or updating a control plane.
+    // +required
     MachineTemplate FooControlPlaneMachineTemplate `json:"machineTemplate"`
     
     // See other rules for more details about mandatory/optional fields in ControlPlane spec.
@@ -430,40 +476,134 @@ type FooControlPlaneSpec struct {
 }
 
 type FooControlPlaneMachineTemplate struct {
-    // Standard object's metadata.
+    // metadata is the standard object's metadata.
     // More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
     // +optional
-    ObjectMeta clusterv1.ObjectMeta `json:"metadata,omitempty"`
-    
-    // infrastructureRef is a required reference to a custom infra machine template resource
-    // offered by an infrastructure provider.
-    InfrastructureRef corev1.ObjectReference `json:"infrastructureRef"`
-    
-    // nodeDrainTimeout is the total amount of time that the controller will spend on draining a controlplane node
-    // The default value is 0, meaning that the node can be drained without any time limitations.
+    ObjectMeta clusterv1.ObjectMeta `json:"metadata,omitempty,omitzero"`
+
+    // spec defines the spec for Machines of the control plane.
     // +optional
-    NodeDrainTimeout *metav1.Duration `json:"nodeDrainTimeout,omitempty"`
+    Spec FooControlPlaneMachineTemplateSpec `json:"spec,omitempty,omitzero"`
+}
+
+type FooControlPlaneMachineTemplateSpec struct {
+	// infrastructureRef is a required reference to a custom infra machine template resource
+	// offered by an infrastructure provider.
+	// +required
+	InfrastructureRef clusterv1.ContractVersionedObjectReference `json:"infrastructureRef"`
+
+	// deletion contains configuration options for Machine deletion.
+	// +optional
+	Deletion FooControlPlaneMachineTemplateDeletionSpec `json:"deletion,omitempty,omitzero"`
+}
+
+// FooControlPlaneMachineTemplateDeletionSpec contains configuration options for Machine deletion.
+// +kubebuilder:validation:MinProperties=1
+type FooControlPlaneMachineTemplateDeletionSpec struct {
+    // nodeDrainTimeoutSeconds is the total amount of time that the controller will spend on draining a controlplane node
+    // The default value is 0, meaning that the node can be drained without any time limitations.
+	// NOTE: nodeDrainTimeoutSeconds is different from `kubectl drain --timeout`
+    // +optional
+    // +kubebuilder:validation:Minimum=0
+    NodeDrainTimeoutSeconds *int32 `json:"nodeDrainTimeoutSeconds,omitempty"`
     
-    // nodeVolumeDetachTimeout is the total amount of time that the controller will spend on waiting for all volumes
+    // nodeVolumeDetachTimeoutSeconds is the total amount of time that the controller will spend on waiting for all volumes
     // to be detached. The default value is 0, meaning that the volumes can be detached without any time limitations.
     // +optional
-    NodeVolumeDetachTimeout *metav1.Duration `json:"nodeVolumeDetachTimeout,omitempty"`
+    // +kubebuilder:validation:Minimum=0
+    NodeVolumeDetachTimeoutSeconds *int32 `json:"nodeVolumeDetachTimeoutSeconds,omitempty"`
     
-    // nodeDeletionTimeout defines how long the machine controller will attempt to delete the Node that the Machine
+    // nodeDeletionTimeoutSeconds defines how long the machine controller will attempt to delete the Node that the Machine
     // hosts after the Machine is marked for deletion. A duration of 0 will retry deletion indefinitely.
     // If no value is provided, the default value for this property of the Machine resource will be used.
     // +optional
-    NodeDeletionTimeout *metav1.Duration `json:"nodeDeletionTimeout,omitempty"`
+    // +kubebuilder:validation:Minimum=0
+    NodeDeletionTimeoutSeconds *int32 `json:"nodeDeletionTimeoutSeconds,omitempty"`
   
     // Other fields SHOULD be added based on the needs of your provider.
 }
 ```
 
-Please note that some of the above fields (`metadata`, `nodeDrainTimeout`, `nodeVolumeDetachTimeout`, `nodeDeletionTimeout`)
+Please note that some of the above fields (`metadata`, `nodeDrainTimeoutSeconds`, `nodeVolumeDetachTimeoutSeconds`, `nodeDeletionTimeoutSeconds`)
 must be propagated to machines without triggering rollouts.
 See [In place propagation of changes affecting Kubernetes objects only] as well as [Metadata propagation] for more details.
 
-Additionally, in case you are developing a control plane provider where control plane instances uses a Cluster API Machine 
+<aside class="note warning">
+
+<h1>Compatibility with the deprecated v1beta1 contract</h1>
+
+In order to ease the transition for providers, the v1beta2 version of the Cluster API contract _temporarily_
+preserves compatibility with the deprecated v1beta1 contract; compatibility will be removed tentatively in April 2027.
+
+For reference. The v1beta1 contract had `nodeDrainTimeout`, `nodeVolumeDetachTimeout`, `nodeDeletionTimeout` fields
+of type `*metav1.Duration` instead of the new fields with `Seconds` suffix of type `*int32`.
+`infrastructureRef` was of type `corev1.ObjectReference`, the new field has the type  `clusterv1.ContractVersionedObjectReference`.
+In v1beta2 we also moved `infrastructureRef` into the newly introduced `spec.machineTemplate.spec` field and `nodeDrainTimeoutSeconds`,
+`nodeVolumeDetachTimeoutSeconds` and `nodeDeletionTimeoutSeconds` into the newly introduced `spec.machineTemplate.spec.deletion` field.
+
+</aside>
+
+In case you are developing a control plane provider that allows definition of machine readiness gates, you SHOULD also implement
+the following `spec.machineTemplate.spec` field.
+
+```go
+type FooControlPlaneMachineTemplateSpec struct {
+    // readinessGates specifies additional conditions to include when evaluating Machine Ready condition.
+    //
+    // This field can be used e.g. by Cluster API control plane providers to extend the semantic of the
+    // Ready condition for the Machine they control, like the kubeadm control provider adding ReadinessGates
+    // for the APIServerPodHealthy, SchedulerPodHealthy conditions, etc.
+    //
+    // Another example are external controllers, e.g. responsible to install special software/hardware on the Machines;
+    // they can include the status of those components with a new condition and add this condition to ReadinessGates.
+    //
+    // NOTE: This field is considered only for computing v1beta2 conditions.
+    // NOTE: In case readinessGates conditions start with the APIServer, ControllerManager, Scheduler prefix, and all those
+    // readiness gates condition are reporting the same message, when computing the Machine's Ready condition those
+    // readinessGates will be replaced by a single entry reporting "Control plane components: " + message.
+    // This helps to improve readability of conditions bubbling up to the Machine's owner resource / to the Cluster).
+    // +optional
+    // +listType=map
+    // +listMapKey=conditionType
+    // +kubebuilder:validation:MinItems=1
+    // +kubebuilder:validation:MaxItems=32
+    ReadinessGates []clusterv1.MachineReadinessGate `json:"readinessGates,omitempty"`
+
+    // See other rules for more details about mandatory/optional fields in ControlPlane spec.
+    // Other fields SHOULD be added based on the needs of your provider.
+}
+```
+
+NOTE: In the v1beta1 contract the `readinessGates` field was located directly in the `spec.machineTemplate` field.
+
+In case you are developing a control plane provider that allows definition of machine taints, you SHOULD also implement
+the following `spec.machineTemplate.spec` field.
+
+```go
+type FooControlPlaneMachineTemplateSpec struct {
+	// taints are the node taints that Cluster API will manage.
+	// This list is not necessarily complete: other Kubernetes components may add or remove other taints from nodes,
+	// e.g. the node controller might add the node.kubernetes.io/not-ready taint.
+	// Only those taints defined in this list will be added or removed by core Cluster API controllers.
+	//
+	// There can be at most 64 taints.
+	// A pod would have to tolerate all existing taints to run on the corresponding node.
+	//
+	// NOTE: This list is implemented as a "map" type, meaning that individual elements can be managed by different owners.
+	// +optional
+	// +listType=map
+	// +listMapKey=key
+	// +listMapKey=effect
+	// +kubebuilder:validation:MinItems=1
+	// +kubebuilder:validation:MaxItems=64
+	Taints []clusterv1.MachineTaint `json:"taints,omitempty"`
+
+    // See other rules for more details about mandatory/optional fields in ControlPlane spec.
+    // Other fields SHOULD be added based on the needs of your provider.
+}
+```
+
+In case you are developing a control plane provider where control plane instances uses a Cluster API Machine 
 object to represent each control plane instance, but those instances do not show up as a Kubernetes node (for example, 
 managed control plane providers for AKS, EKS, GKE etc), you SHOULD also implement the following `status` field.
 
@@ -471,12 +611,15 @@ managed control plane providers for AKS, EKS, GKE etc), you SHOULD also implemen
 type FooControlPlaneStatus struct {
     // externalManagedControlPlane is a bool that should be set to true if the Node objects do not exist in the cluster.
     // +optional
-    ExternalManagedControlPlane bool `json:"externalManagedControlPlane,omitempty"`
+    ExternalManagedControlPlane *bool `json:"externalManagedControlPlane,omitempty"`
 
     // See other rules for more details about mandatory/optional fields in ControlPlane status.
     // Other fields SHOULD be added based on the needs of your provider.
 }
 ```
+
+NOTE: To align with API conventions, we recommend since the v1beta2 contract that the `ExternalManagedControlPlane` field should be
+of type `*bool` (it was `bool` before). Both are compatible with the v1beta2 contract though.
 
 Please note that by representing each control plane instance as Cluster API machine, each control plane instance
 can benefit from several Cluster API behaviours, for example:
@@ -484,54 +627,115 @@ can benefit from several Cluster API behaviours, for example:
 - Machine health checking
 - Machine drain and wait for volume detach during deletion
 
+### ControlPlane: rolloutAfter
+
+In case you are developing a control plane provider which supports scheduled rollout via
+the `rolloutAfter` field, following fields MUST be implemented in the ControlPlane `spec`.
+
+```go
+type FooControlPlaneSpec struct {
+    // rollout allows you to configure the behaviour of rolling updates to the control plane.
+    // +optional
+    Rollout FooControlPlaneRolloutSpec `json:"rollout,omitempty,omitzero"`
+	
+    // See other rules for more details about mandatory/optional fields in ControlPlane status.
+    // Other fields SHOULD be added based on the needs of your provider.
+}
+
+// +kubebuilder:validation:MinProperties=1
+type FooControlPlaneRolloutSpec struct {
+    // after is a field to indicate a rollout should be performed
+    // after the specified time even if no changes have been made to the
+    // FooControlPlane.
+    // Example: In the YAML the time can be specified in the RFC3339 format.
+    // To specify the rolloutAfter target as March 9, 2023, at 9 am UTC
+    // use "2023-03-09T09:00:00Z".
+    // +optional
+    After metav1.Time `json:"after,omitempty,omitzero"`
+}
+```
+
 ### ControlPlane: initialization completed
 
 Each ControlPlane MUST report when the Kubernetes control plane is initialized; usually a control plane is considered
 initialized when it can accept requests, no matter if this happens before the control plane is fully provisioned or not.
 
-For example, in a highly available Kubernetes control plane with three instances of each component, usually the control plane 
-can be considered initialized after the first instance is up and running. 
+For example, in a highly available Kubernetes control plane with three instances of each component, usually the control plane
+can be considered initialized after the first instance is up and running.
 
-A ControlPlane reports when it is initialized by setting `status.initialized` and `status.ready`.
+A ControlPlane reports when it is initialized by setting `status.initialization.controlPlaneInitialized`.
 
 ```go
 type FooControlPlaneStatus struct {
-    // initialized denotes that the foo control plane  API Server is initialized and thus
-    // it can accept requests.
-    // NOTE: this field is part of the Cluster API contract and it is used to orchestrate provisioning.
-    // The value of this field is never updated after provisioning is completed. Please use conditions
-    // to check the operational state of the control plane.
-    Initialized bool `json:"initialized"`
-
-    // ready denotes that the foo control plane is ready to serve requests.
-    // NOTE: this field is part of the Cluster API contract and it is used to orchestrate provisioning.
-    // The value of this field is never updated after provisioning is completed. Please use conditions
-    // to check the operational state of the control plane.
+    // initialization provides observations of the FooControlPlane initialization process.
+    // NOTE: Fields in this struct are part of the Cluster API contract and are used to orchestrate initial Cluster provisioning.
     // +optional
-    Ready bool `json:"ready"`
+    Initialization FooControlPlaneInitializationStatus `json:"initialization,omitempty,omitzero"`
     
-    // See other rules for more details about mandatory/optional fields in InfraCluster status.
+    // See other rules for more details about mandatory/optional fields in ControlPlane status.
     // Other fields SHOULD be added based on the needs of your provider.
+}
+
+// FooControlPlaneInitializationStatus provides observations of the FooControlPlane initialization process.
+// +kubebuilder:validation:MinProperties=1
+type FooControlPlaneInitializationStatus struct {
+    // controlPlaneInitialized is true when the control plane provider reports that the Kubernetes control plane is initialized; 
+    // usually a control plane is considered initialized when it can accept requests, no matter if this happens before 
+    // the control plane is fully provisioned or not.
+    // NOTE: this field is part of the Cluster API contract, and it is used to orchestrate initial Cluster provisioning.
+    // +optional
+    ControlPlaneInitialized *bool `json:"controlPlaneInitialized,omitempty"`
 }
 ```
 
-Once `status.initialized` and `status.ready` are set, the Cluster "core" controller will bubbles up those info in 
-Cluster's `status.controlPlaneReady` field and in the `ControlPlaneInitialized` condition.
+Once `status.initialization.controlPlaneInitialized` is set the Cluster "core" controller will bubble up this info in Cluster's
+`status.initialization.controlPlaneInitialized` field and in the `ControlPlaneInitialized` condition.
 
 If defined, also ControlPlane's `spec.controlPlaneEndpoint` will be surfaced on Cluster's corresponding fields at the same time.
 
 <aside class="note warning">
 
-<h1>Heads up! this will change with the v1beta2 contract</h1>
+<h1>Compatibility with the deprecated v1beta1 contract</h1>
 
-When the v1beta2 contract will be released (tentative Apr 2025), `status.initialization.controlPlaneInitialized` will be used
-instead of `status.initialized`. However, `status.initialized` will be supported until v1beta1 removal (~one year later).
+In order to ease the transition for providers, the v1beta2 version of the Cluster API contract _temporarily_
+preserves compatibility with the deprecated v1beta1 contract; compatibility will be removed tentatively in April 2027.
 
-Additionally, with the v1beta2 contract Cluster API will stop reading `status.ready` from ControlPlane resource. 
+With regards to initialization completed:
 
-See [Improving status in CAPI resources].
+Cluster API will continue to temporarily support ControlPlane resource using the `status.initialized` field to
+report initialization completed.
+
+After compatibility with the deprecated v1beta1 contract will be removed, the `status.initialized` field in
+the ControlPlane resource will be ignored.
 
 </aside>
+
+### ControlPlane: in-place updates
+
+In case a control plane provider would like to provide support for in-place updates, please check the [proposal](https://github.com/kubernetes-sigs/cluster-api/blob/main/docs/proposals/20240807-in-place-updates.md).
+
+Supporting in-place updates requires:
+- implementing the call for the registered `CanUpdateMachine` hook when performing the "can update in-place" decision.
+- when it is decided to perform the in-place decision:
+  - the machine spec must be updated to the desired state, as well as the spec for the corresponding infrastructure machine and bootstrap config
+  - while updating those objects also the `in-place-updates.internal.cluster.x-k8s.io/update-in-progress` annotation must be set
+  - once all objects are updated the `UpdateMachine` hook must be set as pending on the machine object
+
+After above steps are completed, the machine controller will take over and complete the in-place upgrade.
+
+<aside class="note warning">
+
+<h1>High complexity</h1>
+
+Implementing the in-place update transition in a race condition-free, re-entrant way is more complex than it might seem.
+
+Please read the proposal's [implementation notes](https://github.com/kubernetes-sigs/cluster-api/blob/main/docs/proposals/20240807-in-place-updates-implementation-notes.md)
+carefully.
+
+Also, it is highly recommended to use the KCP implementation as a reference.
+
+</aside>
+
 
 ### ControlPlane: conditions
 
@@ -539,101 +743,76 @@ According to [Kubernetes API Conventions], Conditions provide a standard mechani
 status reporting from a controller.
 
 Providers implementers SHOULD implement `status.conditions` for their ControlPlane resource.
-In case conditions are implemented, Cluster API condition type MUST be used.
-
-If a condition with type `Ready` exist, such condition will be mirrored in Cluster's `ControlPlaneReady` condition.
-
-Please note that the `Ready` condition is expected to surface the status of the ControlPlane during its own entire lifecycle,
-including initial provisioning, the final deletion process, and the period in between these two moments.
-
-See [Cluster API condition proposal] for more context.
-
-<aside class="note warning">
-
-<h1>Heads up! this will change with the v1beta2 contract</h1>
-
-When the v1beta2 contract will be released (tentative Apr 2025), Cluster API will start using Kubernetes metav1.Condition
-types and fully comply to [Kubernetes API Conventions].
-
-In order to support providers continuing to use legacy Cluster API condition types, providers transitioning to
-metav1.Condition or even providers adopting custom condition types, Cluster API will start to accept conditions that
-provides following information:
-- `type`
-- `status`
-- `reason` ((optional, if omitted, a default one will be used)
-- `message` (optional)
-- `lastTransitionTime` (optional, if omitted, time.Now will be used)
+In case conditions are implemented on a ControlPlane resource, Cluster API will only consider conditions providing the following information:
+- `type` (required)
+- `status` (required, one of True, False, Unknown)
+- `reason` (optional, if omitted a default one will be used)
+- `message` (optional, if omitted an empty message will be used)
+- `lastTransitionTime` (optional, if omitted time.Now will be used)
+- `observedGeneration` (optional, if omitted the generation of the ControlPlane resource will be used)
 
 Other fields will be ignored.
 
-Additional considerations apply specifically to the ControlPlane resource:
+If a condition with type `Available` exist, such condition will be mirrored in Cluster's `ControlPlaneAvailable` condition.
 
-In order to disambiguate the usage of the ready term and improve how the status of the control plane is
-presented, Cluster API will stop surfacing the `Ready` condition and instead it will surface a new `Available` condition
-read from control plane resources.
-
-The `Available` condition is expected to properly represents the fact that a ControlPlane can be operational 
+The `Available` condition is expected to properly represents the fact that a ControlPlane can be operational
 even if there is a certain degree of not readiness / disruption in the system, or if lifecycle operations are happening.
 
-Last, but not least, in order to ensure a consistent users experience, it is also recommended to consider aligning also other 
-ControlPlane conditions to conditions existing on other Cluster API objects.  
+Last, but not least, in order to ensure a consistent users experience, it is also recommended to consider aligning also other
+ControlPlane conditions to conditions existing on other Cluster API objects.
 
-For example `KubeadmControlPlane` is going to implement following conditions on top of the `Available` defined by this contract:
+For example `KubeadmControlPlane` implements the following conditions on top of the `Available` defined by this contract:
 `CertificatesAvailable`, `EtcdClusterAvailable`, `MachinesReady`, `MachinesUpToDate`, `RollingOut`, `ScalingUp`, `ScalingDown`,
 `Remediating`, `Deleting`, `Paused`.
 
-Most notably, If `RollingOut`, `ScalingUp`, `ScalingDown` conditions are implemented, the Cluster controller is going to read 
+Most notably, If `RollingOut`, `ScalingUp`, `ScalingDown` conditions are implemented, the Cluster controller is going to read
 them to compute a Cluster level `RollingOut`, `ScalingUp`, `ScalingDown` condition including all the scalable resources.
 
 See [Improving status in CAPI resources] for more context.
 
-Please also note that provider that will continue to use legacy Cluster API condition types MUST carefully take into account
-the implication of this choice which are described both in the document above and in the notice at the beginning of the [Cluster API condition proposal]..
+<aside class="note warning">
+
+<h1>Compatibility with the deprecated v1beta1 contract</h1>
+
+In order to ease the transition for providers, the v1beta2 version of the Cluster API contract _temporarily_
+preserves compatibility with the deprecated v1beta1 contract; compatibility will be removed tentatively in April 2027.
+
+With regards to conditions:
+
+Cluster API will continue to read conditions from providers using deprecated Cluster API condition types.
+
+Please note that provider that will continue to use deprecated Cluster API condition types MUST carefully take into account
+the implication of this choice which are described both in the [Cluster API v1.11 migration notes] and in the [Improving status in CAPI resources] proposal.
 
 </aside>
 
 ### ControlPlane: terminal failures
 
-Each ControlPlane SHOULD report when Cluster's enter in a state that cannot be recovered (terminal failure) by
-setting `status.failureReason` and `status.failureMessage` in the ControlPlane resource.
+Starting from the v1beta2 contract version, there is no more special treatment for provider's terminal failures within Cluster API.
 
-```go
-type FoControlPlaneStatus struct {
-    // failureReason will be set in the event that there is a terminal problem reconciling the FooControlPlane
-    // and will contain a succinct value suitable for machine interpretation.
-    //
-    // This field should not be set for transitive errors that can be fixed automatically or with manual intervention,
-    // but instead indicate that something is fundamentally wrong with the FooCluster and that it cannot be recovered.
-    // +optional
-    FailureReason *capierrors.ClusterStatusError `json:"failureReason,omitempty"`
-    
-    // failureMessage will be set in the event that there is a terminal problem reconciling the FooControlPlane
-    // and will contain a more verbose string suitable for logging and human consumption.
-    //
-    // This field should not be set for transitive errors that can be fixed automatically or with manual intervention,
-    // but instead indicate that something is fundamentally wrong with the FooCluster and that it cannot be recovered.
-    // +optional
-    FailureMessage *string `json:"failureMessage,omitempty"`
-    
-    // See other rules for more details about mandatory/optional fields in ControlPlane status.
-    // Other fields SHOULD be added based on the needs of your provider.
-}
-```
+In case necessary, "terminal failures" should be surfaced using conditions, with a well documented type/reason;
+it is up to consumers to treat them accordingly.
 
-Once `status.failureReason` and `status.failureMessage` are set on the ControlPlane resource, the Cluster "core" controller
-will surface those info in the corresponding fields in Cluster's `status`.
-
-Please note that once failureReason/failureMessage is set in Cluster's `status`, the only way to recover is to delete and
-recreate the Cluster (it is a terminal failure).
+See [Improving status in CAPI resources] for more context.
 
 <aside class="note warning">
 
-<h1>Heads up! this will change with the v1beta2 contract</h1>
+<h1>Compatibility with the deprecated v1beta1 contract</h1>
 
-When the v1beta2 contract will be released (tentative Apr 2025), support for `status.failureReason` and `status.failureMessage`
-will be dropped.
+In order to ease the transition for providers, the v1beta2 version of the Cluster API contract _temporarily_
+preserves compatibility with the deprecated v1beta1 contract; compatibility will be removed tentatively in April 2027.
 
-See [Improving status in CAPI resources].
+With regards to terminal failures:
+
+In case a Control Plane provider reports that a ControlPlane resource is in a state that cannot be recovered (terminal failure) by
+setting `status.failureReason` and `status.failureMessage` as defined by the deprecated v1beta1 contract,
+the "core" Cluster controller will surface those info in the corresponding fields in the Cluster's `status.deprecated.v1beta1` struct.
+
+However, those info won't have any impact on the Cluster lifecycle as before (the Cluster controller won't consider the
+presence of `status.failureReason` and `status.failureMessage` info as "terminal failures").
+
+After compatibility with the deprecated v1beta1 contract will be removed, `status.failureReason` and `status.failureMessage`
+fields in the ControlPlane resource will be ignored and Cluster's `status.deprecated.v1beta1` struct will be dropped.
 
 </aside>
 
@@ -663,7 +842,7 @@ type FooControlPlaneTemplateResource struct {
     // Standard object's metadata.
     // More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
     // +optional
-    ObjectMeta clusterv1.ObjectMeta `json:"metadata,omitempty"`
+    ObjectMeta clusterv1.ObjectMeta `json:"metadata,omitempty,omitzero"`
     Spec FooControlPlaneSpec `json:"spec"`
 }
 ```
@@ -700,6 +879,7 @@ The kubeconfig secret MUST:
 - Have type `cluster.x-k8s.io/secret`
 - Be labelled with the key-pair `cluster.x-k8s.io/cluster-name=${CLUSTER_NAME}`.
   Note: this label is required for the secret to be retrievable in the cache used by CAPI managers.
+- Have the base64 encoded kubeconfig in the field called `value`
 
 Important! If a control plane provider uses client certificates for authentication in these Kubeconfigs, the client certificate 
 MUST be kept with a reasonably short expiration period and periodically regenerated to keep a valid set of credentials available.
@@ -738,7 +918,7 @@ details about how metadata should be propagated across the hierarchy of Cluster 
 Also, please note that `metadata` MUST be propagated to control plane instances machines without triggering rollouts.
 See [In place propagation of changes affecting Kubernetes objects only] for more details.
 
-See. [Label Sync Between Machines and underlying Kubernetes Nodes] for more details about how metadata are
+See. [Label and Annotations Sync Between Machines and underlying Kubernetes Nodes] for more details about how metadata are
 propagated to Kubernetes Nodes.
 
 ### MinReadySeconds and UpToDate propagation
@@ -747,7 +927,7 @@ propagated to Kubernetes Nodes.
 
 <h1>Heads up! this will change with the v1beta2 contract</h1>
 
-When the v1beta2 contract will be released (tentative Apr 2025), Cluster API is going to standardize how
+When the v1beta2 contract will be released (August 2025), Cluster API is going to standardize how
 machines determine if they are available or up to date with the spec of the owner resource.
 
 In order to ensure a nice and consistent user experience across the entire Cluster, also ControlPlane providers
@@ -811,12 +991,13 @@ is implemented in ControlPlane controllers:
 [ControlPlane: replicas]: #controlplane-replicas 
 [scale]: https://kubernetes.io/docs/tasks/extend-kubernetes/custom-resources/custom-resource-definitions/#subresources
 [ControlPlane: machines]: #controlplane-machines
+[ControlPlane: rolloutAfter]: #controlplane-rolloutafter
 [In place propagation of changes affecting Kubernetes objects only]: https://github.com/kubernetes-sigs/cluster-api/blob/main/docs/proposals/20221003-In-place-propagation-of-Kubernetes-objects-only-changes.md
 [ControlPlane: version]: #controlplane-version 
-[ControlPlane: initialization completed]: #controlplane-initialization-completed 
+[ControlPlane: initialization completed]: #controlplane-initialization-completed
+[ControlPlane: in-place updates]: #controlplane-in-place-updates
 [ControlPlane: conditions]: #controlplane-conditions 
 [Kubernetes API Conventions]: https://github.com/kubernetes/community/blob/master/contributors/devel/sig-architecture/api-conventions.md#typical-status-properties
-[Cluster API condition proposal]: https://github.com/kubernetes-sigs/cluster-api/blob/main/docs/proposals/20200506-conditions.md
 [Improving status in CAPI resources]: https://github.com/kubernetes-sigs/cluster-api/blob/main/docs/proposals/20240916-improve-status-in-CAPI-resources.md
 [ControlPlane: terminal failures]: #controlplane-terminal-failures 
 [ControlPlaneTemplate, ControlPlaneTemplateList resource definition]: #controlplanetemplate-controlplanetemplatelist-resource-definition
@@ -826,10 +1007,11 @@ is implemented in ControlPlane controllers:
 [Machine placement]: #machine-placement
 [Metadata propagation]: #metadata-propagation
 [Metadata propagation rules]: https://main.cluster-api.sigs.k8s.io/reference/api/metadata-propagation
-[Label Sync Between Machines and underlying Kubernetes Nodes]: https://github.com/kubernetes-sigs/cluster-api/blob/main/docs/proposals/20220927-label-sync-between-machine-and-nodes.md
+[Label and Annotations Sync Between Machines and underlying Kubernetes Nodes]: https://github.com/kubernetes-sigs/cluster-api/blob/main/docs/proposals/20220927-labels-and-annotations-sync-between-machine-and-nodes.md
 [MinReadySeconds and UpToDate propagation]: #minreadyseconds-and-uptodate-propagation
 [Support for running multiple instances]: #support-for-running-multiple-instances
 [Support running multiple instances of the same provider]: ../../core/support-multiple-instances.md
 [Clusterctl support]: #clusterctl-support
 [ControlPlane: pausing]: #controlplane-pausing
 [implementation best practices]: ../best-practices.md
+[Cluster API v1.11 migration notes]: ../migrations/v1.10-to-v1.11.md

@@ -17,7 +17,7 @@ ROOT_DIR:=$(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
 TOOLS_DIR := $(realpath ../../hack/tools)
 TOOLS_BIN_DIR := $(TOOLS_DIR)/bin
 BIN_DIR := bin
-MDBOOK_INSTALL := $(realpath ../../scripts/install-mdbook.sh)
+MDBOOK_INSTALL := $(realpath ../../hack/scripts/ensure/ensure-mdbook.sh)
 
 export PATH := $(TOOLS_BIN_DIR):$(PATH)
 
@@ -50,7 +50,7 @@ BOOK_DEPS := runtimesdk-yaml
 
 .PHONY: serve
 serve: $(MDBOOK) $(TABULATE) $(EMBED) $(RELEASELINK) runtimesdk-yaml
-	$(MDBOOK) serve
+	$(MDBOOK) serve -p 3001
 
 .PHONY: build
 build: $(MDBOOK) $(TABULATE) $(EMBED) $(RELEASELINK) runtimesdk-yaml

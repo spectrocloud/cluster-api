@@ -6,7 +6,7 @@ on:
       - main
     paths:
       - 'CHANGELOG/*.md'
-  
+
 permissions:
   contents: write # Allow to push a tag, create a release branch and publish a draft release.
 
@@ -16,13 +16,13 @@ jobs:
     outputs:
       release_tag: ${{ steps.release-version.outputs.release_version }}
     steps:
-      - name: Checkout code 
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # tag=v4.2.2
+      - name: Checkout code
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # tag=v7.0.0
         with:
           fetch-depth: 0
       - name: Get changed files
         id: changed-files
-        uses: tj-actions/changed-files@dcc7a0cba800f454d79fff4b993e8c3555bcc0a8 # tag=v45.0.7
+        uses: tj-actions/changed-files@9426d40962ed5378910ee2e21d5f8c6fcbf2dd96 # tag=v47.0.6
       - name: Get release version
         id: release-version
         run: |
@@ -43,7 +43,8 @@ jobs:
             done
       - name: Determine the release branch to use
         run: |
-            if [[ $RELEASE_VERSION =~ beta ]] || [[ $RELEASE_VERSION =~ alpha ]]; then
+            # Use the release branch for all v1.10 releases
+            if [[ ! $RELEASE_VERSION =~ ^v1\.10 ]] && [[ $RELEASE_VERSION =~ beta ]] || [[ $RELEASE_VERSION =~ alpha ]]; then
               export RELEASE_BRANCH=main
               echo "RELEASE_BRANCH=$RELEASE_BRANCH" >> $GITHUB_ENV
               echo "This is a beta or alpha release, will use release branch $RELEASE_BRANCH"
@@ -77,6 +78,13 @@ jobs:
           git push origin ${RELEASE_VERSION}
           git push origin test/${RELEASE_VERSION}
           echo "Created tags $RELEASE_VERSION and test/${RELEASE_VERSION}"
+
+          # Push api tag if the API Go module exists (on this branch).
+          if [ -f api/go.mod ]; then
+            git tag api/${RELEASE_VERSION}
+            git push origin api/${RELEASE_VERSION}
+            echo "Created tag api/${RELEASE_VERSION}"
+          fi
   release:
     name: create draft release
     runs-on: ubuntu-latest
@@ -87,14 +95,14 @@ jobs:
         env:
           RELEASE_TAG: ${{needs.push_release_tags.outputs.release_tag}}
       - name: checkout code
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # tag=v4.2.2
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # tag=v7.0.0
         with:
           fetch-depth: 0
           ref: ${{ env.RELEASE_TAG }}
       - name: Calculate go version
         run: echo "go_version=$(make go-version)" >> $GITHUB_ENV
       - name: Set up Go
-        uses: actions/setup-go@f111f3307d8850f501ac008e886eec1fd1932a34 # tag=v5.3.0
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # tag=v6.5.0
         with:
           go-version: ${{ env.go_version }}
       - name: generate release artifacts
@@ -105,7 +113,7 @@ jobs:
           curl -L "https://raw.githubusercontent.com/${{ github.repository }}/main/CHANGELOG/${{ env.RELEASE_TAG }}.md" \
           -o "${{ env.RELEASE_TAG }}.md"
       - name: Release
-        uses: softprops/action-gh-release@c95fe1489396fe8a9eb87c0abf8aa5b2ef267fda # tag=v2.2.1
+        uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # tag=v3.0.1
         with:
           draft: true
           files: out/*

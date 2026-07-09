@@ -78,7 +78,7 @@ resources:
 The content of the `workload-mhc.yaml` file would be the definition of a standard MHC:
 
 ```yaml
-apiVersion: cluster.x-k8s.io/v1alpha3
+apiVersion: cluster.x-k8s.io/v1beta2
 kind: MachineHealthCheck
 metadata:
   name: md-0-mhc
@@ -89,13 +89,20 @@ spec:
   selector:
     matchLabels:
       cluster.x-k8s.io/deployment-name: md-0
-  unhealthyConditions:
+  unhealthyNodeConditions:
   - type: Ready
     status: Unknown
     timeout: 300s
   - type: Ready
     status: "False"
     timeout: 300s
+  unhealthyMachineConditions:
+  - type: "NodeReady"
+    status: Unknown
+    timeout: 1800s
+  - type: "InfrastructureReady"
+    status: "False"
+    timeout: 1800s
 ```
 
 You would want to ensure the `clusterName` field in the MachineHealthCheck manifest appropriately
@@ -123,7 +130,7 @@ Add the following content to the `namereference.yaml` transformer configuration:
 ```yaml
 - kind: Cluster
   group: cluster.x-k8s.io
-  version: v1alpha3
+  version: v1beta2
   fieldSpecs:
   - path: spec/clusterName
     kind: MachineDeployment
@@ -190,6 +197,6 @@ namePrefix: "blue-"
 nameSuffix: "-dev"
 ```
 
-Running `kustomize build. ` with this configuration would modify the name of all the Cluster API
+Running `kustomize build .` with this configuration would modify the name of all the Cluster API
 objects _and_ the associated referenced objects, adding "blue-" at the beginning and appending "-dev"
 at the end.

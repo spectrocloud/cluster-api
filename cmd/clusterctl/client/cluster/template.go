@@ -26,7 +26,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/google/go-github/v53/github"
+	"github.com/google/go-github/v82/github"
 	"github.com/pkg/errors"
 	"golang.org/x/oauth2"
 	corev1 "k8s.io/api/core/v1"
@@ -161,14 +161,14 @@ func (t *templateClient) getURLContent(ctx context.Context, templateURL string) 
 }
 
 func (t *templateClient) getLocalFileContent(rURL *url.URL) ([]byte, error) {
-	f, err := os.Stat(rURL.Path)
+	f, err := os.Stat(rURL.Path) //nolint:gosec // G703: rURL.Path comes from a parsed URL, not raw user input.
 	if err != nil {
 		return nil, errors.Errorf("failed to read file %q", rURL.Path)
 	}
 	if f.IsDir() {
 		return nil, errors.Errorf("invalid path: file %q is actually a directory", rURL.Path)
 	}
-	content, err := os.ReadFile(rURL.Path)
+	content, err := os.ReadFile(rURL.Path) //nolint:gosec // G703: rURL.Path comes from a parsed URL, not raw user input.
 	if err != nil {
 		return nil, errors.Wrapf(err, "failed to read file %q", rURL.Path)
 	}
@@ -303,10 +303,12 @@ func getGitHubClient(ctx context.Context, configVariablesClient config.Variables
 	return github.NewClient(authenticatingHTTPClient), nil
 }
 
+var errRateLimit = errors.New("rate limit for github api has been reached. Please wait one hour or get a personal API token and assign it to the GITHUB_TOKEN environment variable")
+
 // handleGithubErr wraps error messages.
 func handleGithubErr(err error, message string, args ...interface{}) error {
 	if _, ok := err.(*github.RateLimitError); ok {
-		return errors.New("rate limit for github api has been reached. Please wait one hour or get a personal API token and assign it to the GITHUB_TOKEN environment variable")
+		return errRateLimit
 	}
 	return errors.Wrapf(err, message, args...)
 }

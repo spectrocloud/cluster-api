@@ -19,58 +19,40 @@ package webhooks
 import (
 	"context"
 	"fmt"
+	"reflect"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/webhook"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
-	controlplanev1 "sigs.k8s.io/cluster-api/controlplane/kubeadm/api/v1beta1"
+	controlplanev1 "sigs.k8s.io/cluster-api/api/controlplane/kubeadm/v1beta2"
+	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
+	"sigs.k8s.io/cluster-api/bootstrap/kubeadm/defaulting"
+	"sigs.k8s.io/cluster-api/bootstrap/kubeadm/validation"
+	"sigs.k8s.io/cluster-api/controlplane/kubeadm/webhooks/conversion"
 	"sigs.k8s.io/cluster-api/feature"
 	"sigs.k8s.io/cluster-api/internal/util/compare"
+	"sigs.k8s.io/cluster-api/internal/util/taints"
 )
 
 func (webhook *KubeadmControlPlaneTemplate) SetupWebhookWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewWebhookManagedBy(mgr).
-		For(&controlplanev1.KubeadmControlPlaneTemplate{}).
-		WithDefaulter(webhook, admission.DefaulterRemoveUnknownOrOmitableFields).
+	return ctrl.NewWebhookManagedBy(mgr, &controlplanev1.KubeadmControlPlaneTemplate{}).
 		WithValidator(webhook).
+		WithConverter(conversion.KubeadmControlPlaneTemplate).
 		Complete()
 }
 
-// +kubebuilder:webhook:verbs=create;update,path=/validate-controlplane-cluster-x-k8s-io-v1beta1-kubeadmcontrolplanetemplate,mutating=false,failurePolicy=fail,groups=controlplane.cluster.x-k8s.io,resources=kubeadmcontrolplanetemplates,versions=v1beta1,name=validation.kubeadmcontrolplanetemplate.controlplane.cluster.x-k8s.io,sideEffects=None,admissionReviewVersions=v1;v1beta1
-// +kubebuilder:webhook:verbs=create;update,path=/mutate-controlplane-cluster-x-k8s-io-v1beta1-kubeadmcontrolplanetemplate,mutating=true,failurePolicy=fail,groups=controlplane.cluster.x-k8s.io,resources=kubeadmcontrolplanetemplates,versions=v1beta1,name=default.kubeadmcontrolplanetemplate.controlplane.cluster.x-k8s.io,sideEffects=None,admissionReviewVersions=v1;v1beta1
+// +kubebuilder:webhook:verbs=create;update,path=/validate-controlplane-cluster-x-k8s-io-v1beta2-kubeadmcontrolplanetemplate,mutating=false,failurePolicy=fail,groups=controlplane.cluster.x-k8s.io,resources=kubeadmcontrolplanetemplates,versions=v1beta2,name=validation.kubeadmcontrolplanetemplate.controlplane.cluster.x-k8s.io,sideEffects=None,admissionReviewVersions=v1
 
 // KubeadmControlPlaneTemplate implements a validation and defaulting webhook for KubeadmControlPlaneTemplate.
 type KubeadmControlPlaneTemplate struct{}
 
-var _ webhook.CustomValidator = &KubeadmControlPlaneTemplate{}
-var _ webhook.CustomDefaulter = &KubeadmControlPlaneTemplate{}
-
-// Default implements webhook.Defaulter so a webhook will be registered for the type.
-func (webhook *KubeadmControlPlaneTemplate) Default(_ context.Context, obj runtime.Object) error {
-	k, ok := obj.(*controlplanev1.KubeadmControlPlaneTemplate)
-	if !ok {
-		return apierrors.NewBadRequest(fmt.Sprintf("expected a KubeadmControlPlaneTemplate but got a %T", obj))
-	}
-
-	k.Spec.Template.Spec.KubeadmConfigSpec.Default()
-
-	k.Spec.Template.Spec.RolloutStrategy = defaultRolloutStrategy(k.Spec.Template.Spec.RolloutStrategy)
-
-	return nil
-}
+var _ admission.Validator[*controlplanev1.KubeadmControlPlaneTemplate] = &KubeadmControlPlaneTemplate{}
 
 // ValidateCreate implements webhook.Validator so a webhook will be registered for the type.
-func (webhook *KubeadmControlPlaneTemplate) ValidateCreate(_ context.Context, obj runtime.Object) (admission.Warnings, error) {
-	k, ok := obj.(*controlplanev1.KubeadmControlPlaneTemplate)
-	if !ok {
-		return nil, apierrors.NewBadRequest(fmt.Sprintf("expected a KubeadmControlPlaneTemplate but got a %T", obj))
-	}
-
+func (webhook *KubeadmControlPlaneTemplate) ValidateCreate(_ context.Context, k *controlplanev1.KubeadmControlPlaneTemplate) (admission.Warnings, error) {
 	// NOTE: KubeadmControlPlaneTemplate is behind ClusterTopology feature gate flag; the web hook
 	// must prevent creating new objects in case the feature flag is disabled.
 	if !feature.Gates.Enabled(feature.ClusterTopology) {
@@ -82,8 +64,8 @@ func (webhook *KubeadmControlPlaneTemplate) ValidateCreate(_ context.Context, ob
 
 	spec := k.Spec.Template.Spec
 	allErrs := validateKubeadmControlPlaneTemplateResourceSpec(spec, field.NewPath("spec", "template", "spec"))
-	allErrs = append(allErrs, validateClusterConfiguration(nil, spec.KubeadmConfigSpec.ClusterConfiguration, field.NewPath("spec", "template", "spec", "kubeadmConfigSpec", "clusterConfiguration"))...)
-	allErrs = append(allErrs, spec.KubeadmConfigSpec.Validate(field.NewPath("spec", "template", "spec", "kubeadmConfigSpec"))...)
+	allErrs = append(allErrs, validateClusterConfiguration(nil, &spec.KubeadmConfigSpec.ClusterConfiguration, field.NewPath("spec", "template", "spec", "kubeadmConfigSpec", "clusterConfiguration"))...)
+	allErrs = append(allErrs, validation.Validate(&spec.KubeadmConfigSpec, true, field.NewPath("spec", "template", "spec", "kubeadmConfigSpec"))...)
 	// Validate the metadata of the KubeadmControlPlaneTemplateResource
 	allErrs = append(allErrs, k.Spec.Template.ObjectMeta.Validate(field.NewPath("spec", "template", "metadata"))...)
 	if len(allErrs) > 0 {
@@ -93,24 +75,23 @@ func (webhook *KubeadmControlPlaneTemplate) ValidateCreate(_ context.Context, ob
 }
 
 // ValidateUpdate implements webhook.Validator so a webhook will be registered for the type.
-func (webhook *KubeadmControlPlaneTemplate) ValidateUpdate(ctx context.Context, oldObj, newObj runtime.Object) (admission.Warnings, error) {
+func (webhook *KubeadmControlPlaneTemplate) ValidateUpdate(_ context.Context, oldK, newK *controlplanev1.KubeadmControlPlaneTemplate) (admission.Warnings, error) {
 	var allErrs field.ErrorList
 
-	oldK, ok := oldObj.(*controlplanev1.KubeadmControlPlaneTemplate)
-	if !ok {
-		return nil, apierrors.NewBadRequest(fmt.Sprintf("expected a KubeadmControlPlaneTemplate but got a %T", oldObj))
-	}
+	// Apply defaults from older versions of CAPI so the following checks do not report differences when
+	// dealing with objects created before dropping those defaults.
+	defaulting.ApplyPreviousKubeadmConfigDefaults(&oldK.Spec.Template.Spec.KubeadmConfigSpec)
+	defaulting.ApplyPreviousKubeadmConfigDefaults(&newK.Spec.Template.Spec.KubeadmConfigSpec)
 
-	newK, ok := newObj.(*controlplanev1.KubeadmControlPlaneTemplate)
-	if !ok {
-		return nil, apierrors.NewBadRequest(fmt.Sprintf("expected a KubeadmControlPlaneTemplate but got a %T", newObj))
-	}
-
-	if err := webhook.Default(ctx, oldK); err != nil {
-		return nil, apierrors.NewBadRequest(fmt.Sprintf("failed to compare old and new KubeadmControlPlaneTemplate: failed to default old object: %v", err))
-	}
-	if err := webhook.Default(ctx, newK); err != nil {
-		return nil, apierrors.NewBadRequest(fmt.Sprintf("failed to compare old and new KubeadmControlPlaneTemplate: failed to default new object: %v", err))
+	// In Cluster API < v1.11 the RolloutStrategy field was defaulted.
+	// The defaulting was dropped with Cluster API v1.11.
+	// To ensure users can still apply their KubeadmControlPlaneTemplate over pre-existing KubeadmControlPlaneTemplate
+	// without setting rolloutStrategy we allow transitions from the old default value to unset.
+	if reflect.DeepEqual(newK.Spec.Template.Spec.Rollout.Strategy, controlplanev1.KubeadmControlPlaneRolloutStrategy{}) &&
+		oldK.Spec.Template.Spec.Rollout.Strategy.Type == controlplanev1.RollingUpdateStrategyType &&
+		oldK.Spec.Template.Spec.Rollout.Strategy.RollingUpdate.MaxSurge != nil &&
+		*oldK.Spec.Template.Spec.Rollout.Strategy.RollingUpdate.MaxSurge == intstr.FromInt32(1) {
+		newK.Spec.Template.Spec.Rollout.Strategy = oldK.Spec.Template.Spec.Rollout.Strategy
 	}
 
 	equal, diff, err := compare.Diff(oldK.Spec.Template.Spec, newK.Spec.Template.Spec)
@@ -130,25 +111,21 @@ func (webhook *KubeadmControlPlaneTemplate) ValidateUpdate(ctx context.Context, 
 }
 
 // ValidateDelete implements webhook.Validator so a webhook will be registered for the type.
-func (webhook *KubeadmControlPlaneTemplate) ValidateDelete(_ context.Context, _ runtime.Object) (admission.Warnings, error) {
+func (webhook *KubeadmControlPlaneTemplate) ValidateDelete(_ context.Context, _ *controlplanev1.KubeadmControlPlaneTemplate) (admission.Warnings, error) {
 	return nil, nil
 }
 
 // validateKubeadmControlPlaneTemplateResourceSpec is a copy of validateKubeadmControlPlaneSpec which
 // only validates the fields in KubeadmControlPlaneTemplateResourceSpec we care about.
 func validateKubeadmControlPlaneTemplateResourceSpec(s controlplanev1.KubeadmControlPlaneTemplateResourceSpec, pathPrefix *field.Path) field.ErrorList {
-	allErrs := field.ErrorList{}
+	allErrs := field.ErrorList{} //nolint:prealloc // Not all paths append
 
-	allErrs = append(allErrs, validateRolloutBefore(s.RolloutBefore, pathPrefix.Child("rolloutBefore"))...)
-	allErrs = append(allErrs, validateRolloutStrategy(s.RolloutStrategy, nil, pathPrefix.Child("rolloutStrategy"))...)
-	if s.MachineNamingStrategy != nil {
-		allErrs = append(allErrs, validateNamingStrategy(s.MachineNamingStrategy, pathPrefix.Child("machineNamingStrategy"))...)
-	}
+	allErrs = append(allErrs, validateRolloutAndCertValidityFields(s.Rollout, s.KubeadmConfigSpec.ClusterConfiguration, nil, pathPrefix)...)
+	allErrs = append(allErrs, validateNaming(s.MachineNaming, pathPrefix.Child("machineNaming"))...)
+	allErrs = append(allErrs, taints.ValidateMachineTaints(s.MachineTemplate.Spec.Taints, pathPrefix.Child("machineTemplate", "spec", "taints"))...)
 
-	if s.MachineTemplate != nil {
-		// Validate the metadata of the MachineTemplate
-		allErrs = append(allErrs, s.MachineTemplate.ObjectMeta.Validate(pathPrefix.Child("machineTemplate", "metadata"))...)
-	}
+	// Validate the metadata of the MachineTemplate
+	allErrs = append(allErrs, s.MachineTemplate.ObjectMeta.Validate(pathPrefix.Child("machineTemplate", "metadata"))...)
 
 	return allErrs
 }

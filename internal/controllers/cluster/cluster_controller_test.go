@@ -30,14 +30,14 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
-	expv1 "sigs.k8s.io/cluster-api/exp/api/v1beta1"
-	runtimev1 "sigs.k8s.io/cluster-api/exp/runtime/api/v1alpha1"
+	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
+	runtimev1 "sigs.k8s.io/cluster-api/api/runtime/v1beta2"
 	"sigs.k8s.io/cluster-api/feature"
+	"sigs.k8s.io/cluster-api/internal/contract"
 	"sigs.k8s.io/cluster-api/util"
 	"sigs.k8s.io/cluster-api/util/collections"
 	"sigs.k8s.io/cluster-api/util/conditions"
-	v1beta2conditions "sigs.k8s.io/cluster-api/util/conditions/v1beta2"
+	v1beta1conditions "sigs.k8s.io/cluster-api/util/conditions/deprecated/v1beta1"
 	"sigs.k8s.io/cluster-api/util/patch"
 	"sigs.k8s.io/cluster-api/util/test/builder"
 )
@@ -65,7 +65,13 @@ func TestClusterReconciler(t *testing.T) {
 				GenerateName: "test1-",
 				Namespace:    ns.Name,
 			},
-			Spec: clusterv1.ClusterSpec{},
+			Spec: clusterv1.ClusterSpec{
+				ControlPlaneRef: clusterv1.ContractVersionedObjectReference{
+					APIGroup: builder.ControlPlaneGroupVersion.Group,
+					Kind:     builder.GenericControlPlaneKind,
+					Name:     "cp1",
+				},
+			},
 		}
 
 		// Create the Cluster object and expect the Reconcile and Deployment to be created
@@ -88,10 +94,10 @@ func TestClusterReconciler(t *testing.T) {
 		g.Eventually(func(g Gomega) {
 			g.Expect(env.Get(ctx, key, instance)).To(Succeed())
 
-			condition := v1beta2conditions.Get(instance, clusterv1.ClusterRemoteConnectionProbeV1Beta2Condition)
+			condition := conditions.Get(instance, clusterv1.ClusterRemoteConnectionProbeCondition)
 			g.Expect(condition).ToNot(BeNil())
 			g.Expect(condition.Status).To(Equal(metav1.ConditionFalse))
-			g.Expect(condition.Reason).To(Equal(clusterv1.ClusterRemoteConnectionProbeFailedV1Beta2Reason))
+			g.Expect(condition.Reason).To(Equal(clusterv1.ClusterRemoteConnectionProbeFailedReason))
 		}, timeout).Should(Succeed())
 
 		t.Log("Creating the Cluster Kubeconfig Secret")
@@ -100,10 +106,10 @@ func TestClusterReconciler(t *testing.T) {
 		g.Eventually(func(g Gomega) {
 			g.Expect(env.Get(ctx, key, instance)).To(Succeed())
 
-			condition := v1beta2conditions.Get(instance, clusterv1.ClusterRemoteConnectionProbeV1Beta2Condition)
+			condition := conditions.Get(instance, clusterv1.ClusterRemoteConnectionProbeCondition)
 			g.Expect(condition).ToNot(BeNil())
 			g.Expect(condition.Status).To(Equal(metav1.ConditionTrue))
-			g.Expect(condition.Reason).To(Equal(clusterv1.ClusterRemoteConnectionProbeSucceededV1Beta2Reason))
+			g.Expect(condition.Reason).To(Equal(clusterv1.ClusterRemoteConnectionProbeSucceededReason))
 		}, timeout).Should(Succeed())
 	})
 
@@ -115,6 +121,13 @@ func TestClusterReconciler(t *testing.T) {
 			ObjectMeta: metav1.ObjectMeta{
 				GenerateName: "test2-",
 				Namespace:    ns.Name,
+			},
+			Spec: clusterv1.ClusterSpec{
+				ControlPlaneRef: clusterv1.ContractVersionedObjectReference{
+					APIGroup: builder.ControlPlaneGroupVersion.Group,
+					Kind:     builder.GenericControlPlaneKind,
+					Name:     "cp1",
+				},
 			},
 		}
 		g.Expect(env.Create(ctx, cluster)).To(Succeed())
@@ -136,8 +149,16 @@ func TestClusterReconciler(t *testing.T) {
 		g.Eventually(func() bool {
 			ph, err := patch.NewHelper(cluster, env)
 			g.Expect(err).ToNot(HaveOccurred())
-			cluster.Spec.InfrastructureRef = &corev1.ObjectReference{Name: "test"}
-			cluster.Spec.ControlPlaneRef = &corev1.ObjectReference{Name: "test-too"}
+			cluster.Spec.InfrastructureRef = clusterv1.ContractVersionedObjectReference{
+				APIGroup: builder.InfrastructureGroupVersion.Group,
+				Kind:     builder.GenericInfrastructureClusterKind,
+				Name:     "test",
+			}
+			cluster.Spec.ControlPlaneRef = clusterv1.ContractVersionedObjectReference{
+				APIGroup: builder.ControlPlaneGroupVersion.Group,
+				Kind:     builder.GenericControlPlaneKind,
+				Name:     "test-too",
+			}
 			g.Expect(ph.Patch(ctx, cluster, patch.WithStatusObservedGeneration{})).To(Succeed())
 			return true
 		}, timeout).Should(BeTrue())
@@ -148,7 +169,7 @@ func TestClusterReconciler(t *testing.T) {
 			if err := env.Get(ctx, key, instance); err != nil {
 				return false
 			}
-			return instance.Spec.InfrastructureRef != nil &&
+			return instance.Spec.InfrastructureRef.IsDefined() &&
 				instance.Spec.InfrastructureRef.Name == "test"
 		}, timeout).Should(BeTrue())
 	})
@@ -162,6 +183,13 @@ func TestClusterReconciler(t *testing.T) {
 				GenerateName: "test3-",
 				Namespace:    ns.Name,
 			},
+			Spec: clusterv1.ClusterSpec{
+				ControlPlaneRef: clusterv1.ContractVersionedObjectReference{
+					APIGroup: builder.ControlPlaneGroupVersion.Group,
+					Kind:     builder.GenericControlPlaneKind,
+					Name:     "cp1",
+				},
+			},
 		}
 		g.Expect(env.Create(ctx, cluster)).To(Succeed())
 		key := client.ObjectKey{Name: cluster.Name, Namespace: cluster.Namespace}
@@ -182,7 +210,7 @@ func TestClusterReconciler(t *testing.T) {
 		g.Eventually(func() bool {
 			ph, err := patch.NewHelper(cluster, env)
 			g.Expect(err).ToNot(HaveOccurred())
-			cluster.Status.InfrastructureReady = true
+			cluster.Status.Initialization.InfrastructureProvisioned = ptr.To(true)
 			g.Expect(ph.Patch(ctx, cluster, patch.WithStatusObservedGeneration{})).To(Succeed())
 			return true
 		}, timeout).Should(BeTrue())
@@ -193,7 +221,7 @@ func TestClusterReconciler(t *testing.T) {
 			if err := env.Get(ctx, key, instance); err != nil {
 				return false
 			}
-			return instance.Status.InfrastructureReady
+			return ptr.Deref(instance.Status.Initialization.InfrastructureProvisioned, false)
 		}, timeout).Should(BeTrue())
 	})
 
@@ -206,6 +234,13 @@ func TestClusterReconciler(t *testing.T) {
 				GenerateName: "test3-",
 				Namespace:    ns.Name,
 			},
+			Spec: clusterv1.ClusterSpec{
+				ControlPlaneRef: clusterv1.ContractVersionedObjectReference{
+					APIGroup: builder.ControlPlaneGroupVersion.Group,
+					Kind:     builder.GenericControlPlaneKind,
+					Name:     "cp1",
+				},
+			},
 		}
 		g.Expect(env.Create(ctx, cluster)).To(Succeed())
 		key := client.ObjectKey{Name: cluster.Name, Namespace: cluster.Namespace}
@@ -226,7 +261,11 @@ func TestClusterReconciler(t *testing.T) {
 		g.Eventually(func() bool {
 			ph, err := patch.NewHelper(cluster, env)
 			g.Expect(err).ToNot(HaveOccurred())
-			conditions.MarkTrue(cluster, clusterv1.InfrastructureReadyCondition)
+			conditions.Set(cluster, metav1.Condition{
+				Type:   "CustomType",
+				Status: metav1.ConditionTrue,
+				Reason: "CustomReason",
+			})
 			g.Expect(ph.Patch(ctx, cluster, patch.WithStatusObservedGeneration{})).To(Succeed())
 			return true
 		}, timeout).Should(BeTrue())
@@ -237,7 +276,7 @@ func TestClusterReconciler(t *testing.T) {
 			if err := env.Get(ctx, key, instance); err != nil {
 				return false
 			}
-			return conditions.IsTrue(cluster, clusterv1.InfrastructureReadyCondition)
+			return conditions.IsTrue(cluster, "CustomType")
 		}, timeout).Should(BeTrue())
 	})
 
@@ -249,6 +288,13 @@ func TestClusterReconciler(t *testing.T) {
 			ObjectMeta: metav1.ObjectMeta{
 				GenerateName: "test4-",
 				Namespace:    ns.Name,
+			},
+			Spec: clusterv1.ClusterSpec{
+				ControlPlaneRef: clusterv1.ContractVersionedObjectReference{
+					APIGroup: builder.ControlPlaneGroupVersion.Group,
+					Kind:     builder.GenericControlPlaneKind,
+					Name:     "cp1",
+				},
 			},
 		}
 
@@ -271,8 +317,12 @@ func TestClusterReconciler(t *testing.T) {
 		g.Eventually(func() bool {
 			ph, err := patch.NewHelper(cluster, env)
 			g.Expect(err).ToNot(HaveOccurred())
-			cluster.Status.InfrastructureReady = true
-			cluster.Spec.InfrastructureRef = &corev1.ObjectReference{Name: "test"}
+			cluster.Status.Initialization.InfrastructureProvisioned = ptr.To(true)
+			cluster.Spec.InfrastructureRef = clusterv1.ContractVersionedObjectReference{
+				APIGroup: builder.InfrastructureGroupVersion.Group,
+				Kind:     builder.GenericInfrastructureClusterKind,
+				Name:     "test",
+			}
 			g.Expect(ph.Patch(ctx, cluster, patch.WithStatusObservedGeneration{})).To(Succeed())
 			return true
 		}, timeout).Should(BeTrue())
@@ -283,8 +333,8 @@ func TestClusterReconciler(t *testing.T) {
 			if err := env.Get(ctx, key, instance); err != nil {
 				return false
 			}
-			return instance.Status.InfrastructureReady &&
-				instance.Spec.InfrastructureRef != nil &&
+			return ptr.Deref(instance.Status.Initialization.InfrastructureProvisioned, false) &&
+				instance.Spec.InfrastructureRef.IsDefined() &&
 				instance.Spec.InfrastructureRef.Name == "test"
 		}, timeout).Should(BeTrue())
 	})
@@ -297,6 +347,13 @@ func TestClusterReconciler(t *testing.T) {
 			ObjectMeta: metav1.ObjectMeta{
 				GenerateName: "test5-",
 				Namespace:    ns.Name,
+			},
+			Spec: clusterv1.ClusterSpec{
+				ControlPlaneRef: clusterv1.ContractVersionedObjectReference{
+					APIGroup: builder.ControlPlaneGroupVersion.Group,
+					Kind:     builder.GenericControlPlaneKind,
+					Name:     "cp1",
+				},
 			},
 		}
 		g.Expect(env.Create(ctx, cluster)).To(Succeed())
@@ -338,14 +395,30 @@ func TestClusterReconciler(t *testing.T) {
 	t.Run("Should successfully set ControlPlaneInitialized on the cluster object if controlplane is ready", func(t *testing.T) {
 		g := NewWithT(t)
 
+		ic := builder.InfrastructureCluster(ns.Name, "infracluster1").Build()
+		g.Expect(env.CreateAndWait(ctx, ic)).To(Succeed())
+		defer func() {
+			g.Expect(env.CleanupAndWait(ctx, ic)).To(Succeed())
+		}()
+		icOriginal := ic.DeepCopy()
+		g.Expect(contract.InfrastructureCluster().Provisioned("v1beta2").Set(ic, true)).To(Succeed())
+		g.Expect(env.Status().Patch(ctx, ic, client.MergeFrom(icOriginal))).To(Succeed())
+
 		cluster := &clusterv1.Cluster{
 			ObjectMeta: metav1.ObjectMeta{
 				GenerateName: "test6-",
 				Namespace:    ns.Name,
 			},
+			Spec: clusterv1.ClusterSpec{
+				InfrastructureRef: clusterv1.ContractVersionedObjectReference{
+					APIGroup: builder.InfrastructureGroupVersion.Group,
+					Kind:     builder.GenericInfrastructureClusterKind,
+					Name:     "infracluster1",
+				},
+			},
 		}
-
 		g.Expect(env.Create(ctx, cluster)).To(Succeed())
+
 		key := client.ObjectKey{Name: cluster.Name, Namespace: cluster.Namespace}
 		defer func() {
 			err := env.Delete(ctx, cluster)
@@ -384,7 +457,12 @@ func TestClusterReconciler(t *testing.T) {
 			},
 			Spec: clusterv1.MachineSpec{
 				ClusterName: cluster.Name,
-				ProviderID:  ptr.To("aws:///id-node-1"),
+				ProviderID:  "aws:///id-node-1",
+				InfrastructureRef: clusterv1.ContractVersionedObjectReference{
+					APIGroup: builder.InfrastructureGroupVersion.Group,
+					Kind:     builder.TestInfrastructureMachineKind,
+					Name:     "inframachine",
+				},
 				Bootstrap: clusterv1.Bootstrap{
 					DataSecretName: ptr.To(""),
 				},
@@ -418,7 +496,7 @@ func TestClusterReconciler(t *testing.T) {
 			if err := env.Get(ctx, key, cluster); err != nil {
 				return false
 			}
-			return conditions.IsTrue(cluster, clusterv1.ControlPlaneInitializedCondition)
+			return conditions.IsTrue(cluster, clusterv1.ClusterControlPlaneInitializedCondition)
 		}, timeout).Should(BeTrue())
 	})
 }
@@ -437,7 +515,7 @@ func TestClusterReconciler_reconcileDelete(t *testing.T) {
 		{
 			name: "should proceed with delete if the cluster has the ok-to-delete annotation",
 			cluster: func() *clusterv1.Cluster {
-				fakeCluster := builder.Cluster("test-ns", "test-cluster").WithTopology(&clusterv1.Topology{}).WithInfrastructureCluster(fakeInfraCluster).Build()
+				fakeCluster := builder.Cluster("test-ns", "test-cluster").WithTopology(&clusterv1.Topology{ClassRef: clusterv1.ClusterClassRef{Name: "class"}}).WithInfrastructureCluster(fakeInfraCluster).Build()
 				if fakeCluster.Annotations == nil {
 					fakeCluster.Annotations = map[string]string{}
 				}
@@ -448,7 +526,7 @@ func TestClusterReconciler_reconcileDelete(t *testing.T) {
 		},
 		{
 			name:       "should not proceed with delete if the cluster does not have the ok-to-delete annotation",
-			cluster:    builder.Cluster("test-ns", "test-cluster").WithTopology(&clusterv1.Topology{}).WithInfrastructureCluster(fakeInfraCluster).Build(),
+			cluster:    builder.Cluster("test-ns", "test-cluster").WithTopology(&clusterv1.Topology{ClassRef: clusterv1.ClusterClassRef{Name: "class"}}).WithInfrastructureCluster(fakeInfraCluster).Build(),
 			wantDelete: false,
 		},
 	}
@@ -479,9 +557,6 @@ func TestClusterReconciler_reconcileDelete(t *testing.T) {
 func TestClusterReconcilerNodeRef(t *testing.T) {
 	t.Run("machine to cluster", func(t *testing.T) {
 		cluster := &clusterv1.Cluster{
-			TypeMeta: metav1.TypeMeta{
-				Kind: "Cluster",
-			},
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      "test-cluster",
 				Namespace: "test",
@@ -491,9 +566,6 @@ func TestClusterReconcilerNodeRef(t *testing.T) {
 		}
 
 		controlPlaneWithNoderef := &clusterv1.Machine{
-			TypeMeta: metav1.TypeMeta{
-				Kind: "Machine",
-			},
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      "controlPlaneWithNoderef",
 				Namespace: "test",
@@ -506,16 +578,10 @@ func TestClusterReconcilerNodeRef(t *testing.T) {
 				ClusterName: "test-cluster",
 			},
 			Status: clusterv1.MachineStatus{
-				NodeRef: &corev1.ObjectReference{
-					Kind:      "Node",
-					Namespace: "test-node",
-				},
+				NodeRef: clusterv1.MachineNodeReference{Name: "test-node"},
 			},
 		}
 		controlPlaneWithoutNoderef := &clusterv1.Machine{
-			TypeMeta: metav1.TypeMeta{
-				Kind: "Machine",
-			},
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      "controlPlaneWithoutNoderef",
 				Namespace: "test",
@@ -529,9 +595,6 @@ func TestClusterReconcilerNodeRef(t *testing.T) {
 			},
 		}
 		nonControlPlaneWithNoderef := &clusterv1.Machine{
-			TypeMeta: metav1.TypeMeta{
-				Kind: "Machine",
-			},
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      "nonControlPlaneWitNoderef",
 				Namespace: "test",
@@ -543,16 +606,10 @@ func TestClusterReconcilerNodeRef(t *testing.T) {
 				ClusterName: "test-cluster",
 			},
 			Status: clusterv1.MachineStatus{
-				NodeRef: &corev1.ObjectReference{
-					Kind:      "Node",
-					Namespace: "test-node",
-				},
+				NodeRef: clusterv1.MachineNodeReference{Name: "test-node"},
 			},
 		}
 		nonControlPlaneWithoutNoderef := &clusterv1.Machine{
-			TypeMeta: metav1.TypeMeta{
-				Kind: "Machine",
-			},
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      "nonControlPlaneWithoutNoderef",
 				Namespace: "test",
@@ -694,7 +751,7 @@ func (b *machineBuilder) build() clusterv1.Machine {
 }
 
 type machinePoolBuilder struct {
-	mp expv1.MachinePool
+	mp clusterv1.MachinePool
 }
 
 func newMachinePoolBuilder() *machinePoolBuilder {
@@ -715,18 +772,14 @@ func (b *machinePoolBuilder) ownedBy(c *clusterv1.Cluster) *machinePoolBuilder {
 	return b
 }
 
-func (b *machinePoolBuilder) build() expv1.MachinePool {
+func (b *machinePoolBuilder) build() clusterv1.MachinePool {
 	return b.mp
 }
 
 func TestFilterOwnedDescendants(t *testing.T) {
-	_ = feature.MutableGates.Set("MachinePool=true")
+	utilfeature.SetFeatureGateDuringTest(t, feature.Gates, feature.MachinePool, true)
 
 	c := clusterv1.Cluster{
-		TypeMeta: metav1.TypeMeta{
-			APIVersion: clusterv1.GroupVersion.String(),
-			Kind:       "Cluster",
-		},
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "c",
 		},
@@ -785,8 +838,8 @@ func TestFilterOwnedDescendants(t *testing.T) {
 				m5OwnedByCluster,
 			},
 		}),
-		machinePools: expv1.MachinePoolList{
-			Items: []expv1.MachinePool{
+		machinePools: clusterv1.MachinePoolList{
+			Items: []clusterv1.MachinePool{
 				mp1NotOwnedByCluster,
 				mp2OwnedByCluster,
 				mp3NotOwnedByCluster,
@@ -819,7 +872,7 @@ func TestFilterOwnedDescendants(t *testing.T) {
 		g := NewWithT(t)
 
 		cWithCP := c.DeepCopy()
-		cWithCP.Spec.ControlPlaneRef = &corev1.ObjectReference{
+		cWithCP.Spec.ControlPlaneRef = clusterv1.ContractVersionedObjectReference{
 			Kind: "SomeKind",
 		}
 
@@ -873,8 +926,8 @@ func TestObjectsPendingDelete(t *testing.T) {
 				newMachineBuilder().named("w7").build(),
 			},
 		}),
-		machinePools: expv1.MachinePoolList{
-			Items: []expv1.MachinePool{
+		machinePools: clusterv1.MachinePoolList{
+			Items: []clusterv1.MachinePool{
 				newMachinePoolBuilder().named("mp2").build(),
 				newMachinePoolBuilder().named("mp1").build(),
 			},
@@ -892,13 +945,13 @@ func TestObjectsPendingDelete(t *testing.T) {
 	t.Run("With a control plane object", func(t *testing.T) {
 		g := NewWithT(t)
 
-		c := &clusterv1.Cluster{Spec: clusterv1.ClusterSpec{ControlPlaneRef: &corev1.ObjectReference{Kind: "SomeKind"}}}
+		c := &clusterv1.Cluster{Spec: clusterv1.ClusterSpec{ControlPlaneRef: clusterv1.ContractVersionedObjectReference{Kind: "SomeKind"}}}
 		g.Expect(d.objectsPendingDeleteCount(c)).To(Equal(14))
 		g.Expect(d.objectsPendingDeleteNames(c)).To(Equal([]string{"MachineDeployments: md1, md2", "MachineSets: ms1, ms2", "MachinePools: mp1, mp2", "Worker Machines: w1, w2, w3, w4, w5, ... (3 more)"}))
 	})
 }
 
-func TestReconcileControlPlaneInitializedControlPlaneRef(t *testing.T) {
+func TestReconcileV1Beta1ControlPlaneInitializedControlPlaneRef(t *testing.T) {
 	g := NewWithT(t)
 
 	c := &clusterv1.Cluster{
@@ -906,10 +959,9 @@ func TestReconcileControlPlaneInitializedControlPlaneRef(t *testing.T) {
 			Name: "c",
 		},
 		Spec: clusterv1.ClusterSpec{
-			ControlPlaneRef: &corev1.ObjectReference{
-				APIVersion: "test.io/v1",
-				Namespace:  "test",
-				Name:       "foo",
+			ControlPlaneRef: clusterv1.ContractVersionedObjectReference{
+				APIGroup: "test.io",
+				Name:     "foo",
 			},
 		},
 	}
@@ -919,8 +971,8 @@ func TestReconcileControlPlaneInitializedControlPlaneRef(t *testing.T) {
 	s := &scope{
 		cluster: c,
 	}
-	res, err := r.reconcileControlPlaneInitialized(ctx, s)
+	res, err := r.reconcileV1Beta1ControlPlaneInitialized(ctx, s)
 	g.Expect(res.IsZero()).To(BeTrue())
 	g.Expect(err).ToNot(HaveOccurred())
-	g.Expect(conditions.Has(c, clusterv1.ControlPlaneInitializedCondition)).To(BeFalse())
+	g.Expect(v1beta1conditions.Has(c, clusterv1.ControlPlaneInitializedV1Beta1Condition)).To(BeFalse())
 }

@@ -103,7 +103,7 @@ Integration tests use the [envtest](https://github.com/kubernetes-sigs/controlle
 
 When testing individual packages, you can speed up the test execution by running the tests with a local kind cluster.
 This avoids spinning up a testenv with each test execution. It also makes it easier to debug, because it's straightforward
-to access a kind cluster with kubectl during test execution. For further instructions, run: `./hack/setup-envtest-with-kind.sh`.
+to access a kind cluster with kubectl during test execution. For further instructions, run: `./hack/scripts/dev/kind-create-for-envtest.sh`.
 
 When running individual tests, it could happen that a testenv is started if this is required by the `suite_test.go` file.
 However, if the tests you are running don't require testenv (i.e. they are only using fake client), you can skip the testenv
@@ -308,7 +308,7 @@ analyzing them via Grafana.
 
 1. Start the development environment as described in [Developing Cluster API with Tilt](tilt.md).
     * Make sure to deploy Loki and Grafana via `deploy_observability`.
-    * If you only want to see imported logs, don't deploy promtail (via `deploy_observability`).
+    * If you only want to see imported logs, don't deploy alloy (via `deploy_observability`).
     * If you want to drop all logs from Loki, just delete the Loki Pod in the `observability` namespace.
 2. You can then import logs via the `Import Logs` button on the top right of the [Loki resource page](http://localhost:10350/r/loki/overview).
    Just click on the downwards arrow, enter either a ProwJob URL, a GCS path or a local folder and click on `Import Logs`.
@@ -321,7 +321,7 @@ analyzing them via Grafana.
     * GCS path: `gs://kubernetes-jenkins/pr-logs/pull/kubernetes-sigs_cluster-api/6189/pull-cluster-api-e2e-main/1496954690603061248`
     * Local folder: `./_artifacts`
 4. Now the logs are available:
-    * via [Grafana](http://localhost:3001/explore)
+    * via [Grafana](http://localhost:3000/explore)
     * via [Loki logcli](https://grafana.com/docs/loki/latest/getting-started/logcli/)
       ```bash
       logcli query '{app="capi-controller-manager"}' --timezone=UTC --from="2022-02-22T10:00:00Z"

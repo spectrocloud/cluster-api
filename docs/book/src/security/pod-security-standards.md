@@ -12,7 +12,7 @@ By adding the following variables and patches Pod Security Standards can be adde
 ### Adding the variables to a ClusterClass
 
 ```yaml
-apiVersion: cluster.x-k8s.io/v1beta1
+apiVersion: cluster.x-k8s.io/v1beta2
 kind: ClusterClass
 spec:
   variables:
@@ -62,7 +62,7 @@ Use this patch if the following keys **already exist** inside the `KubeadmContro
 - `.spec.template.spec.kubeadmConfigSpec.files`
 
 ```yaml
-apiVersion: cluster.x-k8s.io/v1beta1
+apiVersion: cluster.x-k8s.io/v1beta2
 kind: ClusterClass
 spec:
   ...
@@ -128,7 +128,7 @@ Use this patches if the following keys **do not** exist inside the `KubeadmContr
 > **Attention:** Existing values inside the `KubeadmControlPlaneTemplate` at the mentioned keys will be replaced by this patch.
 
 ```yaml
-apiVersion: cluster.x-k8s.io/v1beta1
+apiVersion: cluster.x-k8s.io/v1beta2
 kind: ClusterClass
 spec:
   ...
@@ -195,7 +195,7 @@ It is also possible to disable this patch or configure different levels for the 
 using variables.
 
 ```yaml
-apiVersion: cluster.x-k8s.io/v1beta1
+apiVersion: cluster.x-k8s.io/v1beta2
 kind: Cluster
 metadata:
   name: "my-cluster"
@@ -203,7 +203,8 @@ spec:
   ...
   topology:
     ...
-    class: my-secure-cluster-class
+    classRef:
+      name: my-secure-cluster-class
     variables:
     - name: podSecurityStandard
       value: 

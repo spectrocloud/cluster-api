@@ -28,19 +28,19 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
-	controlplanev1 "sigs.k8s.io/cluster-api/controlplane/kubeadm/api/v1beta1"
+	controlplanev1 "sigs.k8s.io/cluster-api/api/controlplane/kubeadm/v1beta2"
 )
 
 func (v *ScaleValidator) SetupWebhookWithManager(mgr ctrl.Manager) error {
 	v.decoder = admission.NewDecoder(mgr.GetScheme())
 
-	mgr.GetWebhookServer().Register("/validate-scale-controlplane-cluster-x-k8s-io-v1beta1-kubeadmcontrolplane", &webhook.Admission{
+	mgr.GetWebhookServer().Register("/validate-scale-controlplane-cluster-x-k8s-io-v1beta2-kubeadmcontrolplane", &webhook.Admission{
 		Handler: v,
 	})
 	return nil
 }
 
-// +kubebuilder:webhook:verbs=update,path=/validate-scale-controlplane-cluster-x-k8s-io-v1beta1-kubeadmcontrolplane,mutating=false,failurePolicy=fail,matchPolicy=Equivalent,groups=controlplane.cluster.x-k8s.io,resources=kubeadmcontrolplanes/scale,versions=v1beta1,name=validation-scale.kubeadmcontrolplane.controlplane.cluster.x-k8s.io,sideEffects=None,admissionReviewVersions=v1;v1beta1
+// +kubebuilder:webhook:verbs=update,path=/validate-scale-controlplane-cluster-x-k8s-io-v1beta2-kubeadmcontrolplane,mutating=false,failurePolicy=fail,matchPolicy=Equivalent,groups=controlplane.cluster.x-k8s.io,resources=kubeadmcontrolplanes/scale,versions=v1beta2,name=validation-scale.kubeadmcontrolplane.controlplane.cluster.x-k8s.io,sideEffects=None,admissionReviewVersions=v1
 
 // ScaleValidator validates KCP for replicas.
 type ScaleValidator struct {
@@ -58,22 +58,16 @@ func (v *ScaleValidator) Handle(ctx context.Context, req admission.Request) admi
 	}
 
 	kcp := &controlplanev1.KubeadmControlPlane{}
-	kcpKey := types.NamespacedName{Namespace: scale.ObjectMeta.Namespace, Name: scale.ObjectMeta.Name}
+	kcpKey := types.NamespacedName{Namespace: scale.Namespace, Name: scale.Name}
 	if err = v.Client.Get(ctx, kcpKey, kcp); err != nil {
-		return admission.Errored(http.StatusInternalServerError, errors.Wrapf(err, "failed to get KubeadmControlPlane %s/%s", scale.ObjectMeta.Namespace, scale.ObjectMeta.Name))
+		return admission.Errored(http.StatusInternalServerError, errors.Wrapf(err, "failed to get KubeadmControlPlane %s/%s", scale.Namespace, scale.Name))
 	}
 
 	if scale.Spec.Replicas == 0 {
 		return admission.Denied("replicas cannot be 0")
 	}
 
-	externalEtcd := false
-	if kcp.Spec.KubeadmConfigSpec.ClusterConfiguration != nil {
-		if kcp.Spec.KubeadmConfigSpec.ClusterConfiguration.Etcd.External != nil {
-			externalEtcd = true
-		}
-	}
-
+	externalEtcd := kcp.Spec.KubeadmConfigSpec.ClusterConfiguration.Etcd.External.IsDefined()
 	if !externalEtcd {
 		if scale.Spec.Replicas%2 == 0 {
 			return admission.Denied("replicas cannot be an even number when etcd is stacked")

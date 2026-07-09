@@ -21,10 +21,9 @@ import (
 	"time"
 
 	. "github.com/onsi/gomega"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	runtimecatalog "sigs.k8s.io/cluster-api/exp/runtime/catalog"
-	runtimehooksv1 "sigs.k8s.io/cluster-api/exp/runtime/hooks/api/v1alpha1"
+	runtimecatalog "sigs.k8s.io/cluster-api/api/runtime/catalog"
+	runtimehooksv1 "sigs.k8s.io/cluster-api/api/runtime/hooks/v1alpha1"
 )
 
 func TestHookResponseTracker_AggregateRetryAfter(t *testing.T) {
@@ -133,8 +132,8 @@ func TestHookResponseTracker_AggregateMessage(t *testing.T) {
 		hrt.Add(runtimehooksv1.BeforeClusterCreate, blockingBeforeClusterCreateResponse)
 		hrt.Add(runtimehooksv1.BeforeClusterUpgrade, blockingBeforeClusterUpgradeResponse)
 
-		g.Expect(hrt.AggregateMessage()).To(ContainSubstring(runtimecatalog.HookName(runtimehooksv1.BeforeClusterCreate)))
-		g.Expect(hrt.AggregateMessage()).To(ContainSubstring(runtimecatalog.HookName(runtimehooksv1.BeforeClusterUpgrade)))
+		g.Expect(hrt.AggregateMessage("upgrade")).To(ContainSubstring(runtimecatalog.HookName(runtimehooksv1.BeforeClusterCreate)))
+		g.Expect(hrt.AggregateMessage("upgrade")).To(ContainSubstring(runtimecatalog.HookName(runtimehooksv1.BeforeClusterUpgrade)))
 	})
 	t.Run("AggregateMessage should return empty string if there are no blocking hook responses", func(t *testing.T) {
 		g := NewWithT(t)
@@ -143,7 +142,7 @@ func TestHookResponseTracker_AggregateMessage(t *testing.T) {
 		hrt.Add(runtimehooksv1.BeforeClusterCreate, nonBlockingBeforeClusterCreateResponse)
 		hrt.Add(runtimehooksv1.BeforeClusterUpgrade, nonBlockingBeforeClusterUpgradeResponse)
 
-		g.Expect(hrt.AggregateMessage()).To(Equal(""))
+		g.Expect(hrt.AggregateMessage("upgrade")).To(Equal(""))
 	})
 }
 
@@ -165,8 +164,7 @@ func TestHookResponseTracker_IsBlocking(t *testing.T) {
 		},
 	}
 
-	afterClusterUpgradeResponse := &runtimehooksv1.AfterClusterUpgradeResponse{
-		TypeMeta:       metav1.TypeMeta{},
+	afterAfterControlPlaneInitializedResponse := &runtimehooksv1.AfterControlPlaneInitializedResponse{
 		CommonResponse: runtimehooksv1.CommonResponse{},
 	}
 
@@ -197,8 +195,8 @@ func TestHookResponseTracker_IsBlocking(t *testing.T) {
 	t.Run("should return false if the hook is non-blocking", func(t *testing.T) {
 		g := NewWithT(t)
 		hrt := NewHookResponseTracker()
-		// AfterClusterUpgradeHook is non-blocking.
-		hrt.Add(runtimehooksv1.AfterClusterUpgrade, afterClusterUpgradeResponse)
-		g.Expect(hrt.IsBlocking(runtimehooksv1.AfterClusterUpgrade)).To(BeFalse())
+		// AfterControlPlaneInitialized is non-blocking.
+		hrt.Add(runtimehooksv1.AfterControlPlaneInitialized, afterAfterControlPlaneInitializedResponse)
+		g.Expect(hrt.IsBlocking(runtimehooksv1.AfterControlPlaneInitialized)).To(BeFalse())
 	})
 }

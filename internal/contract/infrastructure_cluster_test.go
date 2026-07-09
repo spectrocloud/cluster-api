@@ -21,22 +21,52 @@ import (
 
 	. "github.com/onsi/gomega"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/utils/ptr"
 
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
+	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 )
 
 func TestInfrastructureCluster(t *testing.T) {
 	obj := &unstructured.Unstructured{Object: map[string]interface{}{}}
 
-	t.Run("Manages status.ready", func(t *testing.T) {
+	t.Run("Manages spec.ControlPlaneEndpoint", func(t *testing.T) {
 		g := NewWithT(t)
 
-		g.Expect(InfrastructureCluster().Ready().Path()).To(Equal(Path{"status", "ready"}))
+		g.Expect(InfrastructureCluster().ControlPlaneEndpoint().Path()).To(Equal(Path{"spec", "controlPlaneEndpoint"}))
 
-		err := InfrastructureCluster().Ready().Set(obj, true)
+		endpoint := clusterv1.APIEndpoint{
+			Host: "example.com",
+			Port: 1234,
+		}
+
+		err := InfrastructureCluster().ControlPlaneEndpoint().Set(obj, endpoint)
 		g.Expect(err).ToNot(HaveOccurred())
 
-		got, err := InfrastructureCluster().Ready().Get(obj)
+		got, err := InfrastructureCluster().ControlPlaneEndpoint().Get(obj)
+		g.Expect(err).ToNot(HaveOccurred())
+		g.Expect(got).ToNot(BeNil())
+		g.Expect(*got).To(Equal(endpoint))
+	})
+	t.Run("Manages status.initialization.provisioned", func(t *testing.T) {
+		g := NewWithT(t)
+
+		g.Expect(InfrastructureCluster().Provisioned("v1beta2").Path()).To(Equal(Path{"status", "initialization", "provisioned"}))
+
+		err := InfrastructureCluster().Provisioned("v1beta2").Set(obj, true)
+		g.Expect(err).ToNot(HaveOccurred())
+
+		got, err := InfrastructureCluster().Provisioned("v1beta2").Get(obj)
+		g.Expect(err).ToNot(HaveOccurred())
+		g.Expect(got).ToNot(BeNil())
+		g.Expect(*got).To(BeTrue())
+
+		g.Expect(InfrastructureCluster().Provisioned("v1beta1").Path()).To(Equal(Path{"status", "ready"}))
+
+		objV1beta1 := &unstructured.Unstructured{Object: map[string]interface{}{}}
+		err = InfrastructureCluster().Provisioned("v1beta1").Set(objV1beta1, true)
+		g.Expect(err).ToNot(HaveOccurred())
+
+		got, err = InfrastructureCluster().Provisioned("v1beta1").Get(objV1beta1)
 		g.Expect(err).ToNot(HaveOccurred())
 		g.Expect(got).ToNot(BeNil())
 		g.Expect(*got).To(BeTrue())
@@ -70,35 +100,121 @@ func TestInfrastructureCluster(t *testing.T) {
 	t.Run("Manages optional status.failureDomains", func(t *testing.T) {
 		g := NewWithT(t)
 
-		failureDomains := clusterv1.FailureDomains{
-			"domain1": clusterv1.FailureDomainSpec{
-				ControlPlane: true,
+		failureDomains := []clusterv1.FailureDomain{
+			{
+				Name:         "domain1",
+				ControlPlane: ptr.To(true),
 				Attributes: map[string]string{
 					"key1": "value1",
 					"key2": "value2",
 				},
 			},
-			"domain2": clusterv1.FailureDomainSpec{
-				ControlPlane: false,
+			{
+				Name:         "domain2",
+				ControlPlane: ptr.To(false),
 				Attributes: map[string]string{
 					"key3": "value3",
 					"key4": "value4",
 				},
 			},
 		}
-		g.Expect(InfrastructureCluster().FailureDomains().Path()).To(Equal(Path{"status", "failureDomains"}))
+		g.Expect(InfrastructureCluster().FailureDomains("v1beta2").Path()).To(Equal(Path{"status", "failureDomains"}))
 
-		err := InfrastructureCluster().FailureDomains().Set(obj, failureDomains)
+		err := InfrastructureCluster().FailureDomains("v1beta2").Set(obj, failureDomains)
 		g.Expect(err).ToNot(HaveOccurred())
 
-		got, err := InfrastructureCluster().FailureDomains().Get(obj)
+		got, err := InfrastructureCluster().FailureDomains("v1beta2").Get(obj)
 		g.Expect(err).ToNot(HaveOccurred())
 		g.Expect(got).ToNot(BeNil())
-		g.Expect(*got).To(BeComparableTo(failureDomains))
+		g.Expect(got).To(BeComparableTo(failureDomains))
+
+		infraClusterV1Beta1 := &unstructured.Unstructured{Object: map[string]interface{}{
+			"kind":       "GenericInfrastructureCluster",
+			"apiVersion": clusterv1.GroupVersionInfrastructure.String(),
+			"status": map[string]interface{}{
+				"failureDomains": map[string]interface{}{
+					"oldDomain": map[string]interface{}{
+						"controlPlane": true,
+						"attributes": map[string]interface{}{
+							"attribute1": "value1",
+						},
+					},
+					"newdomain": map[string]interface{}{
+						"controlPlane": true,
+						"attributes": map[string]interface{}{
+							"attribute2": "value2",
+						},
+					},
+				},
+			},
+		}}
+		got, err = InfrastructureCluster().FailureDomains("v1beta1").Get(infraClusterV1Beta1)
+		g.Expect(err).ToNot(HaveOccurred())
+		g.Expect(got).ToNot(BeNil())
+		// Note: Also validates the failureDomains are sorted.
+		g.Expect(got).To(BeComparableTo([]clusterv1.FailureDomain{
+			{
+				Name:         "newdomain",
+				ControlPlane: ptr.To(true),
+				Attributes: map[string]string{
+					"attribute2": "value2",
+				},
+			},
+			{
+				Name:         "oldDomain",
+				ControlPlane: ptr.To(true),
+				Attributes: map[string]string{
+					"attribute1": "value1",
+				},
+			},
+		}))
+
+		infraClusterV1Beta2 := &unstructured.Unstructured{Object: map[string]interface{}{
+			"kind":       "GenericInfrastructureCluster",
+			"apiVersion": clusterv1.GroupVersionInfrastructure.String(),
+			"status": map[string]interface{}{
+				"failureDomains": []interface{}{
+					map[string]interface{}{
+						"name":         "oldDomain",
+						"controlPlane": true,
+						"attributes": map[string]interface{}{
+							"attribute1": "value1",
+						},
+					},
+					map[string]interface{}{
+						"name":         "newdomain",
+						"controlPlane": true,
+						"attributes": map[string]interface{}{
+							"attribute2": "value2",
+						},
+					},
+				},
+			},
+		}}
+		got, err = InfrastructureCluster().FailureDomains("v1beta2").Get(infraClusterV1Beta2)
+		g.Expect(err).ToNot(HaveOccurred())
+		g.Expect(got).ToNot(BeNil())
+		// Note: Also validates the failureDomains are sorted.
+		g.Expect(got).To(BeComparableTo([]clusterv1.FailureDomain{
+			{
+				Name:         "newdomain",
+				ControlPlane: ptr.To(true),
+				Attributes: map[string]string{
+					"attribute2": "value2",
+				},
+			},
+			{
+				Name:         "oldDomain",
+				ControlPlane: ptr.To(true),
+				Attributes: map[string]string{
+					"attribute1": "value1",
+				},
+			},
+		}))
 	})
 }
 
-func TestInfrastructureClusterControlPlaneEndpoint(t *testing.T) {
+func TestInfrastructureClusterIgnorePaths(t *testing.T) {
 	tests := []struct {
 		name                  string
 		infrastructureCluster *unstructured.Unstructured

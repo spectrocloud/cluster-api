@@ -19,6 +19,8 @@ In Cluster API we strive to follow three principles while implementing logging:
 Kubernetes defines a set of [logging conventions](https://git.k8s.io/community/contributors/devel/sig-instrumentation/logging.md),
 as well as tools and libraries for logging.
 
+Cluster API should align to those guidelines and use those tools as much as possible.
+
 ## Continuous improvement
 
 The foundational items of Cluster API logging are:
@@ -100,6 +102,11 @@ key value pairs (in order of importance):
   creates a MachineSet.
 - Other Key value pairs.
 
+Notably, over time in CAPI we are also standardizing usage of other key value pairs to improve consistency when reading
+logs, e.g.
+- key `reason` MUST be used when adding details about WHY a change happened.
+- key `diff` MUST be used when documenting the diff in an object that either lead to a change, or that is resulting from a change.
+
 ## Log Messages
 
 - A Message MUST always start with a capital letter.
@@ -108,6 +115,12 @@ key value pairs (in order of importance):
   the action log and the corresponding error log; While logging before the action, log verbs should use the -ing form.
 - Ideally log messages should surface a different level of detail according to the target log level (see [log levels](#log-levels)
   for more details).
+- If Kubernetes resource name is used in log messages, it MUST be used as is, For example `Reconciling DockerMachineTemplate`
+- If an API field name is used in log messages, the entire path MUST be used and field names MUST capitalized like in the 
+  API (not as in the golang type). For example `Waiting for spec.providerID to be set`
+- If a log message is about a controlled or a referenced object, e.g. Machine controller performing an action on MachineSet,
+  the message MUST contain the Kind of the controlled/referenced object and its namespace/name, for example `Created MachineSet default/foo-bar`
+  - The controlled/referenced object MUST also be added as a key value pair (see guidelines above)
 
 ## Log Levels
 
@@ -135,19 +148,19 @@ thorny parts of code. Over time, based on feedback from SRE/developers, more log
 
 ## Developing and testing logs
 
-Our [Tilt](tilt.md) setup offers a batteries-included log suite based on [Promtail](https://grafana.com/docs/loki/latest/clients/promtail/), [Loki](https://grafana.com/docs/loki/latest/fundamentals/overview/) and [Grafana](https://grafana.com/docs/grafana/latest/explore/logs-integration/).
+Our [Tilt](tilt.md) setup offers a batteries-included log suite based on [alloy](https://grafana.com/docs/loki/latest/send-data/alloy/), [Loki](https://grafana.com/docs/loki/latest/fundamentals/overview/) and [Grafana](https://grafana.com/docs/grafana/latest/explore/logs-integration/).
 
 We are working to continuously improving this experience, allowing Cluster API developers to use logs and improve them as part of their development process.
 
 For the best experience exploring the logs using Tilt:
 1. Set `--logging-format=json`.
 2. Set a high log verbosity, e.g. `v=5`.
-3. Enable Promtail, Loki, and Grafana under `deploy_observability`.
+3. Enable alloy, Loki, and Grafana under `deploy_observability`.
 
 A minimal example of a tilt-settings.yaml file that deploys a ready-to-use logging suite looks like:
 ```yaml
 deploy_observability:
-  - promtail
+  - alloy
   - loki
   - grafana
 enable_providers:
@@ -170,7 +183,7 @@ extra_args:
 ```
 The above options can be combined with other settings from our [Tilt](tilt.md) setup. Once Tilt is up and running with these settings users will be able to browse logs using the Grafana Explore UI.
 
-This will normally be available on `localhost:3001`. To explore logs from Loki, open the Explore interface for the DataSource 'Loki'. [This link](http://localhost:3001/explore?datasource%22:%22Loki%22) should work as a shortcut with the default Tilt settings.
+This will normally be available on `localhost:3000`. To explore logs from Loki, open the Explore interface for the DataSource 'Loki'. [This link](http://localhost:3000/explore?datasource%22:%22Loki%22) should work as a shortcut with the default Tilt settings.
 
 ### Example queries
 
@@ -208,7 +221,6 @@ Will return logs from the `capi-controller-manager`, associated with the Cluster
 Will return the logs from four CAPI providers - the Core provider, Kubeadm Control Plane provider, Kubeadm Bootstrap provider and the Docker infrastructure provider. It filters by the cluster name and the machine name and then formats the log lines to show just the source controller and the message. This allows us to correlate logs and see actions taken by each of these four providers related to the machine `my-cluster-linux-worker-1`.
 
 For more information on formatting and filtering logs using Grafana and Loki see:
-- [json parsing](https://grafana.com/docs/loki/latest/clients/promtail/stages/json/)
 - [log queries](https://grafana.com/docs/loki/latest/logql/log_queries/)
 
 ## What about providers

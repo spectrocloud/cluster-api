@@ -23,7 +23,7 @@ import (
 	"github.com/pkg/errors"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
+	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 )
 
 // GetFilteredMachinesForCluster returns a list of machines that can be filtered or not.
@@ -43,4 +43,22 @@ func GetFilteredMachinesForCluster(ctx context.Context, c client.Reader, cluster
 
 	machines := FromMachineList(ml)
 	return machines.Filter(filters...), nil
+}
+
+// GetControlPlaneMachinesForCluster returns a list of control plane machines.
+func GetControlPlaneMachinesForCluster(ctx context.Context, c client.Reader, cluster *clusterv1.Cluster) (Machines, error) {
+	ml := &clusterv1.MachineList{}
+	if err := c.List(
+		ctx,
+		ml,
+		client.InNamespace(cluster.Namespace),
+		client.MatchingLabels{
+			clusterv1.ClusterNameLabel:         cluster.Name,
+			clusterv1.MachineControlPlaneLabel: "",
+		},
+	); err != nil {
+		return nil, errors.Wrap(err, "failed to list control plane machines")
+	}
+
+	return FromMachineList(ml), nil
 }

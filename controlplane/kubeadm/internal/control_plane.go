@@ -23,17 +23,23 @@ import (
 	"strings"
 
 	"github.com/pkg/errors"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	kerrors "k8s.io/apimachinery/pkg/util/errors"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
-	bootstrapv1 "sigs.k8s.io/cluster-api/bootstrap/kubeadm/api/v1beta1"
+	bootstrapv1 "sigs.k8s.io/cluster-api/api/bootstrap/kubeadm/v1beta2"
+	controlplanev1 "sigs.k8s.io/cluster-api/api/controlplane/kubeadm/v1beta2"
+	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
+	runtimehooksv1 "sigs.k8s.io/cluster-api/api/runtime/hooks/v1alpha1"
 	"sigs.k8s.io/cluster-api/controllers/external"
-	controlplanev1 "sigs.k8s.io/cluster-api/controlplane/kubeadm/api/v1beta1"
 	"sigs.k8s.io/cluster-api/controlplane/kubeadm/internal/etcd"
+	"sigs.k8s.io/cluster-api/internal/hooks"
+	"sigs.k8s.io/cluster-api/internal/util/inplace"
+	"sigs.k8s.io/cluster-api/internal/util/taints"
 	"sigs.k8s.io/cluster-api/util/collections"
 	"sigs.k8s.io/cluster-api/util/conditions"
 	"sigs.k8s.io/cluster-api/util/failuredomains"
@@ -49,9 +55,22 @@ type ControlPlane struct {
 	Machines             collections.Machines
 	machinesPatchHelpers map[string]*patch.Helper
 
-	machinesNotUptoDate                  collections.Machines
-	machinesNotUptoDateLogMessages       map[string][]string
-	machinesNotUptoDateConditionMessages map[string][]string
+	// Nodes is the list of nodes corresponding to control plane machines.
+	// Please note that:
+	// - The list is set while computing control plane conditions
+	// - The list includes existing nodes referenced from control plane machines, no matter
+	//   if they have the control plane label or not.
+	// - Once the list is set, it is used as input to methods accessing etcd via port-forward.
+	Nodes         []*Node
+	NodeListError error
+
+	// MachinesNotUpToDate is the source of truth for Machines that are not up-to-date.
+	// It should be used to check if a Machine is up-to-date (not machinesUpToDateResults).
+	MachinesNotUpToDate collections.Machines
+	// machinesUpToDateResults is used to store the result of the UpToDate call for all Machines
+	// (even for Machines that are up-to-date).
+	// MachinesNotUpToDate should always be used instead to check if a Machine is up-to-date.
+	machinesUpToDateResults map[string]UpToDateResult
 
 	// reconciliationTime is the time of the current reconciliation, and should be used for all "now" calculations
 	reconciliationTime metav1.Time
@@ -72,6 +91,8 @@ type ControlPlane struct {
 	// NOTE: Those info are specifically designed for computing KCP's Available condition.
 	EtcdMembers                       []*etcd.Member
 	EtcdMembersAndMachinesAreMatching bool
+	EtcdMembersAlarms                 []etcd.MemberAlarm
+	EtcdLeader                        *etcd.Member
 
 	managementCluster ManagementCluster
 	workloadCluster   WorkloadCluster
@@ -87,15 +108,19 @@ type ControlPlane struct {
 type PreflightCheckResults struct {
 	// HasDeletingMachine reports true if preflight check detected a deleting machine.
 	HasDeletingMachine bool
+	// CertificateMissing reports true if preflight check detected a certificate missing.
+	CertificateMissing bool
 	// ControlPlaneComponentsNotHealthy reports true if preflight check detected that the control plane components are not fully healthy.
 	ControlPlaneComponentsNotHealthy bool
 	// EtcdClusterNotHealthy reports true if preflight check detected that the etcd cluster is not fully healthy.
 	EtcdClusterNotHealthy bool
+	// TopologyVersionMismatch reports true if preflight check detected that the Cluster's topology version does not match the control plane's version
+	TopologyVersionMismatch bool
 }
 
 // NewControlPlane returns an instantiated ControlPlane.
 func NewControlPlane(ctx context.Context, managementCluster ManagementCluster, client client.Client, cluster *clusterv1.Cluster, kcp *controlplanev1.KubeadmControlPlane, ownedMachines collections.Machines) (*ControlPlane, error) {
-	infraObjects, err := getInfraResources(ctx, client, ownedMachines)
+	infraMachines, err := getInfraMachines(ctx, client, ownedMachines)
 	if err != nil {
 		return nil, err
 	}
@@ -115,41 +140,47 @@ func NewControlPlane(ctx context.Context, managementCluster ManagementCluster, c
 	// Select machines that should be rolled out because of an outdated configuration or because rolloutAfter/Before expired.
 	reconciliationTime := metav1.Now()
 	machinesNotUptoDate := make(collections.Machines, len(ownedMachines))
-	machinesNotUptoDateLogMessages := map[string][]string{}
-	machinesNotUptoDateConditionMessages := map[string][]string{}
+	machinesUpToDateResults := map[string]UpToDateResult{}
 	for _, m := range ownedMachines {
-		upToDate, logMessages, conditionMessages, err := UpToDate(m, kcp, &reconciliationTime, infraObjects, kubeadmConfigs)
+		upToDate, upToDateResult, err := UpToDate(ctx, client, cluster, m, kcp, &reconciliationTime, infraMachines, kubeadmConfigs)
 		if err != nil {
 			return nil, err
 		}
 		if !upToDate {
 			machinesNotUptoDate.Insert(m)
-			machinesNotUptoDateLogMessages[m.Name] = logMessages
-			machinesNotUptoDateConditionMessages[m.Name] = conditionMessages
 		}
+		// Set this even if machine is UpToDate. This is needed to complete triggering in-place updates
+		// MachinesNotUpToDate should always be used instead to check if a Machine is up-to-date.
+		machinesUpToDateResults[m.Name] = *upToDateResult
 	}
 
 	return &ControlPlane{
-		KCP:                                  kcp,
-		Cluster:                              cluster,
-		Machines:                             ownedMachines,
-		machinesPatchHelpers:                 patchHelpers,
-		machinesNotUptoDate:                  machinesNotUptoDate,
-		machinesNotUptoDateLogMessages:       machinesNotUptoDateLogMessages,
-		machinesNotUptoDateConditionMessages: machinesNotUptoDateConditionMessages,
-		KubeadmConfigs:                       kubeadmConfigs,
-		InfraResources:                       infraObjects,
-		reconciliationTime:                   reconciliationTime,
-		managementCluster:                    managementCluster,
+		KCP:                     kcp,
+		Cluster:                 cluster,
+		Machines:                ownedMachines,
+		machinesPatchHelpers:    patchHelpers,
+		MachinesNotUpToDate:     machinesNotUptoDate,
+		machinesUpToDateResults: machinesUpToDateResults,
+		KubeadmConfigs:          kubeadmConfigs,
+		InfraResources:          infraMachines,
+		reconciliationTime:      reconciliationTime,
+		managementCluster:       managementCluster,
 	}, nil
 }
 
 // FailureDomains returns a slice of failure domain objects synced from the infrastructure provider into Cluster.Status.
-func (c *ControlPlane) FailureDomains() clusterv1.FailureDomains {
+func (c *ControlPlane) FailureDomains() []clusterv1.FailureDomain {
 	if c.Cluster.Status.FailureDomains == nil {
-		return clusterv1.FailureDomains{}
+		return nil
 	}
-	return c.Cluster.Status.FailureDomains
+
+	var res []clusterv1.FailureDomain
+	for _, spec := range c.Cluster.Status.FailureDomains {
+		if ptr.Deref(spec.ControlPlane, false) {
+			res = append(res, spec)
+		}
+	}
+	return res
 }
 
 // MachineInFailureDomainWithMostMachines returns the first matching failure domain with machines that has the most control-plane machines on it.
@@ -172,12 +203,27 @@ func (c *ControlPlane) MachineWithDeleteAnnotation(machines collections.Machines
 	return annotatedMachines
 }
 
+// MachinesToCompleteTriggerInPlaceUpdate returns Machines for which we have to complete triggering
+// the in-place update. This can become necessary if triggering the in-place update fails after
+// we added UpdateInProgressAnnotation and before we marked the UpdateMachine hook as pending.
+func (c *ControlPlane) MachinesToCompleteTriggerInPlaceUpdate() collections.Machines {
+	return c.Machines.Filter(func(machine *clusterv1.Machine) bool {
+		_, ok := machine.Annotations[clusterv1.UpdateInProgressAnnotation]
+		return ok && !hooks.IsPending(runtimehooksv1.UpdateMachine, machine)
+	})
+}
+
+// MachinesToCompleteInPlaceUpdate returns Machines that still have to complete their in-place update.
+func (c *ControlPlane) MachinesToCompleteInPlaceUpdate() collections.Machines {
+	return c.Machines.Filter(inplace.IsUpdateInProgress)
+}
+
 // FailureDomainWithMostMachines returns the fd with most machines in it and at least one eligible machine in it.
 // Note: if there are eligibleMachines machines in failure domain that do not exist anymore, cleaning up those failure domains takes precedence.
-func (c *ControlPlane) FailureDomainWithMostMachines(ctx context.Context, eligibleMachines collections.Machines) *string {
+func (c *ControlPlane) FailureDomainWithMostMachines(ctx context.Context, eligibleMachines collections.Machines) string {
 	// See if there are any Machines that are not in currently defined failure domains first.
 	notInFailureDomains := eligibleMachines.Filter(
-		collections.Not(collections.InFailureDomains(c.FailureDomains().FilterControlPlane().GetIDs()...)),
+		collections.Not(collections.InFailureDomains(getGetFailureDomainIDs(c.FailureDomains())...)),
 	)
 	if len(notInFailureDomains) > 0 {
 		// return the failure domain for the oldest Machine not in the current list of failure domains
@@ -187,7 +233,7 @@ func (c *ControlPlane) FailureDomainWithMostMachines(ctx context.Context, eligib
 	}
 
 	// Pick the failure domain with most machines in it and at least one eligible machine in it.
-	return failuredomains.PickMost(ctx, c.Cluster.Status.FailureDomains.FilterControlPlane(), c.Machines, eligibleMachines)
+	return failuredomains.PickMost(ctx, c.FailureDomains(), c.Machines, eligibleMachines)
 }
 
 // NextFailureDomainForScaleUp returns the failure domain with the fewest number of up-to-date, not deleted machines
@@ -195,28 +241,19 @@ func (c *ControlPlane) FailureDomainWithMostMachines(ctx context.Context, eligib
 //
 // In case of tie (more failure domain with the same number of up-to-date, not deleted machines) the failure domain with the fewest number of
 // machine overall is picked to ensure a better spreading of machines while the rollout is performed.
-func (c *ControlPlane) NextFailureDomainForScaleUp(ctx context.Context) (*string, error) {
-	if len(c.Cluster.Status.FailureDomains.FilterControlPlane()) == 0 {
-		return nil, nil
+func (c *ControlPlane) NextFailureDomainForScaleUp(ctx context.Context) (string, error) {
+	if len(c.FailureDomains()) == 0 {
+		return "", nil
 	}
-	return failuredomains.PickFewest(ctx, c.FailureDomains().FilterControlPlane(), c.Machines, c.UpToDateMachines().Filter(collections.Not(collections.HasDeletionTimestamp))), nil
+	return failuredomains.PickFewest(ctx, c.FailureDomains(), c.Machines, c.UpToDateMachines().Filter(collections.Not(collections.HasDeletionTimestamp))), nil
 }
 
-// InitialControlPlaneConfig returns a new KubeadmConfigSpec that is to be used for an initializing control plane.
-func (c *ControlPlane) InitialControlPlaneConfig() *bootstrapv1.KubeadmConfigSpec {
-	bootstrapSpec := c.KCP.Spec.KubeadmConfigSpec.DeepCopy()
-	bootstrapSpec.JoinConfiguration = nil
-	return bootstrapSpec
-}
-
-// JoinControlPlaneConfig returns a new KubeadmConfigSpec that is to be used for joining control planes.
-func (c *ControlPlane) JoinControlPlaneConfig() *bootstrapv1.KubeadmConfigSpec {
-	bootstrapSpec := c.KCP.Spec.KubeadmConfigSpec.DeepCopy()
-	bootstrapSpec.InitConfiguration = nil
-	// NOTE: For the joining we are preserving the ClusterConfiguration in order to determine if the
-	// cluster is using an external etcd in the kubeadm bootstrap provider (even if this is not required by kubeadm Join).
-	// TODO: Determine if this copy of cluster configuration can be used for rollouts (thus allowing to remove the annotation at machine level)
-	return bootstrapSpec
+func getGetFailureDomainIDs(failureDomains []clusterv1.FailureDomain) []string {
+	ids := make([]string, 0, len(failureDomains))
+	for _, fd := range failureDomains {
+		ids = append(ids, fd.Name)
+	}
+	return ids
 }
 
 // HasDeletingMachine returns true if any machine in the control plane is in the process of being deleted.
@@ -236,35 +273,35 @@ func (c *ControlPlane) GetKubeadmConfig(machineName string) (*bootstrapv1.Kubead
 }
 
 // MachinesNeedingRollout return a list of machines that need to be rolled out.
-func (c *ControlPlane) MachinesNeedingRollout() (collections.Machines, map[string][]string) {
+func (c *ControlPlane) MachinesNeedingRollout() (collections.Machines, map[string]UpToDateResult) {
 	// Note: Machines already deleted are dropped because they will be replaced by new machines after deletion completes.
-	return c.machinesNotUptoDate.Filter(collections.Not(collections.HasDeletionTimestamp)), c.machinesNotUptoDateLogMessages
+	return c.MachinesNotUpToDate.Filter(collections.Not(collections.HasDeletionTimestamp)), c.machinesUpToDateResults
 }
 
 // NotUpToDateMachines return a list of machines that are not up to date with the control
 // plane's configuration.
-func (c *ControlPlane) NotUpToDateMachines() (collections.Machines, map[string][]string) {
-	return c.machinesNotUptoDate, c.machinesNotUptoDateConditionMessages
+func (c *ControlPlane) NotUpToDateMachines() (collections.Machines, map[string]UpToDateResult) {
+	return c.MachinesNotUpToDate, c.machinesUpToDateResults
 }
 
 // UpToDateMachines returns the machines that are up to date with the control
 // plane's configuration.
 func (c *ControlPlane) UpToDateMachines() collections.Machines {
-	return c.Machines.Difference(c.machinesNotUptoDate)
+	return c.Machines.Difference(c.MachinesNotUpToDate)
 }
 
-// getInfraResources fetches the external infrastructure resource for each machine in the collection and returns a map of machine.Name -> infraResource.
-func getInfraResources(ctx context.Context, cl client.Client, machines collections.Machines) (map[string]*unstructured.Unstructured, error) {
+// getInfraMachines fetches the InfraMachine for each machine in the collection and returns a map of machine.Name -> InfraMachine.
+func getInfraMachines(ctx context.Context, cl client.Client, machines collections.Machines) (map[string]*unstructured.Unstructured, error) {
 	result := map[string]*unstructured.Unstructured{}
 	for _, m := range machines {
-		infraObj, err := external.Get(ctx, cl, &m.Spec.InfrastructureRef)
+		infraMachine, err := external.GetObjectFromContractVersionedRef(ctx, cl, m.Spec.InfrastructureRef, m.Namespace)
 		if err != nil {
 			if apierrors.IsNotFound(errors.Cause(err)) {
 				continue
 			}
-			return nil, errors.Wrapf(err, "failed to retrieve infra obj for machine %q", m.Name)
+			return nil, errors.Wrapf(err, "failed to retrieve InfraMachine for Machine %s", m.Name)
 		}
-		result[m.Name] = infraObj
+		result[m.Name] = infraMachine
 	}
 	return result, nil
 }
@@ -274,24 +311,24 @@ func getKubeadmConfigs(ctx context.Context, cl client.Client, machines collectio
 	result := map[string]*bootstrapv1.KubeadmConfig{}
 	for _, m := range machines {
 		bootstrapRef := m.Spec.Bootstrap.ConfigRef
-		if bootstrapRef == nil {
+		if !bootstrapRef.IsDefined() {
 			continue
 		}
-		machineConfig := &bootstrapv1.KubeadmConfig{}
-		if err := cl.Get(ctx, client.ObjectKey{Name: bootstrapRef.Name, Namespace: m.Namespace}, machineConfig); err != nil {
+		kubeadmConfig := &bootstrapv1.KubeadmConfig{}
+		if err := cl.Get(ctx, client.ObjectKey{Name: bootstrapRef.Name, Namespace: m.Namespace}, kubeadmConfig); err != nil {
 			if apierrors.IsNotFound(errors.Cause(err)) {
 				continue
 			}
-			return nil, errors.Wrapf(err, "failed to retrieve bootstrap config for machine %q", m.Name)
+			return nil, errors.Wrapf(err, "failed to retrieve KubeadmConfig for Machine %s", m.Name)
 		}
-		result[m.Name] = machineConfig
+		result[m.Name] = kubeadmConfig
 	}
 	return result, nil
 }
 
 // IsEtcdManaged returns true if the control plane relies on a managed etcd.
 func (c *ControlPlane) IsEtcdManaged() bool {
-	return c.KCP.Spec.KubeadmConfigSpec.ClusterConfiguration == nil || c.KCP.Spec.KubeadmConfigSpec.ClusterConfiguration.Etcd.External == nil
+	return !c.KCP.Spec.KubeadmConfigSpec.ClusterConfiguration.Etcd.External.IsDefined()
 }
 
 // UnhealthyMachinesWithUnhealthyControlPlaneComponents returns all unhealthy control plane machines that
@@ -328,19 +365,20 @@ func (c *ControlPlane) PatchMachines(ctx context.Context) error {
 	for i := range c.Machines {
 		machine := c.Machines[i]
 		if helper, ok := c.machinesPatchHelpers[machine.Name]; ok {
-			if err := helper.Patch(ctx, machine, patch.WithOwnedConditions{Conditions: []clusterv1.ConditionType{
-				controlplanev1.MachineAPIServerPodHealthyCondition,
-				controlplanev1.MachineControllerManagerPodHealthyCondition,
-				controlplanev1.MachineSchedulerPodHealthyCondition,
-				controlplanev1.MachineEtcdPodHealthyCondition,
-				controlplanev1.MachineEtcdMemberHealthyCondition,
-			}}, patch.WithOwnedV1Beta2Conditions{Conditions: []string{
-				clusterv1.MachineUpToDateV1Beta2Condition,
-				controlplanev1.KubeadmControlPlaneMachineAPIServerPodHealthyV1Beta2Condition,
-				controlplanev1.KubeadmControlPlaneMachineControllerManagerPodHealthyV1Beta2Condition,
-				controlplanev1.KubeadmControlPlaneMachineSchedulerPodHealthyV1Beta2Condition,
-				controlplanev1.KubeadmControlPlaneMachineEtcdPodHealthyV1Beta2Condition,
-				controlplanev1.KubeadmControlPlaneMachineEtcdMemberHealthyV1Beta2Condition,
+			if err := helper.Patch(ctx, machine, patch.WithOwnedV1Beta1Conditions{Conditions: []clusterv1.ConditionType{
+				controlplanev1.MachineAPIServerPodHealthyV1Beta1Condition,
+				controlplanev1.MachineControllerManagerPodHealthyV1Beta1Condition,
+				controlplanev1.MachineSchedulerPodHealthyV1Beta1Condition,
+				controlplanev1.MachineEtcdPodHealthyV1Beta1Condition,
+				controlplanev1.MachineEtcdMemberHealthyV1Beta1Condition,
+			}}, patch.WithOwnedConditions{Conditions: []string{
+				clusterv1.MachineUpToDateCondition,
+				controlplanev1.KubeadmControlPlaneMachineNodeKubeadmLabelsAndTaintsSetCondition,
+				controlplanev1.KubeadmControlPlaneMachineAPIServerPodHealthyCondition,
+				controlplanev1.KubeadmControlPlaneMachineControllerManagerPodHealthyCondition,
+				controlplanev1.KubeadmControlPlaneMachineSchedulerPodHealthyCondition,
+				controlplanev1.KubeadmControlPlaneMachineEtcdPodHealthyCondition,
+				controlplanev1.KubeadmControlPlaneMachineEtcdMemberHealthyCondition,
 			}}); err != nil {
 				errList = append(errList, err)
 			}
@@ -368,7 +406,7 @@ func (c *ControlPlane) GetWorkloadCluster(ctx context.Context) (WorkloadCluster,
 		return c.workloadCluster, nil
 	}
 
-	workloadCluster, err := c.managementCluster.GetWorkloadCluster(ctx, client.ObjectKeyFromObject(c.Cluster))
+	workloadCluster, err := c.managementCluster.GetWorkloadCluster(ctx, c.Cluster, c.GetKeyEncryptionAlgorithm())
 	if err != nil {
 		return nil, err
 	}
@@ -397,15 +435,16 @@ func (c *ControlPlane) InjectTestManagementCluster(managementCluster ManagementC
 //
 // - etcdMembers list as reported by etcd.
 func (c *ControlPlane) StatusToLogKeyAndValues(newMachine, deletedMachine *clusterv1.Machine) []any {
-	controlPlaneMachineHealthConditions := []clusterv1.ConditionType{
-		controlplanev1.MachineAPIServerPodHealthyCondition,
-		controlplanev1.MachineControllerManagerPodHealthyCondition,
-		controlplanev1.MachineSchedulerPodHealthyCondition,
+	controlPlaneMachineHealthConditions := []string{
+		controlplanev1.KubeadmControlPlaneMachineNodeKubeadmLabelsAndTaintsSetCondition,
+		controlplanev1.KubeadmControlPlaneMachineAPIServerPodHealthyCondition,
+		controlplanev1.KubeadmControlPlaneMachineControllerManagerPodHealthyCondition,
+		controlplanev1.KubeadmControlPlaneMachineSchedulerPodHealthyCondition,
 	}
 	if c.IsEtcdManaged() {
 		controlPlaneMachineHealthConditions = append(controlPlaneMachineHealthConditions,
-			controlplanev1.MachineEtcdPodHealthyCondition,
-			controlplanev1.MachineEtcdMemberHealthyCondition,
+			controlplanev1.KubeadmControlPlaneMachineEtcdPodHealthyCondition,
+			controlplanev1.KubeadmControlPlaneMachineEtcdMemberHealthyCondition,
 		)
 	}
 
@@ -413,7 +452,7 @@ func (c *ControlPlane) StatusToLogKeyAndValues(newMachine, deletedMachine *clust
 	for _, m := range c.Machines {
 		notes := []string{}
 
-		if m.Status.NodeRef == nil {
+		if !m.Status.NodeRef.IsDefined() {
 			notes = append(notes, "status.nodeRef not set")
 		}
 
@@ -423,10 +462,10 @@ func (c *ControlPlane) StatusToLogKeyAndValues(newMachine, deletedMachine *clust
 
 		for _, condition := range controlPlaneMachineHealthConditions {
 			if conditions.IsUnknown(m, condition) {
-				notes = append(notes, strings.Replace(string(condition), "Healthy", " health unknown", -1))
+				notes = append(notes, strings.ReplaceAll(strings.ReplaceAll(condition, "Healthy", " health unknown"), "NodeKubeadmLabelsAndTaintsSet", "kubeadm labels and taints unknown"))
 			}
 			if conditions.IsFalse(m, condition) {
-				notes = append(notes, strings.Replace(string(condition), "Healthy", " not healthy", -1))
+				notes = append(notes, strings.ReplaceAll(strings.ReplaceAll(condition, "Healthy", " not healthy"), "NodeKubeadmLabelsAndTaintsSet", "kubeadm labels and taints not set"))
 			}
 		}
 
@@ -452,7 +491,7 @@ func (c *ControlPlane) StatusToLogKeyAndValues(newMachine, deletedMachine *clust
 	}
 	sort.Strings(machines)
 
-	etcdMembers := []string{}
+	etcdMembers := make([]string, 0, len(c.EtcdMembers))
 	for _, m := range c.EtcdMembers {
 		etcdMembers = append(etcdMembers, m.Name)
 	}
@@ -462,4 +501,59 @@ func (c *ControlPlane) StatusToLogKeyAndValues(newMachine, deletedMachine *clust
 		"machines", strings.Join(machines, ", "),
 		"etcdMembers", strings.Join(etcdMembers, ", "),
 	}
+}
+
+// GetKeyEncryptionAlgorithm returns the control plane EncryptionAlgorithm.
+// If its unset the default encryption algorithm is returned.
+func (c *ControlPlane) GetKeyEncryptionAlgorithm() bootstrapv1.EncryptionAlgorithmType {
+	if c.KCP.Spec.KubeadmConfigSpec.ClusterConfiguration.EncryptionAlgorithm == "" {
+		return bootstrapv1.EncryptionAlgorithmRSA2048
+	}
+	return c.KCP.Spec.KubeadmConfigSpec.ClusterConfiguration.EncryptionAlgorithm
+}
+
+// DefaultTaintIsMissing reports true if the default control plane taint is missing.
+func (c *ControlPlane) DefaultTaintIsMissing(machine *clusterv1.Machine, node *Node) bool {
+	shouldHaveTaint := func() bool {
+		// If the default taint is in the list of taints at machine level, the node should have the default kubeadm taint.
+		// Note: If the taint is defined with propagation OnInitialization only, KCP cannot determine if the user intent
+		// is to leave the taint there indefinitely or to remove it at some point.
+		// However, this func assumes that once the default taint is added it should remain because this is what makes most sense in KCP.
+		for _, t := range machine.Spec.Taints {
+			if t.Key == labelNodeRoleControlPlane && t.Effect == corev1.TaintEffectNoSchedule {
+				return true
+			}
+		}
+
+		// Otherwise look at machine's KubeadmConfigs.
+		// Note: kubeadm adds the default taint on node creation; KCP cannot determine if the user intent is to leave
+		// the taint there indefinitely or to remove it at some point.
+		// However, this func assumes that once the default taint is added it should remain because this is what makes most sense in KCP.
+		if kubeadmConfig, ok := c.KubeadmConfigs[machine.Name]; ok {
+			var kubeadmTaints *[]corev1.Taint
+			if isKubeadmConfigForJoin(kubeadmConfig) {
+				kubeadmTaints = kubeadmConfig.Spec.JoinConfiguration.NodeRegistration.Taints
+			} else {
+				kubeadmTaints = kubeadmConfig.Spec.InitConfiguration.NodeRegistration.Taints
+			}
+
+			// If node registration taints are nil, the node should have the default kubeadm taint (kubeadm adds it by default when nothing else is specified).
+			if kubeadmTaints == nil {
+				return true
+			}
+
+			// If the default taint is in the list of taints at node registration level, the node should have the default kubeadm taint.
+			for _, t := range *kubeadmTaints {
+				if t.Key == labelNodeRoleControlPlane && t.Effect == corev1.TaintEffectNoSchedule {
+					return true
+				}
+			}
+		}
+		return false
+	}
+
+	if shouldHaveTaint() && !taints.HasTaint(node.Spec.Taints, corev1.Taint{Key: labelNodeRoleControlPlane, Effect: corev1.TaintEffectNoSchedule}) {
+		return true
+	}
+	return false
 }

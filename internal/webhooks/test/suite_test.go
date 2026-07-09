@@ -21,16 +21,20 @@ import (
 	"fmt"
 	"os"
 	"testing"
+	"time"
 
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/component-base/featuregate"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 
-	"sigs.k8s.io/cluster-api/api/v1beta1/index"
 	"sigs.k8s.io/cluster-api/feature"
 	"sigs.k8s.io/cluster-api/internal/controllers/clusterclass"
 	fakeruntimeclient "sigs.k8s.io/cluster-api/internal/runtime/client/fake"
+	"sigs.k8s.io/cluster-api/internal/setup"
 	"sigs.k8s.io/cluster-api/internal/test/envtest"
+	"sigs.k8s.io/cluster-api/util/index"
 )
 
 var (
@@ -57,9 +61,13 @@ func TestMain(m *testing.M) {
 	}
 
 	os.Exit(envtest.Run(ctx, envtest.RunInput{
-		M:                m,
-		SetupEnv:         func(e *envtest.Environment) { env = e },
-		SetupReconcilers: setupReconcilers,
-		SetupIndexes:     setupIndexes,
+		M: m,
+		SetupManagerCacheOptions: func(scheme *runtime.Scheme) cache.Options {
+			return setup.ManagerCacheOptions(scheme, "test-controller-manager", "", 10*time.Minute)
+		},
+		ManagerClientOptions: setup.ManagerClientOptions(),
+		SetupEnv:             func(e *envtest.Environment) { env = e },
+		SetupReconcilers:     setupReconcilers,
+		SetupIndexes:         setupIndexes,
 	}))
 }

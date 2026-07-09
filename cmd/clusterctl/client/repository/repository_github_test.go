@@ -24,8 +24,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/google/go-github/v53/github"
+	"github.com/google/go-github/v82/github"
 	. "github.com/onsi/gomega"
+	"github.com/pkg/errors"
 	"k8s.io/utils/ptr"
 
 	clusterctlv1 "sigs.k8s.io/cluster-api/cmd/clusterctl/api/v1alpha3"
@@ -698,9 +699,9 @@ func Test_gitHubRepository_getLatestPatchRelease(t *testing.T) {
 		fmt.Fprint(w, "apiVersion: clusterctl.cluster.x-k8s.io/v1alpha3\nreleaseSeries:\n  - major: 0\n    minor: 4\n    contract: v1alpha4\n  - major: 0\n    minor: 5\n    contract: v1alpha4\n  - major: 0\n    minor: 3\n    contract: v1alpha3\n")
 	})
 
-	major0 := uint(0)
-	minor3 := uint(3)
-	minor4 := uint(4)
+	major0 := int32(0)
+	minor3 := int32(3)
+	minor4 := int32(4)
 
 	configVariablesClient := test.NewFakeVariableClient()
 
@@ -710,8 +711,8 @@ func Test_gitHubRepository_getLatestPatchRelease(t *testing.T) {
 	tests := []struct {
 		name    string
 		field   field
-		major   *uint
-		minor   *uint
+		major   *int32
+		minor   *int32
 		want    string
 		wantErr bool
 	}{
@@ -1083,7 +1084,7 @@ func Test_gitHubRepository_releaseNotFound(t *testing.T) {
 					goproxytest.HTTPTestMethod(t, r, "GET")
 					parts := strings.Split(r.RequestURI, "/")
 					version := parts[len(parts)-1]
-					fmt.Fprintf(w, "{\"id\":13, \"tag_name\": %q, \"assets\": [{\"id\": 1, \"name\": \"metadata.yaml\"}] }", version)
+					fmt.Fprintf(w, "{\"id\":13, \"tag_name\": %q, \"assets\": [{\"id\": 1, \"name\": \"metadata.yaml\"}] }", version) //nolint:gosec // G705: version comes from the test request URI, not user input.
 				})
 			}
 
@@ -1105,6 +1106,57 @@ func Test_gitHubRepository_releaseNotFound(t *testing.T) {
 			}
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(got).To(Equal(tt.want))
+		})
+	}
+}
+
+func Test_handleGithubErr(t *testing.T) {
+	tests := []struct {
+		name    string
+		err     error
+		message string
+		args    []any
+		want    error
+	}{
+		{
+			name:    "Return error",
+			err:     errors.New("error"),
+			message: "message %s and %s",
+			args:    []any{"arg1", "arg2"},
+			want:    fmt.Errorf("message arg1 and arg2: %w", errors.New("error")),
+		},
+		{
+			name: "Return RateLimitError",
+			err: &github.RateLimitError{
+				Response: &http.Response{
+					StatusCode: http.StatusForbidden,
+				},
+			},
+			message: "",
+			args:    nil,
+			want:    errRateLimit,
+		},
+		{
+			name: "Return ErrorResponse",
+			err: &github.ErrorResponse{
+				Response: &http.Response{
+					StatusCode: http.StatusNotFound,
+				},
+			},
+			message: "",
+			args:    nil,
+			want:    errNotFound,
+		},
+	}
+
+	gRepo := &gitHubRepository{}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			g := NewWithT(t)
+
+			got := gRepo.handleGithubErr(tt.err, tt.message, tt.args...)
+			g.Expect(got.Error()).To(Equal(tt.want.Error()))
 		})
 	}
 }

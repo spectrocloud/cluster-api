@@ -12,10 +12,13 @@ hack/tools/bin
 
 # E2E test templates
 test/e2e/data/infrastructure-docker/**/cluster-template*.yaml
-!test/e2e/data/infrastructure-docker/**/clusterclass-quick-start.yaml
 !test/e2e/data/infrastructure-docker/**/clusterclass-quick-start-runtimesdk.yaml
+!test/e2e/data/infrastructure-docker/**/clusterclass-quick-start-runtimesdk-v1beta1.yaml
+!test/e2e/data/infrastructure-docker/**/cluster-template-in-memory.yaml
+!test/e2e/data/infrastructure-docker/**/cluster-template-in-memory-topology.yaml
 test/e2e/data/infrastructure-docker/**/clusterclass-*.yaml
 test/e2e/data/infrastructure-inmemory/**/cluster-template*.yaml
+!test/e2e/data/infrastructure-docker/**/clusterclass-in-memory.yaml
 
 # Output of Makefile targets using sed on MacOS systems
 *.yaml-e
@@ -68,7 +71,7 @@ vendor
 # User-supplied Tiltfile extensions, settings, and builds
 tilt.d
 tilt-settings.json
-tilt-settings.yaml
+tilt-settings.*yaml
 .tiltbuild
 
 # User-supplied clusterctl hacks settings
@@ -84,7 +87,7 @@ out
 .helm
 
 # Used during parts of the build process. Files _should_ get cleaned up automatically.
-# This is also a good location for any temporary manfiests used during development
+# This is also a good location for any temporary manifests used during development
 tmp
 
 # asdf (not a typo! ;) used to manage multiple versions of tools
@@ -92,3 +95,6 @@ tmp
 
 # Development container configurations (https://containers.dev/)
 .devcontainer
+
+# Claude's configuration
+.claude/

@@ -21,19 +21,35 @@ package e2e
 
 import (
 	. "github.com/onsi/ginkgo/v2"
-	"k8s.io/utils/ptr"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 )
 
 var _ = Describe("When testing ClusterClass rollouts [ClusterClass]", Label("ClusterClass"), func() {
 	ClusterClassRolloutSpec(ctx, func() ClusterClassRolloutSpecInput {
 		return ClusterClassRolloutSpecInput{
-			E2EConfig:              e2eConfig,
-			ClusterctlConfigPath:   clusterctlConfigPath,
-			BootstrapClusterProxy:  bootstrapClusterProxy,
-			ArtifactFolder:         artifactFolder,
-			SkipCleanup:            skipCleanup,
-			Flavor:                 "topology",
-			InfrastructureProvider: ptr.To("docker"),
+			E2EConfig:             e2eConfig,
+			ClusterctlConfigPath:  clusterctlConfigPath,
+			BootstrapClusterProxy: bootstrapClusterProxy,
+			ArtifactFolder:        artifactFolder,
+			SkipCleanup:           skipCleanup,
+			Flavor:                "in-memory-topology",
+			// The runtime extension gets deployed to the test-extension-system namespace and is exposed
+			// by the test-extension-webhook-service.
+			// The below values are used when creating the cluster-wide ExtensionConfig to refer
+			// the actual service.
+			ExtensionServiceNamespace: "test-extension-system",
+			ExtensionServiceName:      "test-extension-webhook-service",
+			FilterMetadataBeforeValidation: func(object client.Object) clusterv1.ObjectMeta {
+				annotations := object.GetAnnotations()
+				delete(annotations, "inmemorycluster.infrastructure.cluster.x-k8s.io/listener")
+				delete(annotations, "machine.inmemory.infrastructure.cluster.x-k8s.io/bootstrapped")
+				return clusterv1.ObjectMeta{
+					Labels:      object.GetLabels(),
+					Annotations: annotations,
+				}
+			},
 		}
 	})
 })

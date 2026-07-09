@@ -40,7 +40,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/yaml"
 
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
+	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	. "sigs.k8s.io/cluster-api/test/framework/ginkgoextensions"
 )
 
@@ -116,10 +116,12 @@ func getClusterAPITypes(ctx context.Context, lister Lister) sets.Set[metav1.Type
 
 // DumpAllResourcesInput is the input for DumpAllResources.
 type DumpAllResourcesInput struct {
-	Lister       Lister
-	Namespace    string
-	LogPath      string
-	IncludeTypes []metav1.TypeMeta
+	Lister               Lister
+	KubeConfigPath       string
+	ClusterctlConfigPath string
+	Namespace            string
+	LogPath              string
+	IncludeTypes         []metav1.TypeMeta
 }
 
 // DumpAllResources dumps Cluster API related resources to YAML
@@ -127,12 +129,26 @@ type DumpAllResourcesInput struct {
 func DumpAllResources(ctx context.Context, input DumpAllResourcesInput) {
 	Expect(ctx).NotTo(BeNil(), "ctx is required for DumpAllResources")
 	Expect(input.Lister).NotTo(BeNil(), "input.Lister is required for DumpAllResources")
+	Expect(input.KubeConfigPath).NotTo(BeEmpty(), "input.KubeConfigPath is required for DumpAllResources")
+	Expect(input.ClusterctlConfigPath).NotTo(BeEmpty(), "input.ClusterctlConfigPath is required for DumpAllResources")
 	Expect(input.Namespace).NotTo(BeEmpty(), "input.Namespace is required for DumpAllResources")
+	Expect(input.LogPath).NotTo(BeEmpty(), "input.LogPath is required for DumpAllResources")
 
 	resources := GetCAPIResources(ctx, GetCAPIResourcesInput{
 		Lister:       input.Lister,
 		Namespace:    input.Namespace,
 		IncludeTypes: input.IncludeTypes,
+	})
+
+	// Describe all clusters (this is a sort of summary of all the resources being bumped).
+	// Note: intentionally calling GetCAPIResources first as DescribeAllCluster is more likely to fail
+	// and then we wouldn't have the CAPI resources available.
+	DescribeAllCluster(ctx, DescribeAllClusterInput{
+		Lister:               input.Lister,
+		KubeConfigPath:       input.KubeConfigPath,
+		ClusterctlConfigPath: input.ClusterctlConfigPath,
+		LogFolder:            filepath.Join(input.LogPath, input.Namespace, "Cluster"),
+		Namespace:            input.Namespace,
 	})
 
 	for i := range resources {

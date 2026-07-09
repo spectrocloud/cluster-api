@@ -30,9 +30,7 @@ func Test_runGetRepositories(t *testing.T) {
 	t.Run("prints output", func(t *testing.T) {
 		g := NewWithT(t)
 
-		tmpDir, err := os.MkdirTemp("", "cc")
-		g.Expect(err).ToNot(HaveOccurred())
-		defer os.RemoveAll(tmpDir)
+		tmpDir := t.TempDir()
 
 		path := filepath.Join(tmpDir, "clusterctl.yaml")
 		g.Expect(os.WriteFile(path, []byte(template), 0600)).To(Succeed())
@@ -47,9 +45,10 @@ func Test_runGetRepositories(t *testing.T) {
 
 			// Use gomega's BeComparableTo as opposed to Equals to compare output which uses gocmp under
 			// the hood and correctly prints any differences between the two strings.
-			if val == RepositoriesOutputText {
+			switch val {
+			case RepositoriesOutputText:
 				g.Expect(string(out)).To(BeComparableTo(expectedOutputText))
-			} else if val == RepositoriesOutputYaml {
+			case RepositoriesOutputYaml:
 				g.Expect(string(out)).To(BeComparableTo(expectedOutputYaml))
 			}
 		}
@@ -69,9 +68,7 @@ func Test_runGetRepositories(t *testing.T) {
 	t.Run("returns error for bad template", func(t *testing.T) {
 		g := NewWithT(t)
 
-		tmpDir, err := os.MkdirTemp("", "cc")
-		g.Expect(err).ToNot(HaveOccurred())
-		defer os.RemoveAll(tmpDir)
+		tmpDir := t.TempDir()
 
 		path := filepath.Join(tmpDir, "clusterctl.yaml")
 		g.Expect(os.WriteFile(path, []byte("providers: foobar"), 0600)).To(Succeed())
@@ -101,65 +98,71 @@ providers:
     type: "CoreProvider"
 `
 
-var expectedOutputText = `NAME                    TYPE                       URL                                                                                               FILE
-cluster-api             CoreProvider               https://github.com/myorg/myforkofclusterapi/releases/latest/                                      core_components.yaml
-another-provider        BootstrapProvider          ./                                                                                                bootstrap-components.yaml
-canonical-kubernetes    BootstrapProvider          https://github.com/canonical/cluster-api-k8s/releases/latest/                                     bootstrap-components.yaml
-k0sproject-k0smotron    BootstrapProvider          https://github.com/k0sproject/k0smotron/releases/latest/                                          bootstrap-components.yaml
-kubeadm                 BootstrapProvider          https://github.com/kubernetes-sigs/cluster-api/releases/latest/                                   bootstrap-components.yaml
-kubekey-k3s             BootstrapProvider          https://github.com/kubesphere/kubekey/releases/latest/                                            bootstrap-components.yaml
-microk8s                BootstrapProvider          https://github.com/canonical/cluster-api-bootstrap-provider-microk8s/releases/latest/             bootstrap-components.yaml
-rke2                    BootstrapProvider          https://github.com/rancher/cluster-api-provider-rke2/releases/latest/                             bootstrap-components.yaml
-talos                   BootstrapProvider          https://github.com/siderolabs/cluster-api-bootstrap-provider-talos/releases/latest/               bootstrap-components.yaml
-canonical-kubernetes    ControlPlaneProvider       https://github.com/canonical/cluster-api-k8s/releases/latest/                                     control-plane-components.yaml
-k0sproject-k0smotron    ControlPlaneProvider       https://github.com/k0sproject/k0smotron/releases/latest/                                          control-plane-components.yaml
-kamaji                  ControlPlaneProvider       https://github.com/clastix/cluster-api-control-plane-provider-kamaji/releases/latest/             control-plane-components.yaml
-kubeadm                 ControlPlaneProvider       https://github.com/kubernetes-sigs/cluster-api/releases/latest/                                   control-plane-components.yaml
-kubekey-k3s             ControlPlaneProvider       https://github.com/kubesphere/kubekey/releases/latest/                                            control-plane-components.yaml
-microk8s                ControlPlaneProvider       https://github.com/canonical/cluster-api-control-plane-provider-microk8s/releases/latest/         control-plane-components.yaml
-nested                  ControlPlaneProvider       https://github.com/kubernetes-sigs/cluster-api-provider-nested/releases/latest/                   control-plane-components.yaml
-rke2                    ControlPlaneProvider       https://github.com/rancher/cluster-api-provider-rke2/releases/latest/                             control-plane-components.yaml
-talos                   ControlPlaneProvider       https://github.com/siderolabs/cluster-api-control-plane-provider-talos/releases/latest/           control-plane-components.yaml
-aws                     InfrastructureProvider                                                                                                       my-aws-infrastructure-components.yaml
-azure                   InfrastructureProvider     https://github.com/kubernetes-sigs/cluster-api-provider-azure/releases/latest/                    infrastructure-components.yaml
-byoh                    InfrastructureProvider     https://github.com/vmware-tanzu/cluster-api-provider-bringyourownhost/releases/latest/            infrastructure-components.yaml
-cloudstack              InfrastructureProvider     https://github.com/kubernetes-sigs/cluster-api-provider-cloudstack/releases/latest/               infrastructure-components.yaml
-coxedge                 InfrastructureProvider     https://github.com/coxedge/cluster-api-provider-coxedge/releases/latest/                          infrastructure-components.yaml
-digitalocean            InfrastructureProvider     https://github.com/kubernetes-sigs/cluster-api-provider-digitalocean/releases/latest/             infrastructure-components.yaml
-docker                  InfrastructureProvider     https://github.com/kubernetes-sigs/cluster-api/releases/latest/                                   infrastructure-components-development.yaml
-gcp                     InfrastructureProvider     https://github.com/kubernetes-sigs/cluster-api-provider-gcp/releases/latest/                      infrastructure-components.yaml
-harvester-harvester     InfrastructureProvider     https://github.com/rancher-sandbox/cluster-api-provider-harvester/releases/latest/                infrastructure-components.yaml
-hetzner                 InfrastructureProvider     https://github.com/syself/cluster-api-provider-hetzner/releases/latest/                           infrastructure-components.yaml
-hivelocity-hivelocity   InfrastructureProvider     https://github.com/hivelocity/cluster-api-provider-hivelocity/releases/latest/                    infrastructure-components.yaml
-ibmcloud                InfrastructureProvider     https://github.com/kubernetes-sigs/cluster-api-provider-ibmcloud/releases/latest/                 infrastructure-components.yaml
-in-memory               InfrastructureProvider     https://github.com/kubernetes-sigs/cluster-api/releases/latest/                                   infrastructure-components-in-memory-development.yaml
-ionoscloud-ionoscloud   InfrastructureProvider     https://github.com/ionos-cloud/cluster-api-provider-ionoscloud/releases/latest/                   infrastructure-components.yaml
-k0sproject-k0smotron    InfrastructureProvider     https://github.com/k0sproject/k0smotron/releases/latest/                                          infrastructure-components.yaml
-kubekey                 InfrastructureProvider     https://github.com/kubesphere/kubekey/releases/latest/                                            infrastructure-components.yaml
-kubevirt                InfrastructureProvider     https://github.com/kubernetes-sigs/cluster-api-provider-kubevirt/releases/latest/                 infrastructure-components.yaml
-linode-linode           InfrastructureProvider     https://github.com/linode/cluster-api-provider-linode/releases/latest/                            infrastructure-components.yaml
-maas                    InfrastructureProvider     https://github.com/spectrocloud/cluster-api-provider-maas/releases/latest/                        infrastructure-components.yaml
-metal3                  InfrastructureProvider     https://github.com/metal3-io/cluster-api-provider-metal3/releases/latest/                         infrastructure-components.yaml
-my-infra-provider       InfrastructureProvider     /home/.config/cluster-api/overrides/infrastructure-docker/latest/                                 infrastructure-components.yaml
-nested                  InfrastructureProvider     https://github.com/kubernetes-sigs/cluster-api-provider-nested/releases/latest/                   infrastructure-components.yaml
-nutanix                 InfrastructureProvider     https://github.com/nutanix-cloud-native/cluster-api-provider-nutanix/releases/latest/             infrastructure-components.yaml
-oci                     InfrastructureProvider     https://github.com/oracle/cluster-api-provider-oci/releases/latest/                               infrastructure-components.yaml
-openstack               InfrastructureProvider     https://github.com/kubernetes-sigs/cluster-api-provider-openstack/releases/latest/                infrastructure-components.yaml
-outscale                InfrastructureProvider     https://github.com/outscale/cluster-api-provider-outscale/releases/latest/                        infrastructure-components.yaml
-packet                  InfrastructureProvider     https://github.com/kubernetes-sigs/cluster-api-provider-packet/releases/latest/                   infrastructure-components.yaml
-proxmox                 InfrastructureProvider     https://github.com/ionos-cloud/cluster-api-provider-proxmox/releases/latest/                      infrastructure-components.yaml
-sidero                  InfrastructureProvider     https://github.com/siderolabs/sidero/releases/latest/                                             infrastructure-components.yaml
-tinkerbell-tinkerbell   InfrastructureProvider     https://github.com/tinkerbell/cluster-api-provider-tinkerbell/releases/latest/                    infrastructure-components.yaml
-vcd                     InfrastructureProvider     https://github.com/vmware/cluster-api-provider-cloud-director/releases/latest/                    infrastructure-components.yaml
-vcluster                InfrastructureProvider     https://github.com/loft-sh/cluster-api-provider-vcluster/releases/latest/                         infrastructure-components.yaml
-virtink                 InfrastructureProvider     https://github.com/smartxworks/cluster-api-provider-virtink/releases/latest/                      infrastructure-components.yaml
-vsphere                 InfrastructureProvider     https://github.com/kubernetes-sigs/cluster-api-provider-vsphere/releases/latest/                  infrastructure-components.yaml
-vultr-vultr             InfrastructureProvider     https://github.com/vultr/cluster-api-provider-vultr/releases/latest/                              infrastructure-components.yaml
-in-cluster              IPAMProvider               https://github.com/kubernetes-sigs/cluster-api-ipam-provider-in-cluster/releases/latest/          ipam-components.yaml
-nutanix                 IPAMProvider               https://github.com/nutanix-cloud-native/cluster-api-ipam-provider-nutanix/releases/latest/        ipam-components.yaml
-nutanix                 RuntimeExtensionProvider   https://github.com/nutanix-cloud-native/cluster-api-runtime-extensions-nutanix/releases/latest/   runtime-extensions-components.yaml
-helm                    AddonProvider              https://github.com/kubernetes-sigs/cluster-api-addon-provider-helm/releases/latest/               addon-components.yaml
-rancher-fleet           AddonProvider              https://github.com/rancher-sandbox/cluster-api-addon-provider-fleet/releases/latest/              addon-components.yaml
+var expectedOutputText = `NAME                       TYPE                       URL                                                                                               FILE
+cluster-api                CoreProvider               https://github.com/myorg/myforkofclusterapi/releases/latest/                                      core_components.yaml
+another-provider           BootstrapProvider          ./                                                                                                bootstrap-components.yaml
+canonical-kubernetes       BootstrapProvider          https://github.com/canonical/cluster-api-k8s/releases/latest/                                     bootstrap-components.yaml
+k0sproject-k0smotron       BootstrapProvider          https://github.com/k0sproject/k0smotron/releases/latest/                                          bootstrap-components.yaml
+kubeadm                    BootstrapProvider          https://github.com/kubernetes-sigs/cluster-api/releases/latest/                                   bootstrap-components.yaml
+kubekey-k3s                BootstrapProvider          https://github.com/kubesphere/kubekey/releases/latest/                                            bootstrap-components.yaml
+microk8s                   BootstrapProvider          https://github.com/canonical/cluster-api-bootstrap-provider-microk8s/releases/latest/             bootstrap-components.yaml
+rke2                       BootstrapProvider          https://github.com/rancher/cluster-api-provider-rke2/releases/latest/                             bootstrap-components.yaml
+talos                      BootstrapProvider          https://github.com/siderolabs/cluster-api-bootstrap-provider-talos/releases/latest/               bootstrap-components.yaml
+canonical-kubernetes       ControlPlaneProvider       https://github.com/canonical/cluster-api-k8s/releases/latest/                                     control-plane-components.yaml
+hosted-control-plane       ControlPlaneProvider       https://github.com/teutonet/cluster-api-provider-hosted-control-plane/releases/latest/            control-plane-components.yaml
+k0sproject-k0smotron       ControlPlaneProvider       https://github.com/k0sproject/k0smotron/releases/latest/                                          control-plane-components.yaml
+kamaji                     ControlPlaneProvider       https://github.com/clastix/cluster-api-control-plane-provider-kamaji/releases/latest/             control-plane-components.yaml
+kubeadm                    ControlPlaneProvider       https://github.com/kubernetes-sigs/cluster-api/releases/latest/                                   control-plane-components.yaml
+kubekey-k3s                ControlPlaneProvider       https://github.com/kubesphere/kubekey/releases/latest/                                            control-plane-components.yaml
+microk8s                   ControlPlaneProvider       https://github.com/canonical/cluster-api-control-plane-provider-microk8s/releases/latest/         control-plane-components.yaml
+nested                     ControlPlaneProvider       https://github.com/kubernetes-sigs/cluster-api-provider-nested/releases/latest/                   control-plane-components.yaml
+rke2                       ControlPlaneProvider       https://github.com/rancher/cluster-api-provider-rke2/releases/latest/                             control-plane-components.yaml
+talos                      ControlPlaneProvider       https://github.com/siderolabs/cluster-api-control-plane-provider-talos/releases/latest/           control-plane-components.yaml
+aws                        InfrastructureProvider                                                                                                       my-aws-infrastructure-components.yaml
+azure                      InfrastructureProvider     https://github.com/kubernetes-sigs/cluster-api-provider-azure/releases/latest/                    infrastructure-components.yaml
+byoh                       InfrastructureProvider     https://github.com/vmware-tanzu/cluster-api-provider-bringyourownhost/releases/latest/            infrastructure-components.yaml
+cloudscale-ch-cloudscale   InfrastructureProvider     https://github.com/cloudscale-ch/cluster-api-provider-cloudscale/releases/latest/                 infrastructure-components.yaml
+cloudstack                 InfrastructureProvider     https://github.com/kubernetes-sigs/cluster-api-provider-cloudstack/releases/latest/               infrastructure-components.yaml
+coxedge                    InfrastructureProvider     https://github.com/coxedge/cluster-api-provider-coxedge/releases/latest/                          infrastructure-components.yaml
+digitalocean               InfrastructureProvider     https://github.com/kubernetes-sigs/cluster-api-provider-digitalocean/releases/latest/             infrastructure-components.yaml
+docker                     InfrastructureProvider     https://github.com/kubernetes-sigs/cluster-api/releases/latest/                                   infrastructure-components-development.yaml
+gcp                        InfrastructureProvider     https://github.com/kubernetes-sigs/cluster-api-provider-gcp/releases/latest/                      infrastructure-components.yaml
+harvester-harvester        InfrastructureProvider     https://github.com/rancher-sandbox/cluster-api-provider-harvester/releases/latest/                infrastructure-components.yaml
+hetzner                    InfrastructureProvider     https://github.com/syself/cluster-api-provider-hetzner/releases/latest/                           infrastructure-components.yaml
+hivelocity-hivelocity      InfrastructureProvider     https://github.com/hivelocity/cluster-api-provider-hivelocity/releases/latest/                    infrastructure-components.yaml
+huawei                     InfrastructureProvider     https://github.com/HuaweiCloudDeveloper/cluster-api-provider-huawei/releases/latest/              infrastructure-components.yaml
+ibmcloud                   InfrastructureProvider     https://github.com/kubernetes-sigs/cluster-api-provider-ibmcloud/releases/latest/                 infrastructure-components.yaml
+ionoscloud-ionoscloud      InfrastructureProvider     https://github.com/ionos-cloud/cluster-api-provider-ionoscloud/releases/latest/                   infrastructure-components.yaml
+k0sproject-k0smotron       InfrastructureProvider     https://github.com/k0sproject/k0smotron/releases/latest/                                          infrastructure-components.yaml
+kubekey                    InfrastructureProvider     https://github.com/kubesphere/kubekey/releases/latest/                                            infrastructure-components.yaml
+kubevirt                   InfrastructureProvider     https://github.com/kubernetes-sigs/cluster-api-provider-kubevirt/releases/latest/                 infrastructure-components.yaml
+linode-linode              InfrastructureProvider     https://github.com/linode/cluster-api-provider-linode/releases/latest/                            infrastructure-components.yaml
+maas                       InfrastructureProvider     https://github.com/spectrocloud/cluster-api-provider-maas/releases/latest/                        infrastructure-components.yaml
+metal-stack                InfrastructureProvider     https://github.com/metal-stack/cluster-api-provider-metal-stack/releases/latest/                  infrastructure-components.yaml
+metal3                     InfrastructureProvider     https://github.com/metal3-io/cluster-api-provider-metal3/releases/latest/                         infrastructure-components.yaml
+my-infra-provider          InfrastructureProvider     /home/.config/cluster-api/overrides/infrastructure-docker/latest/                                 infrastructure-components.yaml
+nested                     InfrastructureProvider     https://github.com/kubernetes-sigs/cluster-api-provider-nested/releases/latest/                   infrastructure-components.yaml
+nutanix                    InfrastructureProvider     https://github.com/nutanix-cloud-native/cluster-api-provider-nutanix/releases/latest/             infrastructure-components.yaml
+oci                        InfrastructureProvider     https://github.com/oracle/cluster-api-provider-oci/releases/latest/                               infrastructure-components.yaml
+opennebula                 InfrastructureProvider     https://github.com/OpenNebula/cluster-api-provider-opennebula/releases/latest/                    infrastructure-components.yaml
+openstack                  InfrastructureProvider     https://github.com/kubernetes-sigs/cluster-api-provider-openstack/releases/latest/                infrastructure-components.yaml
+outscale                   InfrastructureProvider     https://github.com/outscale/cluster-api-provider-outscale/releases/latest/                        infrastructure-components.yaml
+proxmox                    InfrastructureProvider     https://github.com/ionos-cloud/cluster-api-provider-proxmox/releases/latest/                      infrastructure-components.yaml
+scaleway                   InfrastructureProvider     https://github.com/scaleway/cluster-api-provider-scaleway/releases/latest/                        infrastructure-components.yaml
+sidero                     InfrastructureProvider     https://github.com/siderolabs/sidero/releases/latest/                                             infrastructure-components.yaml
+tinkerbell-tinkerbell      InfrastructureProvider     https://github.com/tinkerbell/cluster-api-provider-tinkerbell/releases/latest/                    infrastructure-components.yaml
+vcd                        InfrastructureProvider     https://github.com/vmware/cluster-api-provider-cloud-director/releases/latest/                    infrastructure-components.yaml
+vcluster                   InfrastructureProvider     https://github.com/loft-sh/cluster-api-provider-vcluster/releases/latest/                         infrastructure-components.yaml
+virtink                    InfrastructureProvider     https://github.com/smartxworks/cluster-api-provider-virtink/releases/latest/                      infrastructure-components.yaml
+vsphere                    InfrastructureProvider     https://github.com/kubernetes-sigs/cluster-api-provider-vsphere/releases/latest/                  infrastructure-components.yaml
+vultr-vultr                InfrastructureProvider     https://github.com/vultr/cluster-api-provider-vultr/releases/latest/                              infrastructure-components.yaml
+in-cluster                 IPAMProvider               https://github.com/kubernetes-sigs/cluster-api-ipam-provider-in-cluster/releases/latest/          ipam-components.yaml
+metal3                     IPAMProvider               https://github.com/metal3-io/ip-address-manager/releases/latest/                                  ipam-components.yaml
+nutanix                    IPAMProvider               https://github.com/nutanix-cloud-native/cluster-api-ipam-provider-nutanix/releases/latest/        ipam-components.yaml
+nutanix                    RuntimeExtensionProvider   https://github.com/nutanix-cloud-native/cluster-api-runtime-extensions-nutanix/releases/latest/   runtime-extensions-components.yaml
+eitco-cdk8s                AddonProvider              https://github.com/eitco/cluster-api-addon-provider-cdk8s/releases/latest/                        addon-components.yaml
+helm                       AddonProvider              https://github.com/kubernetes-sigs/cluster-api-addon-provider-helm/releases/latest/               addon-components.yaml
+rancher-fleet              AddonProvider              https://github.com/rancher/cluster-api-addon-provider-fleet/releases/latest/                      addon-components.yaml
 `
 
 var expectedOutputYaml = `- File: core_components.yaml
@@ -202,6 +205,10 @@ var expectedOutputYaml = `- File: core_components.yaml
   Name: canonical-kubernetes
   ProviderType: ControlPlaneProvider
   URL: https://github.com/canonical/cluster-api-k8s/releases/latest/
+- File: control-plane-components.yaml
+  Name: hosted-control-plane
+  ProviderType: ControlPlaneProvider
+  URL: https://github.com/teutonet/cluster-api-provider-hosted-control-plane/releases/latest/
 - File: control-plane-components.yaml
   Name: k0sproject-k0smotron
   ProviderType: ControlPlaneProvider
@@ -247,6 +254,10 @@ var expectedOutputYaml = `- File: core_components.yaml
   ProviderType: InfrastructureProvider
   URL: https://github.com/vmware-tanzu/cluster-api-provider-bringyourownhost/releases/latest/
 - File: infrastructure-components.yaml
+  Name: cloudscale-ch-cloudscale
+  ProviderType: InfrastructureProvider
+  URL: https://github.com/cloudscale-ch/cluster-api-provider-cloudscale/releases/latest/
+- File: infrastructure-components.yaml
   Name: cloudstack
   ProviderType: InfrastructureProvider
   URL: https://github.com/kubernetes-sigs/cluster-api-provider-cloudstack/releases/latest/
@@ -279,13 +290,13 @@ var expectedOutputYaml = `- File: core_components.yaml
   ProviderType: InfrastructureProvider
   URL: https://github.com/hivelocity/cluster-api-provider-hivelocity/releases/latest/
 - File: infrastructure-components.yaml
+  Name: huawei
+  ProviderType: InfrastructureProvider
+  URL: https://github.com/HuaweiCloudDeveloper/cluster-api-provider-huawei/releases/latest/
+- File: infrastructure-components.yaml
   Name: ibmcloud
   ProviderType: InfrastructureProvider
   URL: https://github.com/kubernetes-sigs/cluster-api-provider-ibmcloud/releases/latest/
-- File: infrastructure-components-in-memory-development.yaml
-  Name: in-memory
-  ProviderType: InfrastructureProvider
-  URL: https://github.com/kubernetes-sigs/cluster-api/releases/latest/
 - File: infrastructure-components.yaml
   Name: ionoscloud-ionoscloud
   ProviderType: InfrastructureProvider
@@ -311,6 +322,10 @@ var expectedOutputYaml = `- File: core_components.yaml
   ProviderType: InfrastructureProvider
   URL: https://github.com/spectrocloud/cluster-api-provider-maas/releases/latest/
 - File: infrastructure-components.yaml
+  Name: metal-stack
+  ProviderType: InfrastructureProvider
+  URL: https://github.com/metal-stack/cluster-api-provider-metal-stack/releases/latest/
+- File: infrastructure-components.yaml
   Name: metal3
   ProviderType: InfrastructureProvider
   URL: https://github.com/metal3-io/cluster-api-provider-metal3/releases/latest/
@@ -331,6 +346,10 @@ var expectedOutputYaml = `- File: core_components.yaml
   ProviderType: InfrastructureProvider
   URL: https://github.com/oracle/cluster-api-provider-oci/releases/latest/
 - File: infrastructure-components.yaml
+  Name: opennebula
+  ProviderType: InfrastructureProvider
+  URL: https://github.com/OpenNebula/cluster-api-provider-opennebula/releases/latest/
+- File: infrastructure-components.yaml
   Name: openstack
   ProviderType: InfrastructureProvider
   URL: https://github.com/kubernetes-sigs/cluster-api-provider-openstack/releases/latest/
@@ -339,13 +358,13 @@ var expectedOutputYaml = `- File: core_components.yaml
   ProviderType: InfrastructureProvider
   URL: https://github.com/outscale/cluster-api-provider-outscale/releases/latest/
 - File: infrastructure-components.yaml
-  Name: packet
-  ProviderType: InfrastructureProvider
-  URL: https://github.com/kubernetes-sigs/cluster-api-provider-packet/releases/latest/
-- File: infrastructure-components.yaml
   Name: proxmox
   ProviderType: InfrastructureProvider
   URL: https://github.com/ionos-cloud/cluster-api-provider-proxmox/releases/latest/
+- File: infrastructure-components.yaml
+  Name: scaleway
+  ProviderType: InfrastructureProvider
+  URL: https://github.com/scaleway/cluster-api-provider-scaleway/releases/latest/
 - File: infrastructure-components.yaml
   Name: sidero
   ProviderType: InfrastructureProvider
@@ -379,6 +398,10 @@ var expectedOutputYaml = `- File: core_components.yaml
   ProviderType: IPAMProvider
   URL: https://github.com/kubernetes-sigs/cluster-api-ipam-provider-in-cluster/releases/latest/
 - File: ipam-components.yaml
+  Name: metal3
+  ProviderType: IPAMProvider
+  URL: https://github.com/metal3-io/ip-address-manager/releases/latest/
+- File: ipam-components.yaml
   Name: nutanix
   ProviderType: IPAMProvider
   URL: https://github.com/nutanix-cloud-native/cluster-api-ipam-provider-nutanix/releases/latest/
@@ -387,11 +410,15 @@ var expectedOutputYaml = `- File: core_components.yaml
   ProviderType: RuntimeExtensionProvider
   URL: https://github.com/nutanix-cloud-native/cluster-api-runtime-extensions-nutanix/releases/latest/
 - File: addon-components.yaml
+  Name: eitco-cdk8s
+  ProviderType: AddonProvider
+  URL: https://github.com/eitco/cluster-api-addon-provider-cdk8s/releases/latest/
+- File: addon-components.yaml
   Name: helm
   ProviderType: AddonProvider
   URL: https://github.com/kubernetes-sigs/cluster-api-addon-provider-helm/releases/latest/
 - File: addon-components.yaml
   Name: rancher-fleet
   ProviderType: AddonProvider
-  URL: https://github.com/rancher-sandbox/cluster-api-addon-provider-fleet/releases/latest/
+  URL: https://github.com/rancher/cluster-api-addon-provider-fleet/releases/latest/
 `

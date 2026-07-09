@@ -29,7 +29,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
+	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/cluster-api/util"
 	"sigs.k8s.io/cluster-api/util/test/builder"
 )
@@ -150,7 +150,7 @@ func TestMachineSetReconciler_ReconcileDelete(t *testing.T) {
 
 		fakeClient := fake.NewClientBuilder().
 			WithScheme(fakeScheme).
-			WithObjects(ms, msBT, msIMT).
+			WithObjects(ms, msBT, msIMT, builder.GenericBootstrapConfigTemplateCRD, builder.GenericInfrastructureMachineTemplateCRD).
 			Build()
 
 		r := &Reconciler{
@@ -187,7 +187,7 @@ func TestMachineSetReconciler_ReconcileDelete(t *testing.T) {
 
 		fakeClient := fake.NewClientBuilder().
 			WithScheme(fakeScheme).
-			WithObjects(msWithoutBootstrapTemplate, msWithoutBootstrapTemplateIMT).
+			WithObjects(msWithoutBootstrapTemplate, msWithoutBootstrapTemplateIMT, builder.GenericBootstrapConfigTemplateCRD, builder.GenericInfrastructureMachineTemplateCRD).
 			Build()
 
 		r := &Reconciler{

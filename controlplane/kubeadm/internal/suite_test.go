@@ -21,15 +21,14 @@ import (
 	"fmt"
 	"os"
 	"testing"
+	"time"
 
-	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/labels"
-	"k8s.io/apimachinery/pkg/selection"
+	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
+	"sigs.k8s.io/cluster-api/controlplane/kubeadm/internal/setup"
 	"sigs.k8s.io/cluster-api/internal/test/envtest"
 )
 
@@ -42,35 +41,19 @@ var (
 func TestMain(m *testing.M) {
 	setupReconcilers := func(_ context.Context, mgr ctrl.Manager) {
 		var err error
-		secretCachingClient, err = client.New(mgr.GetConfig(), client.Options{
-			HTTPClient: mgr.GetHTTPClient(),
-			Cache: &client.CacheOptions{
-				Reader: mgr.GetCache(),
-			},
-		})
+		secretCachingClient, err = setup.CreateSecretCachingClient(mgr)
 		if err != nil {
 			panic(fmt.Sprintf("unable to create secretCachingClient: %v", err))
 		}
 	}
-	req, _ := labels.NewRequirement(clusterv1.ClusterNameLabel, selection.Exists, nil)
-	clusterSecretCacheSelector := labels.NewSelector().Add(*req)
 
 	os.Exit(envtest.Run(ctx, envtest.RunInput{
 		M: m,
-		ManagerCacheOptions: cache.Options{
-			ByObject: map[client.Object]cache.ByObject{
-				// Only cache Secrets with the cluster name label.
-				// This is similar to the real world.
-				&corev1.Secret{}: {
-					Label: clusterSecretCacheSelector,
-				},
-			},
+		SetupManagerCacheOptions: func(scheme *runtime.Scheme) cache.Options {
+			return setup.ManagerCacheOptions(scheme, "test-controller-manager", "", 10*time.Minute)
 		},
-		ManagerUncachedObjs: []client.Object{
-			&corev1.ConfigMap{},
-			&corev1.Secret{},
-		},
-		SetupEnv:         func(e *envtest.Environment) { env = e },
-		SetupReconcilers: setupReconcilers,
+		ManagerClientOptions: setup.ManagerClientOptions(),
+		SetupEnv:             func(e *envtest.Environment) { env = e },
+		SetupReconcilers:     setupReconcilers,
 	}))
 }

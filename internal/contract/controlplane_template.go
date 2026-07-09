@@ -33,16 +33,6 @@ func ControlPlaneTemplate() *ControlPlaneTemplateContract {
 	return controlPlaneTemplate
 }
 
-// InfrastructureMachineTemplate provide access to InfrastructureMachineTemplate reference, if any.
-// NOTE: When working with unstructured there is no way to understand if the ControlPlane provider
-// do support a field in the type definition from the fact that a field is not set in a given instance.
-// This is why in we are deriving if this field is required from the ClusterClass in the topology reconciler code.
-func (c *ControlPlaneTemplateContract) InfrastructureMachineTemplate() *Ref {
-	return &Ref{
-		path: Path{"spec", "template", "spec", "machineTemplate", "infrastructureRef"},
-	}
-}
-
 // Template provides access to the template.
 func (c *ControlPlaneTemplateContract) Template() *ControlPlaneTemplateTemplate {
 	return &ControlPlaneTemplateTemplate{}
@@ -70,26 +60,5 @@ type ControlPlaneTemplateMachineTemplate struct{}
 func (c *ControlPlaneTemplateMachineTemplate) Metadata() *Metadata {
 	return &Metadata{
 		path: Path{"spec", "template", "spec", "machineTemplate", "metadata"},
-	}
-}
-
-// NodeDrainTimeout provides access to the nodeDrainTimeout of a MachineTemplate.
-func (c *ControlPlaneTemplateMachineTemplate) NodeDrainTimeout() *Duration {
-	return &Duration{
-		path: Path{"spec", "template", "spec", "machineTemplate", "nodeDrainTimeout"},
-	}
-}
-
-// NodeVolumeDetachTimeout provides access to the nodeVolumeDetachTimeout of a MachineTemplate.
-func (c *ControlPlaneTemplateMachineTemplate) NodeVolumeDetachTimeout() *Duration {
-	return &Duration{
-		path: Path{"spec", "template", "spec", "machineTemplate", "nodeVolumeDetachTimeout"},
-	}
-}
-
-// NodeDeletionTimeout provides access to the nodeDeletionTimeout of a MachineTemplate.
-func (c *ControlPlaneTemplateMachineTemplate) NodeDeletionTimeout() *Duration {
-	return &Duration{
-		path: Path{"spec", "template", "spec", "machineTemplate", "nodeDeletionTimeout"},
 	}
 }

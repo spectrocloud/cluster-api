@@ -22,13 +22,17 @@ import (
 	"testing"
 
 	. "github.com/onsi/gomega"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	utilfeature "k8s.io/component-base/featuregate/testing"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
+	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
+	"sigs.k8s.io/cluster-api/feature"
 	"sigs.k8s.io/cluster-api/internal/webhooks/util"
+	"sigs.k8s.io/cluster-api/util/test/builder"
 )
 
 func TestMachineSetDefault(t *testing.T) {
@@ -40,7 +44,10 @@ func TestMachineSetDefault(t *testing.T) {
 		Spec: clusterv1.MachineSetSpec{
 			Template: clusterv1.MachineTemplateSpec{
 				Spec: clusterv1.MachineSpec{
-					Version: ptr.To("1.19.10"),
+					Version: "1.19.10",
+					Bootstrap: clusterv1.Bootstrap{
+						DataSecretName: ptr.To("data-secret"),
+					},
 				},
 			},
 		},
@@ -53,14 +60,72 @@ func TestMachineSetDefault(t *testing.T) {
 	}
 
 	reqCtx := admission.NewContextWithRequest(ctx, admission.Request{})
-	t.Run("for MachineSet", util.CustomDefaultValidateTest(reqCtx, ms, webhook))
+	t.Run("for MachineSet", util.CustomDefaultValidateTest[*clusterv1.MachineSet](reqCtx, ms, webhook))
 	g.Expect(webhook.Default(reqCtx, ms)).To(Succeed())
 
 	g.Expect(ms.Labels[clusterv1.ClusterNameLabel]).To(Equal(ms.Spec.ClusterName))
-	g.Expect(ms.Spec.DeletePolicy).To(Equal(string(clusterv1.RandomMachineSetDeletePolicy)))
 	g.Expect(ms.Spec.Selector.MatchLabels).To(HaveKeyWithValue(clusterv1.MachineSetNameLabel, "test-ms"))
 	g.Expect(ms.Spec.Template.Labels).To(HaveKeyWithValue(clusterv1.MachineSetNameLabel, "test-ms"))
-	g.Expect(*ms.Spec.Template.Spec.Version).To(Equal("v1.19.10"))
+	g.Expect(ms.Spec.Template.Spec.Version).To(Equal("v1.19.10"))
+}
+
+func TestMachineSetBootstrapValidation(t *testing.T) {
+	tests := []struct {
+		name      string
+		bootstrap clusterv1.Bootstrap
+		expectErr bool
+	}{
+		{
+			name:      "should return error if configref and data are nil",
+			bootstrap: clusterv1.Bootstrap{DataSecretName: nil},
+			expectErr: true,
+		},
+		{
+			name:      "should not return error if dataSecretName is set",
+			bootstrap: clusterv1.Bootstrap{DataSecretName: ptr.To("test")},
+			expectErr: false,
+		},
+		{
+			name:      "should not return error if dataSecretName is set",
+			bootstrap: clusterv1.Bootstrap{DataSecretName: ptr.To("")},
+			expectErr: false,
+		},
+		{
+			name:      "should not return error if config ref is set",
+			bootstrap: clusterv1.Bootstrap{ConfigRef: clusterv1.ContractVersionedObjectReference{Name: "bootstrap1"}, DataSecretName: nil},
+			expectErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			g := NewWithT(t)
+			m := &clusterv1.MachineSet{
+				Spec: clusterv1.MachineSetSpec{
+					Template: clusterv1.MachineTemplateSpec{
+						Spec: clusterv1.MachineSpec{Bootstrap: tt.bootstrap},
+					},
+				},
+			}
+			webhook := &MachineSet{}
+
+			if tt.expectErr {
+				warnings, err := webhook.ValidateCreate(ctx, m)
+				g.Expect(err).To(HaveOccurred())
+				g.Expect(warnings).To(BeEmpty())
+				warnings, err = webhook.ValidateUpdate(ctx, m, m)
+				g.Expect(err).To(HaveOccurred())
+				g.Expect(warnings).To(BeEmpty())
+			} else {
+				warnings, err := webhook.ValidateCreate(ctx, m)
+				g.Expect(err).ToNot(HaveOccurred())
+				g.Expect(warnings).To(BeEmpty())
+				warnings, err = webhook.ValidateUpdate(ctx, m, m)
+				g.Expect(err).ToNot(HaveOccurred())
+				g.Expect(warnings).To(BeEmpty())
+			}
+		})
+	}
 }
 
 func TestCalculateMachineSetReplicas(t *testing.T) {
@@ -277,6 +342,11 @@ func TestMachineSetLabelSelectorMatchValidation(t *testing.T) {
 						ObjectMeta: clusterv1.ObjectMeta{
 							Labels: tt.labels,
 						},
+						Spec: clusterv1.MachineSpec{
+							Bootstrap: clusterv1.Bootstrap{
+								DataSecretName: ptr.To("data-secret"),
+							},
+						},
 					},
 				},
 			}
@@ -329,16 +399,82 @@ func TestMachineSetClusterNameImmutable(t *testing.T) {
 			newMS := &clusterv1.MachineSet{
 				Spec: clusterv1.MachineSetSpec{
 					ClusterName: tt.newClusterName,
+					Template: clusterv1.MachineTemplateSpec{
+						Spec: clusterv1.MachineSpec{
+							ClusterName: tt.newClusterName,
+							Bootstrap: clusterv1.Bootstrap{
+								DataSecretName: ptr.To("data-secret"),
+							},
+						},
+					},
 				},
 			}
 
 			oldMS := &clusterv1.MachineSet{
 				Spec: clusterv1.MachineSetSpec{
 					ClusterName: tt.oldClusterName,
+					Template: clusterv1.MachineTemplateSpec{
+						Spec: clusterv1.MachineSpec{
+							ClusterName: tt.oldClusterName,
+							Bootstrap: clusterv1.Bootstrap{
+								DataSecretName: ptr.To("data-secret"),
+							},
+						},
+					},
 				},
 			}
 
 			warnings, err := (&MachineSet{}).ValidateUpdate(ctx, oldMS, newMS)
+			if tt.expectErr {
+				g.Expect(err).To(HaveOccurred())
+			} else {
+				g.Expect(err).ToNot(HaveOccurred())
+			}
+			g.Expect(warnings).To(BeEmpty())
+		})
+	}
+}
+
+func TestMachineSetClusterNamesEqual(t *testing.T) {
+	tests := []struct {
+		name                        string
+		specClusterName             string
+		specTemplateSpecClusterName string
+		expectErr                   bool
+	}{
+		{
+			name:                        "clusterName fields are set to the same value",
+			specClusterName:             "foo",
+			specTemplateSpecClusterName: "foo",
+			expectErr:                   false,
+		},
+		{
+			name:                        "clusterName fields are set to different values",
+			specClusterName:             "foo",
+			specTemplateSpecClusterName: "bar",
+			expectErr:                   true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			g := NewWithT(t)
+
+			ms := &clusterv1.MachineSet{
+				Spec: clusterv1.MachineSetSpec{
+					ClusterName: tt.specClusterName,
+					Template: clusterv1.MachineTemplateSpec{
+						Spec: clusterv1.MachineSpec{
+							ClusterName: tt.specTemplateSpecClusterName,
+							Bootstrap: clusterv1.Bootstrap{
+								DataSecretName: ptr.To("data-secret"),
+							},
+						},
+					},
+				},
+			}
+
+			warnings, err := (&MachineSet{}).ValidateCreate(ctx, ms)
 			if tt.expectErr {
 				g.Expect(err).To(HaveOccurred())
 			} else {
@@ -367,7 +503,7 @@ func TestMachineSetVersionValidation(t *testing.T) {
 		},
 		{
 			name:      "should return error when given an invalid semantic version",
-			version:   "1",
+			version:   "v1.17.2++",
 			expectErr: true,
 		},
 		{
@@ -390,7 +526,10 @@ func TestMachineSetVersionValidation(t *testing.T) {
 				Spec: clusterv1.MachineSetSpec{
 					Template: clusterv1.MachineTemplateSpec{
 						Spec: clusterv1.MachineSpec{
-							Version: ptr.To(tt.version),
+							Version: tt.version,
+							Bootstrap: clusterv1.Bootstrap{
+								DataSecretName: ptr.To("data-secret"),
+							},
 						},
 					},
 				},
@@ -542,29 +681,29 @@ func TestMachineSetTemplateMetadataValidation(t *testing.T) {
 	}
 }
 
-func TestMachineSetMachineNamingStrategyValidation(t *testing.T) {
+func TestMachineSetMachineNamingValidation(t *testing.T) {
 	tests := []struct {
-		name                  string
-		machineNamingStrategy clusterv1.MachineNamingStrategy
-		expectErr             bool
+		name          string
+		machineNaming clusterv1.MachineNamingSpec
+		expectErr     bool
 	}{
 		{
-			name: "should not return error when MachineNamingStrategy have {{ .random }}",
-			machineNamingStrategy: clusterv1.MachineNamingStrategy{
+			name: "should not return error when MachineNamingSpec have {{ .random }}",
+			machineNaming: clusterv1.MachineNamingSpec{
 				Template: "{{ .machineSet.name }}-{{ .random }}",
 			},
 			expectErr: false,
 		},
 		{
-			name: "should return error when MachineNamingStrategy does not have {{ .random }}",
-			machineNamingStrategy: clusterv1.MachineNamingStrategy{
+			name: "should return error when MachineNamingSpec does not have {{ .random }}",
+			machineNaming: clusterv1.MachineNamingSpec{
 				Template: "{{ .machineSet.name }}",
 			},
 			expectErr: true,
 		},
 		{
-			name: "should return error when MachineNamingStrategy does not follow DNS1123Subdomain rules",
-			machineNamingStrategy: clusterv1.MachineNamingStrategy{
+			name: "should return error when MachineNamingSpec does not follow DNS1123Subdomain rules",
+			machineNaming: clusterv1.MachineNamingSpec{
 				Template: "{{ .machineSet.name }}-{{ .random }}-",
 			},
 			expectErr: true,
@@ -576,7 +715,14 @@ func TestMachineSetMachineNamingStrategyValidation(t *testing.T) {
 			g := NewWithT(t)
 			ms := &clusterv1.MachineSet{
 				Spec: clusterv1.MachineSetSpec{
-					MachineNamingStrategy: &tt.machineNamingStrategy,
+					MachineNaming: tt.machineNaming,
+					Template: clusterv1.MachineTemplateSpec{
+						Spec: clusterv1.MachineSpec{
+							Bootstrap: clusterv1.Bootstrap{
+								DataSecretName: ptr.To("data-secret"),
+							},
+						},
+					},
 				},
 			}
 
@@ -597,6 +743,112 @@ func TestMachineSetMachineNamingStrategyValidation(t *testing.T) {
 				g.Expect(err).ToNot(HaveOccurred())
 				g.Expect(warnings).To(BeEmpty())
 			}
+		})
+	}
+}
+
+func TestMachineSetTaintValidation(t *testing.T) {
+	ms := builder.MachineSet("default", "machineset1").
+		WithBootstrapTemplate(builder.BootstrapTemplate("default", "bootstrap-template").Build())
+	webhook := &MachineSet{}
+
+	tests := []struct {
+		name           string
+		machineSet     *clusterv1.MachineSet
+		featureEnabled bool
+		expectErr      bool
+	}{
+		{
+			name:           "should allow empty taints with feature gate disabled",
+			featureEnabled: false,
+			machineSet:     ms.DeepCopy().Build(),
+			expectErr:      false,
+		},
+		{
+			name:           "should allow empty taints with feature gate enabled",
+			featureEnabled: true,
+			machineSet:     ms.DeepCopy().Build(),
+			expectErr:      false,
+		},
+		{
+			name:           "should block taint key node.cluster.x-k8s.io/uninitialized",
+			featureEnabled: true,
+			machineSet: ms.DeepCopy().WithTaints(clusterv1.MachineTaint{
+				Key: "node.cluster.x-k8s.io/uninitialized", Effect: corev1.TaintEffectNoSchedule,
+			}).Build(),
+			expectErr: true,
+		},
+		{
+			name:           "should block taint key node.cluster.x-k8s.io/outdated-revision",
+			featureEnabled: true,
+			machineSet: ms.DeepCopy().WithTaints(clusterv1.MachineTaint{
+				Key: "node.cluster.x-k8s.io/outdated-revision", Effect: corev1.TaintEffectNoSchedule,
+			}).Build(),
+			expectErr: true,
+		},
+		{
+			name:           "should block taint with key prefix node.kubernetes.io/, which is not `out-of-service`",
+			featureEnabled: true,
+			machineSet: ms.DeepCopy().WithTaints(clusterv1.MachineTaint{
+				Key: "node.kubernetes.io/some-taint", Effect: corev1.TaintEffectNoSchedule,
+			}).Build(),
+			expectErr: true,
+		},
+		{
+			name:           "should allow taint node.kubernetes.io/out-of-service",
+			featureEnabled: true,
+			machineSet: ms.DeepCopy().WithTaints(clusterv1.MachineTaint{
+				Key: "node.kubernetes.io/out-of-service", Effect: corev1.TaintEffectNoSchedule,
+			}).Build(),
+			expectErr: false,
+		},
+		{
+			name:           "should block taint with key prefix node.cloudprovider.kubernetes.io/",
+			featureEnabled: true,
+			machineSet: ms.DeepCopy().WithTaints(clusterv1.MachineTaint{
+				Key: "node.cloudprovider.kubernetes.io/some-taint", Effect: corev1.TaintEffectNoSchedule,
+			}).Build(),
+			expectErr: true,
+		},
+		{
+			name:           "should block taint key node-role.kubernetes.io/master",
+			featureEnabled: true,
+			machineSet: ms.DeepCopy().WithTaints(clusterv1.MachineTaint{
+				Key: "node-role.kubernetes.io/master", Effect: corev1.TaintEffectNoSchedule,
+			}).Build(),
+			expectErr: true,
+		},
+		{
+			name:           "should block taint key node-role.kubernetes.io/control-plane for worker nodes",
+			featureEnabled: true,
+			machineSet: ms.DeepCopy().WithTaints(clusterv1.MachineTaint{
+				Key: "node-role.kubernetes.io/control-plane", Effect: corev1.TaintEffectNoSchedule,
+			}).Build(),
+			expectErr: true,
+		},
+	}
+	for i := range tests {
+		tt := tests[i]
+		t.Run(tt.name, func(t *testing.T) {
+			g := NewWithT(t)
+
+			utilfeature.SetFeatureGateDuringTest(t, feature.Gates, feature.MachineTaintPropagation, tt.featureEnabled)
+
+			warnings, err := webhook.ValidateCreate(ctx, tt.machineSet)
+			if tt.expectErr {
+				g.Expect(err).To(HaveOccurred())
+			} else {
+				g.Expect(err).ToNot(HaveOccurred())
+			}
+			g.Expect(warnings).To(BeEmpty())
+
+			warnings, err = webhook.ValidateUpdate(ctx, tt.machineSet, tt.machineSet)
+			if tt.expectErr {
+				g.Expect(err).To(HaveOccurred())
+			} else {
+				g.Expect(err).ToNot(HaveOccurred())
+			}
+			g.Expect(warnings).To(BeEmpty())
 		})
 	}
 }

@@ -32,7 +32,9 @@ import (
 
 const (
 	// ttl is the duration for which we keep the keys in the cache.
-	ttl = 10 * time.Minute
+	// The ttl is a multiple of the default syncPeriod to ensure we have a few chances
+	// of refreshing cache entries before an entry expires.
+	ttl = 30 * time.Minute
 
 	// expirationInterval is the interval in which we will remove expired keys
 	// from the cache.
@@ -92,7 +94,7 @@ func (r *ssaCache) Add(key string) {
 // Note: keys expire after the ttl.
 func (r *ssaCache) Has(key, kind string) bool {
 	// Note: We can ignore the error here because GetByKey never returns an error.
-	_, exists, _ := r.Store.GetByKey(key)
+	_, exists, _ := r.GetByKey(key)
 	if exists {
 		cacheHits.WithLabelValues(kind, r.controllerName).Inc()
 	} else {
@@ -104,18 +106,18 @@ func (r *ssaCache) Has(key, kind string) bool {
 // ComputeRequestIdentifier computes a request identifier for the cache.
 // The identifier is unique for a specific request to ensure we don't have to re-run the request
 // once we found out that it would not produce a diff.
-// The identifier consists of: gvk, namespace, name and resourceVersion of the original object and a hash of the modified
-// object. This ensures that we re-run the request as soon as either original or modified changes.
-func ComputeRequestIdentifier(scheme *runtime.Scheme, original, modified client.Object) (string, error) {
-	modifiedObjectHash, err := hash.Compute(modified)
+// The identifier consists of: gvk, namespace, name and resourceVersion of the object and a hash of the modified
+// object. This ensures that we re-run the request as soon as anything changes.
+func ComputeRequestIdentifier(scheme *runtime.Scheme, resourceVersion string, obj client.Object) (string, error) {
+	objHash, err := hash.Compute(obj)
 	if err != nil {
-		return "", errors.Wrapf(err, "failed to calculate request identifier: failed to compute hash for modified object")
+		return "", errors.Wrapf(err, "failed to calculate request identifier: failed to compute hash for object")
 	}
 
-	gvk, err := apiutil.GVKForObject(original, scheme)
+	gvk, err := apiutil.GVKForObject(obj, scheme)
 	if err != nil {
-		return "", errors.Wrapf(err, "failed to calculate request identifier: failed to get GroupVersionKind of original object %s", klog.KObj(original))
+		return "", errors.Wrapf(err, "failed to calculate request identifier: failed to get GroupVersionKind of object %s", klog.KObj(obj))
 	}
 
-	return fmt.Sprintf("%s.%s.%s.%d", gvk.String(), klog.KObj(original), original.GetResourceVersion(), modifiedObjectHash), nil
+	return fmt.Sprintf("%s.%s.%s.%d", gvk.String(), klog.KObj(obj), resourceVersion, objHash), nil
 }

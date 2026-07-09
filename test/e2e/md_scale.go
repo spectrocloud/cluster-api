@@ -46,7 +46,7 @@ type MachineDeploymentScaleSpecInput struct {
 	// InfrastructureProviders specifies the infrastructure to use for clusterctl
 	// operations (Example: get cluster templates).
 	// Note: In most cases this need not be specified. It only needs to be specified when
-	// multiple infrastructure providers (ex: CAPD + in-memory) are installed on the cluster as clusterctl will not be
+	// multiple infrastructure providers are installed on the cluster as clusterctl will not be
 	// able to identify the default.
 	InfrastructureProvider *string
 
@@ -125,6 +125,20 @@ func MachineDeploymentScaleSpec(ctx context.Context, inputGetter func() MachineD
 			WaitForMachineDeployments: input.E2EConfig.GetIntervals(specName, "wait-worker-nodes"),
 		})
 
+		Byf("Verify Cluster Available condition is true")
+		framework.VerifyClusterAvailable(ctx, framework.VerifyClusterAvailableInput{
+			Getter:    input.BootstrapClusterProxy.GetClient(),
+			Name:      clusterResources.Cluster.Name,
+			Namespace: clusterResources.Cluster.Namespace,
+		})
+
+		Byf("Verify Machines Ready condition is true")
+		framework.VerifyMachinesReady(ctx, framework.VerifyMachinesReadyInput{
+			Lister:    input.BootstrapClusterProxy.GetClient(),
+			Name:      clusterResources.Cluster.Name,
+			Namespace: clusterResources.Cluster.Namespace,
+		})
+
 		By("Deleting the MachineDeployment with foreground deletion")
 		foreground := metav1.DeletePropagationForeground
 		framework.DeleteAndWaitMachineDeployment(ctx, framework.DeleteAndWaitMachineDeploymentInput{
@@ -140,6 +154,6 @@ func MachineDeploymentScaleSpec(ctx context.Context, inputGetter func() MachineD
 
 	AfterEach(func() {
 		// Dumps all the resources in the spec namespace, then cleanups the cluster object and the spec namespace itself.
-		framework.DumpSpecResourcesAndCleanup(ctx, specName, input.BootstrapClusterProxy, input.ArtifactFolder, namespace, cancelWatches, clusterResources.Cluster, input.E2EConfig.GetIntervals, input.SkipCleanup)
+		framework.DumpSpecResourcesAndCleanup(ctx, specName, input.BootstrapClusterProxy, input.ClusterctlConfigPath, input.ArtifactFolder, namespace, cancelWatches, clusterResources.Cluster, input.E2EConfig.GetIntervals, input.SkipCleanup)
 	})
 }

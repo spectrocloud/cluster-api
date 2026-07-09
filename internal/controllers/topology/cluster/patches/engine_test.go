@@ -27,15 +27,17 @@ import (
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/uuid"
 	utilfeature "k8s.io/component-base/featuregate/testing"
 	"k8s.io/utils/ptr"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	. "sigs.k8s.io/controller-runtime/pkg/envtest/komega"
 
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
-	runtimecatalog "sigs.k8s.io/cluster-api/exp/runtime/catalog"
-	runtimehooksv1 "sigs.k8s.io/cluster-api/exp/runtime/hooks/api/v1alpha1"
+	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
+	runtimecatalog "sigs.k8s.io/cluster-api/api/runtime/catalog"
+	runtimehooksv1 "sigs.k8s.io/cluster-api/api/runtime/hooks/v1alpha1"
 	"sigs.k8s.io/cluster-api/exp/topology/scope"
 	"sigs.k8s.io/cluster-api/feature"
 	fakeruntimeclient "sigs.k8s.io/cluster-api/internal/runtime/client/fake"
@@ -78,7 +80,7 @@ func TestApply(t *testing.T) {
 								APIVersion: builder.InfrastructureGroupVersion.String(),
 								Kind:       builder.GenericInfrastructureClusterTemplateKind,
 								MatchResources: clusterv1.PatchSelectorMatch{
-									InfrastructureCluster: true,
+									InfrastructureCluster: ptr.To(true),
 								},
 							},
 							JSONPatches: []clusterv1.JSONPatch{
@@ -94,7 +96,7 @@ func TestApply(t *testing.T) {
 								APIVersion: builder.ControlPlaneGroupVersion.String(),
 								Kind:       builder.GenericControlPlaneTemplateKind,
 								MatchResources: clusterv1.PatchSelectorMatch{
-									ControlPlane: true,
+									ControlPlane: ptr.To(true),
 								},
 							},
 							JSONPatches: []clusterv1.JSONPatch{
@@ -110,7 +112,7 @@ func TestApply(t *testing.T) {
 								APIVersion: builder.InfrastructureGroupVersion.String(),
 								Kind:       builder.GenericInfrastructureMachineTemplateKind,
 								MatchResources: clusterv1.PatchSelectorMatch{
-									ControlPlane: true,
+									ControlPlane: ptr.To(true),
 								},
 							},
 							JSONPatches: []clusterv1.JSONPatch{
@@ -247,7 +249,7 @@ func TestApply(t *testing.T) {
 								APIVersion: builder.ControlPlaneGroupVersion.String(),
 								Kind:       builder.GenericControlPlaneTemplateKind,
 								MatchResources: clusterv1.PatchSelectorMatch{
-									ControlPlane: true,
+									ControlPlane: ptr.To(true),
 								},
 							},
 							JSONPatches: []clusterv1.JSONPatch{
@@ -273,7 +275,7 @@ func TestApply(t *testing.T) {
 								APIVersion: builder.ControlPlaneGroupVersion.String(),
 								Kind:       builder.GenericControlPlaneTemplateKind,
 								MatchResources: clusterv1.PatchSelectorMatch{
-									ControlPlane: true,
+									ControlPlane: ptr.To(true),
 								},
 							},
 							JSONPatches: []clusterv1.JSONPatch{
@@ -309,7 +311,7 @@ func TestApply(t *testing.T) {
 								APIVersion: builder.ControlPlaneGroupVersion.String(),
 								Kind:       builder.GenericControlPlaneTemplateKind,
 								MatchResources: clusterv1.PatchSelectorMatch{
-									ControlPlane: true,
+									ControlPlane: ptr.To(true),
 								},
 							},
 							JSONPatches: []clusterv1.JSONPatch{
@@ -325,8 +327,8 @@ func TestApply(t *testing.T) {
 								},
 								{
 									Op:    "add",
-									Path:  "/spec/template/spec/machineTemplate/infrastructureRef",
-									Value: &apiextensionsv1.JSON{Raw: []byte(`{"apiVersion":"invalid","kind":"invalid","namespace":"invalid","name":"invalid"}`)},
+									Path:  "/spec/template/spec/machineTemplate",
+									Value: &apiextensionsv1.JSON{Raw: []byte(`{"spec":{"infrastructureRef":{"apiVersion":"invalid","kind":"invalid","namespace":"invalid","name":"invalid"}}}`)},
 								},
 							},
 						},
@@ -345,7 +347,7 @@ func TestApply(t *testing.T) {
 								APIVersion: builder.InfrastructureGroupVersion.String(),
 								Kind:       builder.GenericInfrastructureClusterTemplateKind,
 								MatchResources: clusterv1.PatchSelectorMatch{
-									InfrastructureCluster: true,
+									InfrastructureCluster: ptr.To(true),
 								},
 							},
 							JSONPatches: []clusterv1.JSONPatch{
@@ -381,7 +383,7 @@ func TestApply(t *testing.T) {
 								APIVersion: builder.InfrastructureGroupVersion.String(),
 								Kind:       builder.GenericInfrastructureClusterTemplateKind,
 								MatchResources: clusterv1.PatchSelectorMatch{
-									InfrastructureCluster: true,
+									InfrastructureCluster: ptr.To(true),
 								},
 							},
 							JSONPatches: []clusterv1.JSONPatch{
@@ -407,13 +409,16 @@ func TestApply(t *testing.T) {
 				{
 					Name: "fake-patch1",
 					External: &clusterv1.ExternalPatchDefinition{
-						GenerateExtension: ptr.To("patch-infrastructureCluster"),
-						ValidateExtension: ptr.To("validate-infrastructureCluster"),
+						GeneratePatchesExtension:  "patch-infrastructureCluster",
+						ValidateTopologyExtension: "validate-infrastructureCluster",
 					},
 				},
 			},
 			externalPatchResponses: map[string]runtimehooksv1.ResponseObject{
 				"patch-infrastructureCluster": &runtimehooksv1.GeneratePatchesResponse{
+					CommonResponse: runtimehooksv1.CommonResponse{
+						Status: runtimehooksv1.ResponseStatusSuccess,
+					},
 					Items: []runtimehooksv1.GeneratePatchesResponseItem{
 						{
 							UID:       "1",
@@ -444,13 +449,16 @@ func TestApply(t *testing.T) {
 				{
 					Name: "fake-patch1",
 					External: &clusterv1.ExternalPatchDefinition{
-						GenerateExtension: ptr.To("patch-infrastructureCluster"),
-						ValidateExtension: ptr.To("validate-infrastructureCluster"),
+						GeneratePatchesExtension:  "patch-infrastructureCluster",
+						ValidateTopologyExtension: "validate-infrastructureCluster",
 					},
 				},
 			},
 			externalPatchResponses: map[string]runtimehooksv1.ResponseObject{
 				"patch-infrastructureCluster": &runtimehooksv1.GeneratePatchesResponse{
+					CommonResponse: runtimehooksv1.CommonResponse{
+						Status: runtimehooksv1.ResponseStatusSuccess,
+					},
 					Items: []runtimehooksv1.GeneratePatchesResponseItem{
 						{
 							UID:       "1",
@@ -478,19 +486,22 @@ func TestApply(t *testing.T) {
 				{
 					Name: "fake-patch1",
 					External: &clusterv1.ExternalPatchDefinition{
-						GenerateExtension: ptr.To("patch-infrastructureCluster"),
+						GeneratePatchesExtension: "patch-infrastructureCluster",
 					},
 				},
 				{
 					Name: "fake-patch2",
 					External: &clusterv1.ExternalPatchDefinition{
-						GenerateExtension: ptr.To("patch-controlPlane"),
+						GeneratePatchesExtension: "patch-controlPlane",
 					},
 				},
 			},
 
 			externalPatchResponses: map[string]runtimehooksv1.ResponseObject{
 				"patch-infrastructureCluster": &runtimehooksv1.GeneratePatchesResponse{
+					CommonResponse: runtimehooksv1.CommonResponse{
+						Status: runtimehooksv1.ResponseStatusSuccess,
+					},
 					Items: []runtimehooksv1.GeneratePatchesResponseItem{
 						{
 							UID:       "1",
@@ -513,6 +524,9 @@ func TestApply(t *testing.T) {
 					},
 				},
 				"patch-controlPlane": &runtimehooksv1.GeneratePatchesResponse{
+					CommonResponse: runtimehooksv1.CommonResponse{
+						Status: runtimehooksv1.ResponseStatusSuccess,
+					},
 					Items: []runtimehooksv1.GeneratePatchesResponseItem{
 						{
 							UID:       "2",
@@ -543,7 +557,7 @@ func TestApply(t *testing.T) {
 								APIVersion: builder.InfrastructureGroupVersion.String(),
 								Kind:       builder.GenericInfrastructureClusterTemplateKind,
 								MatchResources: clusterv1.PatchSelectorMatch{
-									InfrastructureCluster: true,
+									InfrastructureCluster: ptr.To(true),
 								},
 							},
 							JSONPatches: []clusterv1.JSONPatch{
@@ -551,7 +565,7 @@ func TestApply(t *testing.T) {
 									Op:   "add",
 									Path: "/spec/template/spec/clusterName",
 									ValueFrom: &clusterv1.JSONPatchValue{
-										Variable: ptr.To("builtin.cluster.name"),
+										Variable: "builtin.cluster.name",
 									},
 								},
 							},
@@ -561,7 +575,7 @@ func TestApply(t *testing.T) {
 								APIVersion: builder.ControlPlaneGroupVersion.String(),
 								Kind:       builder.GenericControlPlaneTemplateKind,
 								MatchResources: clusterv1.PatchSelectorMatch{
-									ControlPlane: true,
+									ControlPlane: ptr.To(true),
 								},
 							},
 							JSONPatches: []clusterv1.JSONPatch{
@@ -569,7 +583,7 @@ func TestApply(t *testing.T) {
 									Op:   "add",
 									Path: "/spec/template/spec/controlPlaneName",
 									ValueFrom: &clusterv1.JSONPatchValue{
-										Variable: ptr.To("builtin.controlPlane.name"),
+										Variable: "builtin.controlPlane.name",
 									},
 								},
 							},
@@ -579,7 +593,7 @@ func TestApply(t *testing.T) {
 								APIVersion: builder.InfrastructureGroupVersion.String(),
 								Kind:       builder.GenericInfrastructureMachineTemplateKind,
 								MatchResources: clusterv1.PatchSelectorMatch{
-									ControlPlane: true,
+									ControlPlane: ptr.To(true),
 								},
 							},
 							JSONPatches: []clusterv1.JSONPatch{
@@ -587,7 +601,7 @@ func TestApply(t *testing.T) {
 									Op:   "add",
 									Path: "/spec/template/spec/controlPlaneName",
 									ValueFrom: &clusterv1.JSONPatchValue{
-										Variable: ptr.To("builtin.controlPlane.name"),
+										Variable: "builtin.controlPlane.name",
 									},
 								},
 							},
@@ -607,7 +621,7 @@ func TestApply(t *testing.T) {
 									Op:   "add",
 									Path: "/spec/template/spec/machineDeploymentTopologyName",
 									ValueFrom: &clusterv1.JSONPatchValue{
-										Variable: ptr.To("builtin.machineDeployment.topologyName"),
+										Variable: "builtin.machineDeployment.topologyName",
 									},
 								},
 							},
@@ -627,7 +641,7 @@ func TestApply(t *testing.T) {
 									Op:   "add",
 									Path: "/spec/template/spec/machineDeploymentTopologyName",
 									ValueFrom: &clusterv1.JSONPatchValue{
-										Variable: ptr.To("builtin.machineDeployment.topologyName"),
+										Variable: "builtin.machineDeployment.topologyName",
 									},
 								},
 							},
@@ -647,7 +661,7 @@ func TestApply(t *testing.T) {
 									Op:   "add",
 									Path: "/spec/template/spec/machinePoolTopologyName",
 									ValueFrom: &clusterv1.JSONPatchValue{
-										Variable: ptr.To("builtin.machinePool.topologyName"),
+										Variable: "builtin.machinePool.topologyName",
 									},
 								},
 							},
@@ -667,7 +681,7 @@ func TestApply(t *testing.T) {
 									Op:   "add",
 									Path: "/spec/template/spec/machinePoolTopologyName",
 									ValueFrom: &clusterv1.JSONPatchValue{
-										Variable: ptr.To("builtin.machinePool.topologyName"),
+										Variable: "builtin.machinePool.topologyName",
 									},
 								},
 							},
@@ -733,7 +747,7 @@ func TestApply(t *testing.T) {
 				{
 					Name: "infraCluster",
 					// Note: This variable is defined by multiple patches, but without conflicts.
-					DefinitionsConflict: false,
+					DefinitionsConflict: ptr.To(false),
 					Definitions: []clusterv1.ClusterClassStatusVariableDefinition{
 						{
 							From: "inline",
@@ -753,7 +767,7 @@ func TestApply(t *testing.T) {
 								APIVersion: builder.InfrastructureGroupVersion.String(),
 								Kind:       builder.GenericInfrastructureClusterTemplateKind,
 								MatchResources: clusterv1.PatchSelectorMatch{
-									InfrastructureCluster: true,
+									InfrastructureCluster: ptr.To(true),
 								},
 							},
 							JSONPatches: []clusterv1.JSONPatch{
@@ -761,7 +775,7 @@ func TestApply(t *testing.T) {
 									Op:   "add",
 									Path: "/spec/template/spec/resource",
 									ValueFrom: &clusterv1.JSONPatchValue{
-										Variable: ptr.To("infraCluster"),
+										Variable: "infraCluster",
 									},
 								},
 							},
@@ -771,7 +785,7 @@ func TestApply(t *testing.T) {
 								APIVersion: builder.ControlPlaneGroupVersion.String(),
 								Kind:       builder.GenericControlPlaneTemplateKind,
 								MatchResources: clusterv1.PatchSelectorMatch{
-									ControlPlane: true,
+									ControlPlane: ptr.To(true),
 								},
 							},
 							JSONPatches: []clusterv1.JSONPatch{
@@ -779,7 +793,7 @@ func TestApply(t *testing.T) {
 									Op:   "add",
 									Path: "/spec/template/spec/controlPlaneField",
 									ValueFrom: &clusterv1.JSONPatchValue{
-										Variable: ptr.To("controlPlaneVariable"),
+										Variable: "controlPlaneVariable",
 									},
 								},
 							},
@@ -789,7 +803,7 @@ func TestApply(t *testing.T) {
 								APIVersion: builder.InfrastructureGroupVersion.String(),
 								Kind:       builder.GenericInfrastructureMachineTemplateKind,
 								MatchResources: clusterv1.PatchSelectorMatch{
-									ControlPlane: true,
+									ControlPlane: ptr.To(true),
 								},
 							},
 							JSONPatches: []clusterv1.JSONPatch{
@@ -797,7 +811,7 @@ func TestApply(t *testing.T) {
 									Op:   "add",
 									Path: "/spec/template/spec/controlPlaneInfraMachineTemplateField",
 									ValueFrom: &clusterv1.JSONPatchValue{
-										Variable: ptr.To("controlPlaneVariable"),
+										Variable: "controlPlaneVariable",
 									},
 								},
 							},
@@ -817,7 +831,7 @@ func TestApply(t *testing.T) {
 									Op:   "add",
 									Path: "/spec/template/spec/resource",
 									ValueFrom: &clusterv1.JSONPatchValue{
-										Variable: ptr.To("defaultMDWorkerVariable"),
+										Variable: "defaultMDWorkerVariable",
 									},
 								},
 							},
@@ -837,7 +851,7 @@ func TestApply(t *testing.T) {
 									Op:   "add",
 									Path: "/spec/template/spec/resource",
 									ValueFrom: &clusterv1.JSONPatchValue{
-										Variable: ptr.To("defaultMDWorkerVariable"),
+										Variable: "defaultMDWorkerVariable",
 									},
 								},
 							},
@@ -857,7 +871,7 @@ func TestApply(t *testing.T) {
 									Op:   "add",
 									Path: "/spec/template/spec/resource",
 									ValueFrom: &clusterv1.JSONPatchValue{
-										Variable: ptr.To("defaultMPWorkerVariable"),
+										Variable: "defaultMPWorkerVariable",
 									},
 								},
 							},
@@ -877,7 +891,7 @@ func TestApply(t *testing.T) {
 									Op:   "add",
 									Path: "/spec/template/spec/resource",
 									ValueFrom: &clusterv1.JSONPatchValue{
-										Variable: ptr.To("defaultMPWorkerVariable"),
+										Variable: "defaultMPWorkerVariable",
 									},
 								},
 							},
@@ -915,121 +929,155 @@ func TestApply(t *testing.T) {
 		},
 	}
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			g := NewWithT(t)
+		for _, controlPlaneContractVersion := range []string{"v1beta1", "v1beta2"} {
+			t.Run(fmt.Sprintf("%s (contract: %s)", tt.name, controlPlaneContractVersion), func(t *testing.T) {
+				g := NewWithT(t)
 
-			// Set up test objects, which are:
-			// * blueprint:
-			//   * A ClusterClass with its corresponding templates:
-			//     * ControlPlaneTemplate with a corresponding ControlPlane InfrastructureMachineTemplate.
-			//     * MachineDeploymentClass "default-worker" with corresponding BootstrapTemplate and InfrastructureMachineTemplate.
-			//     * MachinePoolClass "default-mp-worker" with corresponding BootstrapTemplate and InfrastructureMachinePoolTemplate.
-			//   * The corresponding Cluster.spec.topology:
-			//     * with 3 ControlPlane replicas
-			//     * with a "default-worker-topo1" MachineDeploymentTopology without replicas (based on "default-worker")
-			//     * with a "default-mp-worker-topo1" MachinePoolTopology without replicas (based on "default-mp-worker")
-			//     * with a "default-worker-topo2" MachineDeploymentTopology with 3 replicas (based on "default-worker")
-			//     * with a "default-mp-worker-topo2" MachinePoolTopology with 3 replicas (based on "default-mp-worker")
-			// * desired: essentially the corresponding desired objects.
-			blueprint, desired := setupTestObjects()
+				// Set up test objects, which are:
+				// * blueprint:
+				//   * A ClusterClass with its corresponding templates:
+				//     * ControlPlaneTemplate with a corresponding ControlPlane InfrastructureMachineTemplate.
+				//     * MachineDeploymentClass "default-worker" with corresponding BootstrapTemplate and InfrastructureMachineTemplate.
+				//     * MachinePoolClass "default-mp-worker" with corresponding BootstrapTemplate and InfrastructureMachinePoolTemplate.
+				//   * The corresponding Cluster.spec.topology:
+				//     * with 3 ControlPlane replicas
+				//     * with a "default-worker-topo1" MachineDeploymentTopology without replicas (based on "default-worker")
+				//     * with a "default-mp-worker-topo1" MachinePoolTopology without replicas (based on "default-mp-worker")
+				//     * with a "default-worker-topo2" MachineDeploymentTopology with 3 replicas (based on "default-worker")
+				//     * with a "default-mp-worker-topo2" MachinePoolTopology with 3 replicas (based on "default-mp-worker")
+				// * desired: essentially the corresponding desired objects.
+				blueprint, desired := setupTestObjects()
 
-			// If there are patches, set up patch generators.
-			cat := runtimecatalog.New()
-			g.Expect(runtimehooksv1.AddToCatalog(cat)).To(Succeed())
+				scheme := runtime.NewScheme()
+				g.Expect(apiextensionsv1.AddToScheme(scheme)).To(Succeed())
+				crd := builder.GenericControlPlaneCRD.DeepCopy()
+				// Randomly set contract to v1beta1 or v1beta2, both have to work.
+				// Note: We are always using the same ControlPlane object independent of contract as it's easier
+				// and doesn't affect the test coverage.
 
-			runtimeClient := fakeruntimeclient.NewRuntimeClientBuilder().WithCatalog(cat).Build()
-
-			if tt.externalPatchResponses != nil {
-				// replace the package variable uuidGenerator with one that returns an incremented integer.
-				// each patch will have a new uuid in the order in which they're defined and called.
-				var uuid int32
-				uuidGenerator = func() types.UID {
-					uuid++
-					return types.UID(fmt.Sprintf("%d", uuid))
+				crd.Labels = map[string]string{
+					// Set contract label for v1beta1 or v1beta2.
+					fmt.Sprintf("%s/%s", clusterv1.GroupVersion.Group, controlPlaneContractVersion): clusterv1.GroupVersionControlPlane.Version,
 				}
-				runtimeClient = fakeruntimeclient.NewRuntimeClientBuilder().
-					WithCallExtensionResponses(tt.externalPatchResponses).
-					WithCatalog(cat).
-					Build()
-			}
-			patchEngine := NewEngine(runtimeClient)
+				client := fake.NewClientBuilder().WithScheme(scheme).WithObjects(crd).Build()
 
-			if len(tt.patches) > 0 {
-				// Add the patches.
-				blueprint.ClusterClass.Spec.Patches = tt.patches
-			}
-			if len(tt.varDefinitions) > 0 {
-				// If there are variable definitions in the test add them to the ClusterClass.
-				blueprint.ClusterClass.Status.Variables = tt.varDefinitions
-			}
+				// If there are patches, set up patch generators.
+				cat := runtimecatalog.New()
+				g.Expect(runtimehooksv1.AddToCatalog(cat)).To(Succeed())
 
-			// Copy the desired objects before applying patches.
-			expectedCluster := desired.Cluster.DeepCopy()
-			expectedInfrastructureCluster := desired.InfrastructureCluster.DeepCopy()
-			expectedControlPlane := desired.ControlPlane.Object.DeepCopy()
-			expectedControlPlaneInfrastructureMachineTemplate := desired.ControlPlane.InfrastructureMachineTemplate.DeepCopy()
-			expectedBootstrapTemplates := map[string]*unstructured.Unstructured{}
-			expectedInfrastructureMachineTemplate := map[string]*unstructured.Unstructured{}
-			for mdTopology, md := range desired.MachineDeployments {
-				expectedBootstrapTemplates[mdTopology] = md.BootstrapTemplate.DeepCopy()
-				expectedInfrastructureMachineTemplate[mdTopology] = md.InfrastructureMachineTemplate.DeepCopy()
-			}
-			expectedBootstrapConfig := map[string]*unstructured.Unstructured{}
-			expectedInfrastructureMachinePool := map[string]*unstructured.Unstructured{}
-			for mpTopology, mp := range desired.MachinePools {
-				expectedBootstrapConfig[mpTopology] = mp.BootstrapObject.DeepCopy()
-				expectedInfrastructureMachinePool[mpTopology] = mp.InfrastructureMachinePoolObject.DeepCopy()
-			}
+				runtimeClient := fakeruntimeclient.NewRuntimeClientBuilder().WithCatalog(cat).Build()
 
-			// Set expected fields on the copy of the objects, so they can be used for comparison with the result of Apply.
-			if tt.expectedFields.infrastructureCluster != nil {
-				setSpecFields(expectedInfrastructureCluster, tt.expectedFields.infrastructureCluster)
-			}
-			if tt.expectedFields.controlPlane != nil {
-				setSpecFields(expectedControlPlane, tt.expectedFields.controlPlane)
-			}
-			if tt.expectedFields.controlPlaneInfrastructureMachineTemplate != nil {
-				setSpecFields(expectedControlPlaneInfrastructureMachineTemplate, tt.expectedFields.controlPlaneInfrastructureMachineTemplate)
-			}
-			for mdTopology, expectedFields := range tt.expectedFields.machineDeploymentBootstrapTemplate {
-				setSpecFields(expectedBootstrapTemplates[mdTopology], expectedFields)
-			}
-			for mdTopology, expectedFields := range tt.expectedFields.machineDeploymentInfrastructureMachineTemplate {
-				setSpecFields(expectedInfrastructureMachineTemplate[mdTopology], expectedFields)
-			}
-			for mpTopology, expectedFields := range tt.expectedFields.machinePoolBootstrapConfig {
-				setSpecFields(expectedBootstrapConfig[mpTopology], expectedFields)
-			}
-			for mpTopology, expectedFields := range tt.expectedFields.machinePoolInfrastructureMachinePool {
-				setSpecFields(expectedInfrastructureMachinePool[mpTopology], expectedFields)
-			}
-
-			// Apply patches.
-			if err := patchEngine.Apply(context.Background(), blueprint, desired); err != nil {
-				if !tt.wantErr {
-					t.Fatal(err)
+				if tt.externalPatchResponses != nil {
+					// replace the package variable uuidGenerator with one that returns an incremented integer.
+					// each patch will have a new uuid in the order in which they're defined and called.
+					var uuid int32
+					uuidGenerator = func() types.UID {
+						uuid++
+						return types.UID(fmt.Sprintf("%d", uuid))
+					}
+					runtimeClient = fakeruntimeclient.NewRuntimeClientBuilder().
+						WithCallExtensionResponses(tt.externalPatchResponses).
+						WithCallExtensionValidations(func(_ string, req runtimehooksv1.RequestObject) error {
+							switch req := req.(type) {
+							case *runtimehooksv1.GeneratePatchesRequest:
+								for _, item := range req.Items {
+									if item.HolderReference.Kind != builder.GenericControlPlaneKind {
+										continue
+									}
+									if item.HolderReference.FieldPath != getControlPlaneHolderFieldPath(controlPlaneContractVersion) {
+										return fmt.Errorf("unexpected field path %s, should be %s", item.HolderReference.FieldPath, getControlPlaneHolderFieldPath(controlPlaneContractVersion))
+									}
+									return nil
+								}
+								return fmt.Errorf("could not find request item for ControlPlane InfrastructureMachineTemplate")
+							case *runtimehooksv1.ValidateTopologyRequest:
+								return nil // Nothing to validate.
+							default:
+								return fmt.Errorf("unhandled request type %T", req)
+							}
+						}).
+						WithCatalog(cat).
+						Build()
 				}
-				return
-			}
+				patchEngine := NewEngine(client, runtimeClient)
 
-			// Compare the patched desired objects with the expected desired objects.
-			g.Expect(desired.Cluster).To(EqualObject(expectedCluster))
-			g.Expect(desired.InfrastructureCluster).To(EqualObject(expectedInfrastructureCluster))
-			g.Expect(desired.ControlPlane.Object).To(EqualObject(expectedControlPlane))
-			g.Expect(desired.ControlPlane.InfrastructureMachineTemplate).To(EqualObject(expectedControlPlaneInfrastructureMachineTemplate))
-			for mdTopology, bootstrapTemplate := range expectedBootstrapTemplates {
-				g.Expect(desired.MachineDeployments[mdTopology].BootstrapTemplate).To(EqualObject(bootstrapTemplate))
-			}
-			for mdTopology, infrastructureMachineTemplate := range expectedInfrastructureMachineTemplate {
-				g.Expect(desired.MachineDeployments[mdTopology].InfrastructureMachineTemplate).To(EqualObject(infrastructureMachineTemplate))
-			}
-			for mpTopology, bootstrapConfig := range expectedBootstrapConfig {
-				g.Expect(desired.MachinePools[mpTopology].BootstrapObject).To(EqualObject(bootstrapConfig))
-			}
-			for mpTopology, infrastructureMachinePool := range expectedInfrastructureMachinePool {
-				g.Expect(desired.MachinePools[mpTopology].InfrastructureMachinePoolObject).To(EqualObject(infrastructureMachinePool))
-			}
-		})
+				if len(tt.patches) > 0 {
+					// Add the patches.
+					blueprint.ClusterClass.Spec.Patches = tt.patches
+				}
+				if len(tt.varDefinitions) > 0 {
+					// If there are variable definitions in the test add them to the ClusterClass.
+					blueprint.ClusterClass.Status.Variables = tt.varDefinitions
+				}
+
+				// Copy the desired objects before applying patches.
+				expectedCluster := desired.Cluster.DeepCopy()
+				expectedInfrastructureCluster := desired.InfrastructureCluster.DeepCopy()
+				expectedControlPlane := desired.ControlPlane.Object.DeepCopy()
+				expectedControlPlaneInfrastructureMachineTemplate := desired.ControlPlane.InfrastructureMachineTemplate.DeepCopy()
+				expectedBootstrapTemplates := map[string]*unstructured.Unstructured{}
+				expectedInfrastructureMachineTemplate := map[string]*unstructured.Unstructured{}
+				for mdTopology, md := range desired.MachineDeployments {
+					expectedBootstrapTemplates[mdTopology] = md.BootstrapTemplate.DeepCopy()
+					expectedInfrastructureMachineTemplate[mdTopology] = md.InfrastructureMachineTemplate.DeepCopy()
+				}
+				expectedBootstrapConfig := map[string]*unstructured.Unstructured{}
+				expectedInfrastructureMachinePool := map[string]*unstructured.Unstructured{}
+				for mpTopology, mp := range desired.MachinePools {
+					expectedBootstrapConfig[mpTopology] = mp.BootstrapObject.DeepCopy()
+					expectedInfrastructureMachinePool[mpTopology] = mp.InfrastructureMachinePoolObject.DeepCopy()
+				}
+
+				// Set expected fields on the copy of the objects, so they can be used for comparison with the result of Apply.
+				if tt.expectedFields.infrastructureCluster != nil {
+					setSpecFields(expectedInfrastructureCluster, tt.expectedFields.infrastructureCluster)
+				}
+				if tt.expectedFields.controlPlane != nil {
+					setSpecFields(expectedControlPlane, tt.expectedFields.controlPlane)
+				}
+				if tt.expectedFields.controlPlaneInfrastructureMachineTemplate != nil {
+					setSpecFields(expectedControlPlaneInfrastructureMachineTemplate, tt.expectedFields.controlPlaneInfrastructureMachineTemplate)
+				}
+				for mdTopology, expectedFields := range tt.expectedFields.machineDeploymentBootstrapTemplate {
+					setSpecFields(expectedBootstrapTemplates[mdTopology], expectedFields)
+				}
+				for mdTopology, expectedFields := range tt.expectedFields.machineDeploymentInfrastructureMachineTemplate {
+					setSpecFields(expectedInfrastructureMachineTemplate[mdTopology], expectedFields)
+				}
+				for mpTopology, expectedFields := range tt.expectedFields.machinePoolBootstrapConfig {
+					setSpecFields(expectedBootstrapConfig[mpTopology], expectedFields)
+				}
+				for mpTopology, expectedFields := range tt.expectedFields.machinePoolInfrastructureMachinePool {
+					setSpecFields(expectedInfrastructureMachinePool[mpTopology], expectedFields)
+				}
+
+				// Apply patches.
+				if err := patchEngine.Apply(context.Background(), blueprint, desired); err != nil {
+					if !tt.wantErr {
+						t.Fatal(err)
+					}
+					return
+				}
+
+				// Compare the patched desired objects with the expected desired objects.
+				g.Expect(desired.Cluster).To(EqualObject(expectedCluster))
+				g.Expect(desired.InfrastructureCluster).To(EqualObject(expectedInfrastructureCluster))
+				g.Expect(desired.ControlPlane.Object).To(EqualObject(expectedControlPlane))
+				g.Expect(desired.ControlPlane.InfrastructureMachineTemplate).To(EqualObject(expectedControlPlaneInfrastructureMachineTemplate))
+				for mdTopology, bootstrapTemplate := range expectedBootstrapTemplates {
+					g.Expect(desired.MachineDeployments[mdTopology].BootstrapTemplate).To(EqualObject(bootstrapTemplate))
+				}
+				for mdTopology, infrastructureMachineTemplate := range expectedInfrastructureMachineTemplate {
+					g.Expect(desired.MachineDeployments[mdTopology].InfrastructureMachineTemplate).To(EqualObject(infrastructureMachineTemplate))
+				}
+				for mpTopology, bootstrapConfig := range expectedBootstrapConfig {
+					g.Expect(desired.MachinePools[mpTopology].BootstrapObject).To(EqualObject(bootstrapConfig))
+				}
+				for mpTopology, infrastructureMachinePool := range expectedInfrastructureMachinePool {
+					g.Expect(desired.MachinePools[mpTopology].InfrastructureMachinePoolObject).To(EqualObject(infrastructureMachinePool))
+				}
+			})
+		}
 	}
 }
 
@@ -1040,7 +1088,6 @@ func setupTestObjects() (*scope.ClusterBlueprint, *scope.ClusterState) {
 	controlPlaneInfrastructureMachineTemplate := builder.InfrastructureMachineTemplate(metav1.NamespaceDefault, "controlplaneinframachinetemplate1").
 		Build()
 	controlPlaneTemplate := builder.ControlPlaneTemplate(metav1.NamespaceDefault, "controlPlaneTemplate1").
-		WithInfrastructureMachineTemplate(controlPlaneInfrastructureMachineTemplate).
 		Build()
 
 	workerInfrastructureMachineTemplate := builder.InfrastructureMachineTemplate(metav1.NamespaceDefault, "linux-worker-inframachinetemplate").
@@ -1073,35 +1120,35 @@ func setupTestObjects() (*scope.ClusterBlueprint, *scope.ClusterState) {
 	// Note: we depend on TypeMeta being set to calculate HolderReferences correctly.
 	// We also set TypeMeta explicitly in the topology/cluster/cluster_controller.go.
 	cluster := &clusterv1.Cluster{
-		TypeMeta: metav1.TypeMeta{
-			APIVersion: clusterv1.GroupVersion.String(),
-			Kind:       "Cluster",
-		},
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "cluster1",
-			Namespace: metav1.NamespaceDefault,
-			UID:       uuid.NewUUID(),
+			Name:        "cluster1",
+			Namespace:   metav1.NamespaceDefault,
+			UID:         uuid.NewUUID(),
+			Labels:      map[string]string{"foo": "bar"},
+			Annotations: map[string]string{"fizz": "buzz"},
 		},
 		Spec: clusterv1.ClusterSpec{
-			Paused: false,
-			ClusterNetwork: &clusterv1.ClusterNetwork{
-				APIServerPort: ptr.To[int32](8),
-				Services: &clusterv1.NetworkRanges{
+			Paused: ptr.To(false),
+			ClusterNetwork: clusterv1.ClusterNetwork{
+				APIServerPort: 8,
+				Services: clusterv1.NetworkRanges{
 					CIDRBlocks: []string{"10.10.10.1/24"},
 				},
-				Pods: &clusterv1.NetworkRanges{
+				Pods: clusterv1.NetworkRanges{
 					CIDRBlocks: []string{"11.10.10.1/24"},
 				},
 				ServiceDomain: "lark",
 			},
-			ControlPlaneRef:   nil,
-			InfrastructureRef: nil,
-			Topology: &clusterv1.Topology{
+			// ControlPlaneRef is not defined
+			// InfrastructureRef is not defined
+			Topology: clusterv1.Topology{
 				Version: "v1.21.2",
-				Class:   clusterClass.Name,
+				ClassRef: clusterv1.ClusterClassRef{
+					Name: clusterClass.Name,
+				},
 				ControlPlane: clusterv1.ControlPlaneTopology{
 					Replicas: ptr.To[int32](3),
-					Variables: &clusterv1.ControlPlaneVariables{
+					Variables: clusterv1.ControlPlaneVariables{
 						Overrides: []clusterv1.ClusterVariable{
 							{
 								Name:  "controlPlaneVariable",
@@ -1131,13 +1178,13 @@ func setupTestObjects() (*scope.ClusterBlueprint, *scope.ClusterState) {
 						Value: apiextensionsv1.JSON{Raw: []byte(`"default-mp-cluster-wide-value"`)},
 					},
 				},
-				Workers: &clusterv1.WorkersTopology{
+				Workers: clusterv1.WorkersTopology{
 					MachineDeployments: []clusterv1.MachineDeploymentTopology{
 						{
 							Metadata: clusterv1.ObjectMeta{Labels: map[string]string{"foo": "bar"}, Annotations: map[string]string{"fizz": "buzz"}},
 							Class:    "default-worker",
 							Name:     "default-worker-topo1",
-							Variables: &clusterv1.MachineDeploymentVariables{
+							Variables: clusterv1.MachineDeploymentVariables{
 								Overrides: []clusterv1.ClusterVariable{
 									{
 										Name:  "defaultMDWorkerVariable",
@@ -1158,7 +1205,7 @@ func setupTestObjects() (*scope.ClusterBlueprint, *scope.ClusterState) {
 							Metadata: clusterv1.ObjectMeta{Labels: map[string]string{"foo": "bar"}, Annotations: map[string]string{"fizz": "buzz"}},
 							Class:    "default-mp-worker",
 							Name:     "default-mp-worker-topo1",
-							Variables: &clusterv1.MachinePoolVariables{
+							Variables: clusterv1.MachinePoolVariables{
 								Overrides: []clusterv1.ClusterVariable{
 									{
 										Name:  "defaultMPWorkerVariable",
@@ -1218,7 +1265,7 @@ func setupTestObjects() (*scope.ClusterBlueprint, *scope.ClusterState) {
 		WithVersion("v1.21.2").
 		WithReplicas(3).
 		// Make sure we're using an independent instance of the template.
-		WithInfrastructureMachineTemplate(controlPlaneInfrastructureMachineTemplate.DeepCopy()).
+		WithInfrastructureMachineTemplate(controlPlaneInfrastructureMachineTemplate.DeepCopy(), "v1beta2").
 		Build()
 
 	desired := &scope.ClusterState{

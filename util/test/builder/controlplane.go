@@ -19,11 +19,13 @@ package builder
 import (
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+
+	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 )
 
 var (
 	// ControlPlaneGroupVersion is group version used for control plane objects.
-	ControlPlaneGroupVersion = schema.GroupVersion{Group: "controlplane.cluster.x-k8s.io", Version: "v1beta1"}
+	ControlPlaneGroupVersion = clusterv1.GroupVersionControlPlane
 
 	// GenericControlPlaneKind is the Kind for the GenericControlPlane.
 	GenericControlPlaneKind = "GenericControlPlane"
@@ -62,7 +64,7 @@ func testControlPlaneTemplateCRD(gvk schema.GroupVersionKind) *apiextensionsv1.C
 				"template": {
 					Type: "object",
 					Properties: map[string]apiextensionsv1.JSONSchemaProps{
-						"spec": controPlaneSpecSchema,
+						"spec": controlPlaneSpecSchema(true),
 					},
 				},
 			},
@@ -77,12 +79,17 @@ func testControlPlaneCRD(gvk schema.GroupVersionKind) *apiextensionsv1.CustomRes
 			// Ref https://github.com/kubernetes-sigs/controller-tools/blob/59485af1c1f6a664655dad49543c474bb4a0d2a2/pkg/crd/gen.go#L185
 			Type: "object",
 		},
-		"spec": controPlaneSpecSchema,
+		"spec": controlPlaneSpecSchema(false),
 		"status": {
 			Type: "object",
 			Properties: map[string]apiextensionsv1.JSONSchemaProps{
 				// mandatory field from the Cluster API contract
-				"ready": {Type: "boolean"},
+				"initialization": {
+					Type: "object",
+					Properties: map[string]apiextensionsv1.JSONSchemaProps{
+						"controlPlaneInitialized": {Type: "boolean"},
+					},
+				},
 				// mandatory field from the Cluster API contract - replicas support
 				"replicas":            {Type: "integer", Format: "int32"},
 				"selector":            {Type: "string"},
@@ -99,8 +106,8 @@ func testControlPlaneCRD(gvk schema.GroupVersionKind) *apiextensionsv1.CustomRes
 	})
 }
 
-var (
-	controPlaneSpecSchema = apiextensionsv1.JSONSchemaProps{
+func controlPlaneSpecSchema(isTemplate bool) apiextensionsv1.JSONSchemaProps {
+	return apiextensionsv1.JSONSchemaProps{
 		Type: "object",
 		Properties: map[string]apiextensionsv1.JSONSchemaProps{
 			// Mandatory field from the Cluster API contract - version support
@@ -116,10 +123,33 @@ var (
 			"machineTemplate": {
 				Type: "object",
 				Properties: map[string]apiextensionsv1.JSONSchemaProps{
-					"metadata":            metadataSchema,
-					"infrastructureRef":   refSchema,
-					"nodeDeletionTimeout": {Type: "string"},
-					"nodeDrainTimeout":    {Type: "string"},
+					"metadata": metadataSchema,
+					"spec": {
+						Type: "object",
+						Properties: func(isTemplate bool) map[string]apiextensionsv1.JSONSchemaProps {
+							props := map[string]apiextensionsv1.JSONSchemaProps{
+								"deletion": {
+									Type: "object",
+									Properties: map[string]apiextensionsv1.JSONSchemaProps{
+										"nodeDeletionTimeoutSeconds":     {Type: "string"},
+										"nodeDrainTimeoutSeconds":        {Type: "string"},
+										"nodeVolumeDetachTimeoutSeconds": {Type: "string"},
+									},
+								},
+							}
+							if !isTemplate {
+								props["infrastructureRef"] = apiextensionsv1.JSONSchemaProps{
+									Type: "object",
+									Properties: map[string]apiextensionsv1.JSONSchemaProps{
+										"apiGroup": {Type: "string"},
+										"kind":     {Type: "string"},
+										"name":     {Type: "string"},
+									},
+								}
+							}
+							return props
+						}(isTemplate),
+					},
 				},
 			},
 			// General purpose fields to be used in different test scenario.
@@ -149,4 +179,4 @@ var (
 			},
 		},
 	}
-)
+}

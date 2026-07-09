@@ -30,45 +30,39 @@ infrastructure and workers of a Cluster. When a Cluster is using this ClusterCla
 are used to generate the objects of the managed topology of the Cluster.
 
 ```yaml
-apiVersion: cluster.x-k8s.io/v1beta1
+apiVersion: cluster.x-k8s.io/v1beta2
 kind: ClusterClass
 metadata:
   name: docker-clusterclass-v0.1.0
 spec:
   controlPlane:
-    ref:
-      apiVersion: controlplane.cluster.x-k8s.io/v1beta1
+    templateRef:
+      apiVersion: controlplane.cluster.x-k8s.io/v1beta2
       kind: KubeadmControlPlaneTemplate
       name: docker-clusterclass-v0.1.0
-      namespace: default
     machineInfrastructure:
-      ref:
+      templateRef:
+        apiVersion: infrastructure.cluster.x-k8s.io/v1beta2
         kind: DockerMachineTemplate
-        apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
         name: docker-clusterclass-v0.1.0
-        namespace: default
   infrastructure:
-    ref:
-      apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+    templateRef:
+      apiVersion: infrastructure.cluster.x-k8s.io/v1beta2
       kind: DockerClusterTemplate
       name: docker-clusterclass-v0.1.0-control-plane
-      namespace: default
   workers:
     machineDeployments:
     - class: default-worker
-      template:
-        bootstrap:
-          ref:
-            apiVersion: bootstrap.cluster.x-k8s.io/v1beta1
-            kind: KubeadmConfigTemplate
-            name: docker-clusterclass-v0.1.0-default-worker
-            namespace: default
-        infrastructure:
-          ref:
-            apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
-            kind: DockerMachineTemplate
-            name: docker-clusterclass-v0.1.0-default-worker
-            namespace: default
+      bootstrap:
+        templateRef:
+          apiVersion: bootstrap.cluster.x-k8s.io/v1beta2
+          kind: KubeadmConfigTemplate
+          name: docker-clusterclass-v0.1.0-default-worker
+      infrastructure:
+        templateRef:
+          apiVersion: infrastructure.cluster.x-k8s.io/v1beta2
+          kind: DockerMachineTemplate
+          name: docker-clusterclass-v0.1.0-default-worker
 ```
 
 The following example shows a Cluster using this ClusterClass. In this case a `KubeadmControlPlane` 
@@ -80,13 +74,14 @@ ClusterClass is already very flexible. Via the topology on the Cluster the follo
 * `.spec.topology.workers`: MachineDeployments and their replicas, metadata and failure domain
 
 ```yaml
-apiVersion: cluster.x-k8s.io/v1beta1
+apiVersion: cluster.x-k8s.io/v1beta2
 kind: Cluster
 metadata:
   name: my-docker-cluster
 spec:
   topology:
-    class: docker-clusterclass-v0.1.0
+    classRef:
+      name: docker-clusterclass-v0.1.0
     version: v1.22.4
     controlPlane:
       replicas: 3
@@ -127,23 +122,13 @@ For a full example ClusterClass for CAPD you can take a look at
 
 </aside>
 
-<aside class="note">
-
-<h1>Tip: clusterctl alpha topology plan</h1>
-
-The `clusterctl alpha topology plan` command can be used to test ClusterClasses; the output will show
-you how the resulting Cluster will look like, but without actually creating it.
-For more details please see: [clusterctl alpha topology plan].
-
-</aside>
-
 ## ClusterClass with MachinePools
 
 ClusterClass also supports MachinePool workers. They work very similar to MachineDeployments. MachinePools
 can be specified in the ClusterClass template under the workers section like so:
 
 ```yaml
-apiVersion: cluster.x-k8s.io/v1beta1
+apiVersion: cluster.x-k8s.io/v1beta2
 kind: ClusterClass
 metadata:
   name: docker-clusterclass-v0.1.0
@@ -151,23 +136,22 @@ spec:
   workers:
     machinePools:
     - class: default-worker
-      template:
-        bootstrap:
-          ref:
-            apiVersion: bootstrap.cluster.x-k8s.io/v1beta1
-            kind: KubeadmConfigTemplate
-            name: quick-start-default-worker-bootstraptemplate
-        infrastructure:
-          ref:
-            apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
-            kind: DockerMachinePoolTemplate
-            name: quick-start-default-worker-machinepooltemplate
+      bootstrap:
+        templateRef:
+          apiVersion: bootstrap.cluster.x-k8s.io/v1beta2
+          kind: KubeadmConfigTemplate
+          name: quick-start-default-worker-bootstraptemplate
+      infrastructure:
+        templateRef:
+          apiVersion: infrastructure.cluster.x-k8s.io/v1beta2
+          kind: DockerMachinePoolTemplate
+          name: quick-start-default-worker-machinepooltemplate
 ```
 
 They can then be similarly defined as workers in the cluster template like so:
 
 ```yaml
-apiVersion: cluster.x-k8s.io/v1beta1
+apiVersion: cluster.x-k8s.io/v1beta2
 kind: Cluster
 metadata:
   name: my-docker-cluster
@@ -193,37 +177,57 @@ MachineDeployment class. The following configuration makes sure a `MachineHealth
 created for the control plane and for every `MachineDeployment` using the `default-worker` class.
 
 ```yaml
-apiVersion: cluster.x-k8s.io/v1beta1
+apiVersion: cluster.x-k8s.io/v1beta2
 kind: ClusterClass
 metadata:
   name: docker-clusterclass-v0.1.0
 spec:
   controlPlane:
     ...
-    machineHealthCheck:
-      maxUnhealthy: 33%
-      nodeStartupTimeout: 15m
-      unhealthyConditions:
-      - type: Ready
-        status: Unknown
-        timeout: 300s
-      - type: Ready
-        status: "False"
-        timeout: 300s
+    healthCheck:
+      checks:
+        nodeStartupTimeoutSeconds: 900
+        unhealthyNodeConditions:
+        - type: Ready
+          status: Unknown
+          timeoutSeconds: 300
+        - type: Ready
+          status: "False"
+          timeoutSeconds: 300
+        unhealthyMachineConditions:
+        - type: "NodeReady"
+          status: Unknown
+          timeoutSeconds: 1800
+        - type: "InfrastructureReady"
+          status: "False"
+          timeoutSeconds: 1800
+      remediation:
+        triggerIf:
+          unhealthyLessThanOrEqualTo: 33%
   workers:
     machineDeployments:
     - class: default-worker
       ...
-      machineHealthCheck:
-        unhealthyRange: "[0-2]"
-        nodeStartupTimeout: 10m
-        unhealthyConditions:
-        - type: Ready
-          status: Unknown
-          timeout: 300s
-        - type: Ready
-          status: "False"
-          timeout: 300s
+      healthCheck:
+        checks:
+          nodeStartupTimeoutSeconds: 600
+          unhealthyNodeConditions:
+          - type: Ready
+            status: Unknown
+            timeoutSeconds: 300
+          - type: Ready
+            status: "False"
+            timeoutSeconds: 300
+          unhealthyMachineConditions:
+          - type: NodeReady
+            status: Unknown
+            timeoutSeconds: 1800
+          - type: InfrastructureReady
+            status: "False"
+            timeoutSeconds: 1800
+        remediation:
+          triggerIf:
+            unhealthyInRange: "[0-2]"
 ```
 
 ## ClusterClass with patches
@@ -242,10 +246,10 @@ in `KubeadmControlPlane`. Use cases like this can be implemented with ClusterCla
 The following example shows how variables can be defined in the ClusterClass.
 A variable definition specifies the name and the schema of a variable and if it is 
 required. The schema defines how a variable is defaulted and validated. It supports 
-a subset of the schema of CRDs. For more information please see the [godoc](https://doc.crds.dev/github.com/kubernetes-sigs/cluster-api/cluster.x-k8s.io/ClusterClass/v1beta1#spec-variables-schema-openAPIV3Schema).
+a subset of the schema of CRDs. For more information please see the [godoc](https://doc.crds.dev/github.com/kubernetes-sigs/cluster-api/cluster.x-k8s.io/ClusterClass/v1beta2#spec-variables-schema-openAPIV3Schema).
 
 ```yaml
-apiVersion: cluster.x-k8s.io/v1beta1
+apiVersion: cluster.x-k8s.io/v1beta2
 kind: ClusterClass
 metadata:
   name: docker-clusterclass-v0.1.0
@@ -277,10 +281,10 @@ The variable can then be used in a patch to set a field on a template referenced
 The `selector` specifies on which template the patch should be applied. `jsonPatches` specifies which JSON 
 patches should be applied to that template. In this case we set the `imageRepository` field of the 
 `KubeadmControlPlaneTemplate` to the value of the variable `imageRepository`. For more information 
-please see the [godoc](https://doc.crds.dev/github.com/kubernetes-sigs/cluster-api/cluster.x-k8s.io/ClusterClass/v1beta1#spec-patches-definitions).
+please see the [godoc](https://doc.crds.dev/github.com/kubernetes-sigs/cluster-api/cluster.x-k8s.io/ClusterClass/v1beta2#spec-patches-definitions).
 
 ```yaml
-apiVersion: cluster.x-k8s.io/v1beta1
+apiVersion: cluster.x-k8s.io/v1beta2
 kind: ClusterClass
 metadata:
   name: docker-clusterclass-v0.1.0
@@ -290,7 +294,7 @@ spec:
   - name: imageRepository
     definitions:
     - selector:
-        apiVersion: controlplane.cluster.x-k8s.io/v1beta1
+        apiVersion: controlplane.cluster.x-k8s.io/v1beta2
         kind: KubeadmControlPlaneTemplate
         matchResources:
           controlPlane: true
@@ -320,7 +324,7 @@ After creating a ClusterClass with a variable definition, the user can now provi
 the variable in the Cluster as in the example below.
 
 ```yaml
-apiVersion: cluster.x-k8s.io/v1beta1
+apiVersion: cluster.x-k8s.io/v1beta2
 kind: Cluster
 metadata:
   name: my-docker-cluster
@@ -366,14 +370,14 @@ The following variables can be referenced in templates:
 Example which would match the default behavior:
 
 ```yaml
-apiVersion: cluster.x-k8s.io/v1beta1
+apiVersion: cluster.x-k8s.io/v1beta2
 kind: ClusterClass
 metadata:
   name: docker-clusterclass-v0.1.0
 spec:
   controlPlane:
     ...
-    namingStrategy:
+    naming:
       template: "{{ .cluster.name }}-{{ .random }}"
   ...
 ```
@@ -393,7 +397,7 @@ The following variables can be referenced in templates:
 Example which would match the default behavior:
 
 ```yaml
-apiVersion: cluster.x-k8s.io/v1beta1
+apiVersion: cluster.x-k8s.io/v1beta2
 kind: ClusterClass
 metadata:
   name: docker-clusterclass-v0.1.0
@@ -404,7 +408,7 @@ spec:
     machineDeployments:
     - class: default-worker
       ...
-      namingStrategy:
+      naming:
         template: "{{ .cluster.name }}-{{ .machineDeployment.topologyName }}-{{ .random }}"
 ```
 
@@ -423,7 +427,7 @@ The following variables can be referenced in templates:
 Example which would match the default behavior:
 
 ```yaml
-apiVersion: cluster.x-k8s.io/v1beta1
+apiVersion: cluster.x-k8s.io/v1beta2
 kind: ClusterClass
 metadata:
   name: docker-clusterclass-v0.1.0
@@ -434,7 +438,7 @@ spec:
     machinePools:
     - class: default-worker
       ...
-      namingStrategy:
+      naming:
         template: "{{ .cluster.name }}-{{ .machinePool.topologyName }}-{{ .random }}"
 ```
 
@@ -447,15 +451,16 @@ As a user, I may need to create a `Cluster` from a `ClusterClass` object that ex
 Example of the `Cluster` object with the `name/namespace` reference:
 
 ```yaml
-apiVersion: cluster.x-k8s.io/v1beta1
+apiVersion: cluster.x-k8s.io/v1beta2
 kind: Cluster
 metadata:
   name: my-docker-cluster
   namespace: default
 spec:
   topology:
-    class: docker-clusterclass-v0.1.0
-    classNamespace: default
+    classRef:
+      name: docker-clusterclass-v0.1.0
+      namespace: default
     version: v1.22.4
     controlPlane:
       replicas: 3
@@ -487,11 +492,11 @@ spec:
   matchConstraints:
     resourceRules:
     - apiGroups:   ["cluster.x-k8s.io"]
-      apiVersions: ["v1beta1"]
+      apiVersions: ["v1beta2"]
       operations:  ["CREATE", "UPDATE"]
       resources:   ["clusters"]
   validations:
-    - expression: "!has(object.spec.topology.classNamespace) || object.spec.topology.classNamespace in params.data"
+    - expression: "!has(object.spec.topology.classRef.namespace) || object.spec.topology.classRef.namespace in params.data"
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicyBinding
@@ -528,7 +533,7 @@ In the following example we make the `instanceType` of a `AWSMachineTemplate` cu
 First we define the `workerMachineType` variable and the corresponding patch:
 
 ```yaml
-apiVersion: cluster.x-k8s.io/v1beta1
+apiVersion: cluster.x-k8s.io/v1beta2
 kind: ClusterClass
 metadata:
   name: aws-clusterclass-v0.1.0
@@ -545,7 +550,7 @@ spec:
   - name: workerMachineType
     definitions:
     - selector:
-        apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+        apiVersion: infrastructure.cluster.x-k8s.io/v1beta2
         kind: AWSMachineTemplate
         matchResources:
           machineDeploymentClass:
@@ -557,7 +562,7 @@ spec:
         valueFrom:
           variable: workerMachineType
 ---
-apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+apiVersion: infrastructure.cluster.x-k8s.io/v1beta2
 kind: AWSMachineTemplate
 metadata:
   name: aws-clusterclass-v0.1.0-default-worker
@@ -574,14 +579,15 @@ In the Cluster resource the `workerMachineType` variable can then be set cluster
 it can also be overridden for an individual MachineDeployment or MachinePool.
 
 ```yaml
-apiVersion: cluster.x-k8s.io/v1beta1
+apiVersion: cluster.x-k8s.io/v1beta2
 kind: Cluster
 metadata:
   name: my-aws-cluster
 spec:
   ...
   topology:
-    class: aws-clusterclass-v0.1.0
+    classRef:
+      name: aws-clusterclass-v0.1.0
     version: v1.22.0
     controlPlane:
       replicas: 3
@@ -608,10 +614,10 @@ spec:
 
 In addition to variables specified in the ClusterClass, the following builtin variables can be 
 referenced in patches:
-- `builtin.cluster.{name,namespace,uid}`
-- `builtin.cluster.topology.{version,class}`
-- `builtin.cluster.network.{serviceDomain,services,pods,ipFamily}`
-    - Note: ipFamily is deprecated and will be removed in a future release. see https://github.com/kubernetes-sigs/cluster-api/issues/7521.
+- `builtin.cluster.{name,namespace,uid,metadata.labels,metadata.annotations}`
+- `builtin.cluster.topology.{version,classRef.name,classRef.namespace,class,classNamespace}`
+    - Note: `class` and `classNamespace` are deprecated and will be removed with the next apiVersion.
+- `builtin.cluster.network.{serviceDomain,services,pods}`
 - `builtin.controlPlane.{replicas,version,name,metadata.labels,metadata.annotations}`
     - Please note, these variables are only available when patching control plane or control plane 
       machine templates.
@@ -633,7 +639,7 @@ referenced in patches:
 
 Builtin variables can be referenced just like regular variables, e.g.:
 ```yaml
-apiVersion: cluster.x-k8s.io/v1beta1
+apiVersion: cluster.x-k8s.io/v1beta2
 kind: ClusterClass
 metadata:
   name: docker-clusterclass-v0.1.0
@@ -658,7 +664,7 @@ will always be the same as the one we set in the corresponding MachineDeployment
 (works the same way with `.builtin.controlPlane.version`).
 
 ```yaml
-apiVersion: cluster.x-k8s.io/v1beta1
+apiVersion: cluster.x-k8s.io/v1beta2
 kind: ClusterClass
 metadata:
   name: docker-clusterclass-v0.1.0
@@ -669,7 +675,7 @@ spec:
     description: "Sets the container image that is used for running dockerMachines."
     definitions:
     - selector:
-        apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+        apiVersion: infrastructure.cluster.x-k8s.io/v1beta2
         kind: DockerMachineTemplate
         matchResources:
           machineDeploymentClass:
@@ -690,7 +696,7 @@ by the schemas of the fields of the object. A map is specified with the type `ob
 of the map values. An array is specified via the type `array` and the schema of the array items.
 
 ```yaml
-apiVersion: cluster.x-k8s.io/v1beta1
+apiVersion: cluster.x-k8s.io/v1beta2
 kind: ClusterClass
 metadata:
   name: docker-clusterclass-v0.1.0
@@ -730,7 +736,7 @@ spec:
 Objects, maps and arrays can be used in patches either directly by referencing the variable name,
 or by accessing individual fields. For example:
 ```yaml
-apiVersion: cluster.x-k8s.io/v1beta1
+apiVersion: cluster.x-k8s.io/v1beta2
 kind: ClusterClass
 metadata:
   name: docker-clusterclass-v0.1.0
@@ -766,7 +772,7 @@ Of course it's also possible to only make the name of the reference configurable
 to a pre-defined enum.
 
 ```yaml
-apiVersion: cluster.x-k8s.io/v1beta1
+apiVersion: cluster.x-k8s.io/v1beta2
 kind: ClusterClass
 metadata:
   name: azure-clusterclass-v0.1.0
@@ -799,7 +805,7 @@ when those values are used in patch or when the generated templates are created 
  [6135](https://github.com/kubernetes-sigs/cluster-api/issues/6135)).
 
 As a consequence we recommend avoiding this practice while we are considering alternatives to make
-it explicit for the ClusterClass authors to opt-in in this feature, thus accepting the implied risks.
+it explicit for the ClusterClass authors to opt in this feature, thus accepting the implied risks.
 
 ### Using variable values in JSON patches
 
@@ -807,7 +813,7 @@ We already saw above that it's possible to use variable values in JSON patches. 
 possible to calculate values via Go templating or to use hard-coded values.
 
 ```yaml
-apiVersion: cluster.x-k8s.io/v1beta1
+apiVersion: cluster.x-k8s.io/v1beta2
 kind: ClusterClass
 metadata:
   name: docker-clusterclass-v0.1.0
@@ -872,7 +878,7 @@ The patch is then only applied if the Go template evaluates to `true`. In the fo
 patch is only applied if the `httpProxy` variable is set (and not empty).
 
 ```yaml
-apiVersion: cluster.x-k8s.io/v1beta1
+apiVersion: cluster.x-k8s.io/v1beta2
 kind: ClusterClass
 metadata:
   name: docker-clusterclass-v0.1.0
@@ -982,7 +988,7 @@ A workaround in this particular case is to create the array in the patch instead
 When creating the slice, existing values would be overwritten so this should only be used when it does not exist.
 
 The following example shows both cases to consider while writing a patch for adding a value to a slice.
-This patch targets to add a file to the `files` slice of a `KubeadmConfigTemplate` which has [omitempty](https://github.com/kubernetes-sigs/cluster-api/blob/main/bootstrap/kubeadm/api/v1beta1/kubeadmconfig_types.go#L54) set.
+This patch targets to add a file to the `files` slice of a `KubeadmConfigTemplate` which has [omitempty](https://github.com/kubernetes-sigs/cluster-api/blob/main/api/bootstrap/kubeadm/v1beta2/kubeadmconfig_types.go#L54) set.
 
 {{#tabs name:"tab-configuration-patches" tabs:"Add to existing slice,Create slice"}}
 {{#tab Add to existing slice}}
@@ -990,7 +996,7 @@ This patch targets to add a file to the `files` slice of a `KubeadmConfigTemplat
 This patch **requires** the key `.spec.template.spec.files` to exist to succeed.
 
 ```yaml
-apiVersion: cluster.x-k8s.io/v1beta1
+apiVersion: cluster.x-k8s.io/v1beta2
 kind: ClusterClass
 metadata:
   name: my-clusterclass
@@ -1000,7 +1006,7 @@ spec:
   - name: add file
     definitions:
     - selector:
-        apiVersion: bootstrap.cluster.x-k8s.io/v1beta1
+        apiVersion: bootstrap.cluster.x-k8s.io/v1beta2
         kind: KubeadmConfigTemplate
       jsonPatches:
       - op: add
@@ -1009,7 +1015,7 @@ spec:
           content: Some content.
           path: /some/file
 ---
-apiVersion: bootstrap.cluster.x-k8s.io/v1beta1
+apiVersion: bootstrap.cluster.x-k8s.io/v1beta2
 kind: KubeadmConfigTemplate
 metadata:
   name: "quick-start-default-worker-bootstraptemplate"
@@ -1028,7 +1034,7 @@ spec:
 This patch would **overwrite** an existing slice at `.spec.template.spec.files`.
 
 ```yaml
-apiVersion: cluster.x-k8s.io/v1beta1
+apiVersion: cluster.x-k8s.io/v1beta2
 kind: ClusterClass
 metadata:
   name: my-clusterclass
@@ -1038,7 +1044,7 @@ spec:
   - name: add file
     definitions:
     - selector:
-        apiVersion: bootstrap.cluster.x-k8s.io/v1beta1
+        apiVersion: bootstrap.cluster.x-k8s.io/v1beta2
         kind: KubeadmConfigTemplate
       jsonPatches:
       - op: add
@@ -1047,7 +1053,7 @@ spec:
         - content: Some content.
           path: /some/file
 ---
-apiVersion: bootstrap.cluster.x-k8s.io/v1beta1
+apiVersion: bootstrap.cluster.x-k8s.io/v1beta2
 kind: KubeadmConfigTemplate
 metadata:
   name: "quick-start-default-worker-bootstraptemplate"
@@ -1062,5 +1068,4 @@ spec:
 
 <!-- links -->
 [Changing a ClusterClass]: ./change-clusterclass.md
-[clusterctl alpha topology plan]: ../../../clusterctl/commands/alpha-topology-plan.md
 [RFC6902]: https://datatracker.ietf.org/doc/html/rfc6902#appendix-A.12

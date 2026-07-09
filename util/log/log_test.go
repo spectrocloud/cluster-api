@@ -31,7 +31,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
+	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 )
 
 func Test_AddObjectHierarchy(t *testing.T) {
@@ -40,27 +40,19 @@ func Test_AddObjectHierarchy(t *testing.T) {
 	scheme := runtime.NewScheme()
 	g.Expect(clusterv1.AddToScheme(scheme)).To(Succeed())
 
-	md := &clusterv1.MachineSet{
-		TypeMeta: metav1.TypeMeta{
-			APIVersion: clusterv1.GroupVersion.String(),
-			Kind:       "MachineDeployment",
-		},
+	md := &clusterv1.MachineDeployment{
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: metav1.NamespaceDefault,
 			Name:      "development-3961-md-0-l4zn6",
 		},
 	}
 	mdOwnerRef := metav1.OwnerReference{
-		APIVersion: md.APIVersion,
-		Kind:       md.Kind,
+		APIVersion: clusterv1.GroupVersion.String(),
+		Kind:       "MachineDeployment",
 		Name:       md.Name,
 	}
 
 	ms := &clusterv1.MachineSet{
-		TypeMeta: metav1.TypeMeta{
-			APIVersion: clusterv1.GroupVersion.String(),
-			Kind:       "MachineSet",
-		},
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace:       metav1.NamespaceDefault,
 			Name:            "development-3961-md-0-l4zn6-758c9b7677",
@@ -68,8 +60,8 @@ func Test_AddObjectHierarchy(t *testing.T) {
 		},
 	}
 	msOwnerRef := metav1.OwnerReference{
-		APIVersion: ms.APIVersion,
-		Kind:       ms.Kind,
+		APIVersion: clusterv1.GroupVersion.String(),
+		Kind:       "MachineSet",
 		Name:       ms.Name,
 	}
 
@@ -127,7 +119,7 @@ func Test_AddObjectHierarchy(t *testing.T) {
 			name: "KubeadmControlPlane and Machine owning DockerMachine are added",
 			obj: &unstructured.Unstructured{
 				Object: map[string]interface{}{
-					"apiVersion": "infrastructure.cluster.x-k8s.io/v1beta1",
+					"apiVersion": clusterv1.GroupVersionInfrastructure.String(),
 					"kind":       "DockerMachine",
 					"metadata": map[string]interface{}{
 						"ownerReferences": []interface{}{
@@ -157,7 +149,7 @@ func Test_AddObjectHierarchy(t *testing.T) {
 			name: "Duplicate Cluster ownerRef should be deduplicated",
 			obj: &unstructured.Unstructured{
 				Object: map[string]interface{}{
-					"apiVersion": "infrastructure.cluster.x-k8s.io/v1beta1",
+					"apiVersion": clusterv1.GroupVersionInfrastructure.String(),
 					"kind":       "DockerCluster",
 					"metadata": map[string]interface{}{
 						"ownerReferences": []interface{}{

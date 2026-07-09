@@ -16,12 +16,18 @@ superseded-by: []
 
 ## Table of Contents
 
+<!-- START doctoc generated TOC please keep comment here to allow auto update -->
+<!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
+**Table of Contents**  *generated with [DocToc](https://github.com/thlorenz/doctoc)*
+
 - [Summary](#summary)
 - [Motivation](#motivation)
   - [Goals](#goals)
-  - [Non-Goals](#non-goalsfuture-work)
+  - [Non-Goals](#non-goals)
 - [Proposal](#proposal)
 - [Implementation History](#implementation-history)
+
+<!-- END doctoc generated TOC please keep comment here to allow auto update -->
 
 ## Summary
 
@@ -154,7 +160,7 @@ Please note that at the end of phase 1
 
 Phase 2 consist of the actual removal of `DockerCluster`, `DockerMachine` and `DockerMachinePool`; this phase will happen after maintainers 
 will complete the transition of all the E2E tests to `DevCluster`, `DevMachine` and `DevMachinePool`; considering we have upgrade tests using
-older releases of CAPD, completing this phase would likely require a few release cycles, targeting tentatively CAPI 1.13, Apr 2026.
+older releases of CAPD, completing this phase would likely require a few release cycles.
 
 ## Implementation History
 

@@ -21,8 +21,8 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
-	bootstrapv1 "sigs.k8s.io/cluster-api/bootstrap/kubeadm/api/v1beta1"
+	bootstrapv1 "sigs.k8s.io/cluster-api/api/bootstrap/kubeadm/v1beta2"
+	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 )
 
 // KubeadmConfigBuilder contains the information needed to produce a KubeadmConfig.
@@ -67,38 +67,34 @@ func (k *KubeadmConfigBuilder) Unstructured() *unstructured.Unstructured {
 	if err != nil {
 		panic(err)
 	}
-	return &unstructured.Unstructured{Object: rawMap}
+	u := &unstructured.Unstructured{Object: rawMap}
+	u.SetGroupVersionKind(bootstrapv1.GroupVersion.WithKind("KubeadmConfig"))
+	return u
 }
 
 // Build produces a KubeadmConfig from the variable in the KubeadmConfigBuilder.
 func (k *KubeadmConfigBuilder) Build() *bootstrapv1.KubeadmConfig {
 	config := &bootstrapv1.KubeadmConfig{
-		TypeMeta: metav1.TypeMeta{
-			Kind:       "KubeadmConfig",
-			APIVersion: bootstrapv1.GroupVersion.String(),
-		},
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: k.namespace,
 			Name:      k.name,
 		},
 		Status: bootstrapv1.KubeadmConfigStatus{
-			V1Beta2: &bootstrapv1.KubeadmConfigV1Beta2Status{
-				Conditions: []metav1.Condition{{
-					Type:   clusterv1.PausedV1Beta2Condition,
-					Status: metav1.ConditionFalse,
-					Reason: clusterv1.NotPausedV1Beta2Reason,
-				}},
-			},
+			Conditions: []metav1.Condition{{
+				Type:   clusterv1.PausedCondition,
+				Status: metav1.ConditionFalse,
+				Reason: clusterv1.NotPausedReason,
+			}},
 		},
 	}
 	if k.initConfig != nil {
-		config.Spec.InitConfiguration = k.initConfig
+		config.Spec.InitConfiguration = *k.initConfig
 	}
 	if k.joinConfig != nil {
-		config.Spec.JoinConfiguration = k.joinConfig
+		config.Spec.JoinConfiguration = *k.joinConfig
 	}
 	if k.clusterConfig != nil {
-		config.Spec.ClusterConfiguration = k.clusterConfig
+		config.Spec.ClusterConfiguration = *k.clusterConfig
 	}
 	return config
 }

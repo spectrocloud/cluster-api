@@ -20,11 +20,10 @@ import (
 	"testing"
 
 	. "github.com/onsi/gomega"
-	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
 
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
+	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/cluster-api/internal/webhooks/util"
 )
 
@@ -36,21 +35,21 @@ func TestMachineDefault(t *testing.T) {
 			Namespace: "foobar",
 		},
 		Spec: clusterv1.MachineSpec{
-			Bootstrap: clusterv1.Bootstrap{ConfigRef: &corev1.ObjectReference{}},
-			Version:   ptr.To("1.17.5"),
+			Bootstrap: clusterv1.Bootstrap{ConfigRef: clusterv1.ContractVersionedObjectReference{
+				Name: "bootstrap1",
+			}},
+			Version: "1.17.5",
 		},
 	}
 
 	webhook := &Machine{}
 
-	t.Run("for Machine", util.CustomDefaultValidateTest(ctx, m, webhook))
+	t.Run("for Machine", util.CustomDefaultValidateTest[*clusterv1.Machine](ctx, m, webhook))
 	g.Expect(webhook.Default(ctx, m)).To(Succeed())
 
 	g.Expect(m.Labels[clusterv1.ClusterNameLabel]).To(Equal(m.Spec.ClusterName))
-	g.Expect(m.Spec.Bootstrap.ConfigRef.Namespace).To(Equal(m.Namespace))
-	g.Expect(m.Spec.InfrastructureRef.Namespace).To(Equal(m.Namespace))
-	g.Expect(*m.Spec.Version).To(Equal("v1.17.5"))
-	g.Expect(m.Spec.NodeDeletionTimeout.Duration).To(Equal(defaultNodeDeletionTimeout))
+	g.Expect(m.Spec.Version).To(Equal("v1.17.5"))
+	g.Expect(*m.Spec.Deletion.NodeDeletionTimeoutSeconds).To(Equal(defaultNodeDeletionTimeoutSeconds))
 }
 
 func TestMachineBootstrapValidation(t *testing.T) {
@@ -61,22 +60,22 @@ func TestMachineBootstrapValidation(t *testing.T) {
 	}{
 		{
 			name:      "should return error if configref and data are nil",
-			bootstrap: clusterv1.Bootstrap{ConfigRef: nil, DataSecretName: nil},
+			bootstrap: clusterv1.Bootstrap{DataSecretName: nil},
 			expectErr: true,
 		},
 		{
 			name:      "should not return error if dataSecretName is set",
-			bootstrap: clusterv1.Bootstrap{ConfigRef: nil, DataSecretName: ptr.To("test")},
+			bootstrap: clusterv1.Bootstrap{DataSecretName: ptr.To("test")},
 			expectErr: false,
 		},
 		{
 			name:      "should not return error if dataSecretName is set",
-			bootstrap: clusterv1.Bootstrap{ConfigRef: nil, DataSecretName: ptr.To("")},
+			bootstrap: clusterv1.Bootstrap{DataSecretName: ptr.To("")},
 			expectErr: false,
 		},
 		{
 			name:      "should not return error if config ref is set",
-			bootstrap: clusterv1.Bootstrap{ConfigRef: &corev1.ObjectReference{}, DataSecretName: nil},
+			bootstrap: clusterv1.Bootstrap{ConfigRef: clusterv1.ContractVersionedObjectReference{Name: "bootstrap1"}, DataSecretName: nil},
 			expectErr: false,
 		},
 	}
@@ -86,73 +85,6 @@ func TestMachineBootstrapValidation(t *testing.T) {
 			g := NewWithT(t)
 			m := &clusterv1.Machine{
 				Spec: clusterv1.MachineSpec{Bootstrap: tt.bootstrap},
-			}
-			webhook := &Machine{}
-
-			if tt.expectErr {
-				warnings, err := webhook.ValidateCreate(ctx, m)
-				g.Expect(err).To(HaveOccurred())
-				g.Expect(warnings).To(BeEmpty())
-				warnings, err = webhook.ValidateUpdate(ctx, m, m)
-				g.Expect(err).To(HaveOccurred())
-				g.Expect(warnings).To(BeEmpty())
-			} else {
-				warnings, err := webhook.ValidateCreate(ctx, m)
-				g.Expect(err).ToNot(HaveOccurred())
-				g.Expect(warnings).To(BeEmpty())
-				warnings, err = webhook.ValidateUpdate(ctx, m, m)
-				g.Expect(err).ToNot(HaveOccurred())
-				g.Expect(warnings).To(BeEmpty())
-			}
-		})
-	}
-}
-
-func TestMachineNamespaceValidation(t *testing.T) {
-	tests := []struct {
-		name      string
-		expectErr bool
-		bootstrap clusterv1.Bootstrap
-		infraRef  corev1.ObjectReference
-		namespace string
-	}{
-		{
-			name:      "should succeed if all namespaces match",
-			expectErr: false,
-			namespace: "foobar",
-			bootstrap: clusterv1.Bootstrap{ConfigRef: &corev1.ObjectReference{Namespace: "foobar"}},
-			infraRef:  corev1.ObjectReference{Namespace: "foobar"},
-		},
-		{
-			name:      "should return error if namespace and bootstrap namespace don't match",
-			expectErr: true,
-			namespace: "foobar",
-			bootstrap: clusterv1.Bootstrap{ConfigRef: &corev1.ObjectReference{Namespace: "foobar123"}},
-			infraRef:  corev1.ObjectReference{Namespace: "foobar"},
-		},
-		{
-			name:      "should return error if namespace and infrastructure ref namespace don't match",
-			expectErr: true,
-			namespace: "foobar",
-			bootstrap: clusterv1.Bootstrap{ConfigRef: &corev1.ObjectReference{Namespace: "foobar"}},
-			infraRef:  corev1.ObjectReference{Namespace: "foobar123"},
-		},
-		{
-			name:      "should return error if no namespaces match",
-			expectErr: true,
-			namespace: "foobar1",
-			bootstrap: clusterv1.Bootstrap{ConfigRef: &corev1.ObjectReference{Namespace: "foobar2"}},
-			infraRef:  corev1.ObjectReference{Namespace: "foobar3"},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			g := NewWithT(t)
-
-			m := &clusterv1.Machine{
-				ObjectMeta: metav1.ObjectMeta{Namespace: tt.namespace},
-				Spec:       clusterv1.MachineSpec{Bootstrap: tt.bootstrap, InfrastructureRef: tt.infraRef},
 			}
 			webhook := &Machine{}
 
@@ -203,13 +135,17 @@ func TestMachineClusterNameImmutable(t *testing.T) {
 			newMachine := &clusterv1.Machine{
 				Spec: clusterv1.MachineSpec{
 					ClusterName: tt.newClusterName,
-					Bootstrap:   clusterv1.Bootstrap{ConfigRef: &corev1.ObjectReference{}},
+					Bootstrap: clusterv1.Bootstrap{ConfigRef: clusterv1.ContractVersionedObjectReference{
+						Name: "bootstrap1",
+					}},
 				},
 			}
 			oldMachine := &clusterv1.Machine{
 				Spec: clusterv1.MachineSpec{
 					ClusterName: tt.oldClusterName,
-					Bootstrap:   clusterv1.Bootstrap{ConfigRef: &corev1.ObjectReference{}},
+					Bootstrap: clusterv1.Bootstrap{ConfigRef: clusterv1.ContractVersionedObjectReference{
+						Name: "bootstrap1",
+					}},
 				},
 			}
 
@@ -243,7 +179,7 @@ func TestMachineVersionValidation(t *testing.T) {
 		},
 		{
 			name:      "should return error when given an invalid semantic version",
-			version:   "1",
+			version:   "v1.17.2++",
 			expectErr: true,
 		},
 		{
@@ -265,8 +201,8 @@ func TestMachineVersionValidation(t *testing.T) {
 
 			m := &clusterv1.Machine{
 				Spec: clusterv1.MachineSpec{
-					Version:   &tt.version,
-					Bootstrap: clusterv1.Bootstrap{ConfigRef: nil, DataSecretName: ptr.To("test")},
+					Version:   tt.version,
+					Bootstrap: clusterv1.Bootstrap{DataSecretName: ptr.To("test")},
 				},
 			}
 			webhook := &Machine{}

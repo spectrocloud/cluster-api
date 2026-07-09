@@ -1,5 +1,5 @@
 /*
-Copyright 2020 The Kubernetes Authors.
+Copyright 2026 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -17,176 +17,242 @@ limitations under the License.
 package internal
 
 import (
-	"errors"
 	"testing"
 
 	"github.com/blang/semver/v4"
+	"github.com/google/go-cmp/cmp"
 	. "github.com/onsi/gomega"
 	rbacv1 "k8s.io/api/rbac/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime/schema"
-	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
-func TestCluster_ReconcileKubeletRBACBinding_NoError(t *testing.T) {
-	type wantRBAC struct {
-		role        ctrlclient.ObjectKey
-		roleBinding ctrlclient.ObjectKey
-	}
+func TestEnsureKubeadmPermissions(t *testing.T) {
 	tests := []struct {
-		name    string
-		client  ctrlclient.Client
-		version semver.Version
-		want    *wantRBAC
+		name          string
+		objs          []client.Object
+		targetVersion semver.Version
+		wantObjs      []client.Object
 	}{
 		{
-			name:    "creates role and role binding for Kubernetes/kubeadm < v1.24",
-			client:  fake.NewClientBuilder().Build(),
-			version: semver.MustParse("1.23.3"),
-			want: &wantRBAC{
-				role:        ctrlclient.ObjectKey{Namespace: metav1.NamespaceSystem, Name: "kubeadm:kubelet-config-1.23"},
-				roleBinding: ctrlclient.ObjectKey{Namespace: metav1.NamespaceSystem, Name: "kubeadm:kubelet-config-1.23"},
-			},
-		},
-		{
-			name: "tolerates existing role binding for Kubernetes/kubeadm < v1.24",
-			client: fake.NewClientBuilder().WithObjects(
-				&rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Namespace: metav1.NamespaceSystem, Name: "kubeadm:kubelet-config-1.23"}, RoleRef: rbacv1.RoleRef{
-					Name: "kubeadm:kubelet-config-1.23",
-				}},
-				&rbacv1.Role{ObjectMeta: metav1.ObjectMeta{Namespace: metav1.NamespaceSystem, Name: "kubeadm:kubelet-config-1.23"}, Rules: []rbacv1.PolicyRule{{
-					Verbs:         []string{"get"},
-					APIGroups:     []string{""},
-					Resources:     []string{"configmaps"},
-					ResourceNames: []string{"kubelet-config-1.23"},
-				}}},
-			).Build(),
-			version: semver.MustParse("1.23.3"),
-			want: &wantRBAC{
-				role:        ctrlclient.ObjectKey{Namespace: metav1.NamespaceSystem, Name: "kubeadm:kubelet-config-1.23"},
-				roleBinding: ctrlclient.ObjectKey{Namespace: metav1.NamespaceSystem, Name: "kubeadm:kubelet-config-1.23"},
-			},
-		},
-		{
-			name:    "creates role and role binding for Kubernetes/kubeadm >= v1.24",
-			client:  fake.NewClientBuilder().Build(),
-			version: semver.MustParse("1.24.0"),
-			want: &wantRBAC{
-				role:        ctrlclient.ObjectKey{Namespace: metav1.NamespaceSystem, Name: "kubeadm:kubelet-config"},
-				roleBinding: ctrlclient.ObjectKey{Namespace: metav1.NamespaceSystem, Name: "kubeadm:kubelet-config"},
-			},
-		},
-		{
-			name:    "creates role and role binding for Kubernetes/kubeadm >= v1.24 ignoring pre-release and build tags",
-			client:  fake.NewClientBuilder().Build(),
-			version: semver.MustParse("1.24.0-alpha.1+xyz.1"),
-			want: &wantRBAC{
-				role:        ctrlclient.ObjectKey{Namespace: metav1.NamespaceSystem, Name: "kubeadm:kubelet-config"},
-				roleBinding: ctrlclient.ObjectKey{Namespace: metav1.NamespaceSystem, Name: "kubeadm:kubelet-config"},
-			},
-		},
-		{
-			name: "tolerates existing role binding for Kubernetes/kubeadm >= v1.24",
-			client: fake.NewClientBuilder().WithObjects(
-				&rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Namespace: metav1.NamespaceSystem, Name: "kubeadm:kubelet-config"}, RoleRef: rbacv1.RoleRef{
-					Name: "kubeadm:kubelet-config",
-				}},
-				&rbacv1.Role{ObjectMeta: metav1.ObjectMeta{Namespace: metav1.NamespaceSystem, Name: "kubeadm:kubelet-config"}, Rules: []rbacv1.PolicyRule{{
-					Verbs:         []string{"get"},
-					APIGroups:     []string{""},
-					Resources:     []string{"configmaps"},
-					ResourceNames: []string{"kubelet-config"},
-				}}},
-			).Build(),
-			version: semver.MustParse("1.24.1"),
-			want: &wantRBAC{
-				role:        ctrlclient.ObjectKey{Namespace: metav1.NamespaceSystem, Name: "kubeadm:kubelet-config"},
-				roleBinding: ctrlclient.ObjectKey{Namespace: metav1.NamespaceSystem, Name: "kubeadm:kubelet-config"},
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			g := NewWithT(t)
-
-			c := &Workload{
-				Client: tt.client,
-			}
-			g.Expect(c.ReconcileKubeletRBACBinding(ctx, tt.version)).To(Succeed())
-			g.Expect(c.ReconcileKubeletRBACRole(ctx, tt.version)).To(Succeed())
-			if tt.want != nil {
-				r := &rbacv1.Role{}
-				// Role exists
-				g.Expect(tt.client.Get(ctx, tt.want.role, r)).To(Succeed())
-				// Role ensure grants for the KubeletConfig config map
-				g.Expect(r.Rules).To(BeComparableTo([]rbacv1.PolicyRule{
-					{
-						Verbs:         []string{"get"},
-						APIGroups:     []string{""},
-						Resources:     []string{"configmaps"},
-						ResourceNames: []string{generateKubeletConfigName(tt.version)},
+			name:          "Add kubeadm:cluster-admins and kubeadm:apiserver-kubelet-client ClusterRoleBinding for K8s <= 1.37",
+			objs:          nil,
+			targetVersion: semver.MustParse("1.37.5"),
+			wantObjs: []client.Object{
+				&rbacv1.ClusterRoleBinding{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: ClusterAdminsGroupAndClusterRoleBinding,
 					},
-				}))
-				// RoleBinding exists
-				b := &rbacv1.RoleBinding{}
-				// RoleBinding refers to the role
-				g.Expect(tt.client.Get(ctx, tt.want.roleBinding, b)).To(Succeed())
-				g.Expect(b.RoleRef.Name).To(Equal(tt.want.role.Name))
-			}
-		})
-	}
-}
-
-func TestCluster_ReconcileKubeletRBACBinding_Error(t *testing.T) {
-	tests := []struct {
-		name   string
-		client ctrlclient.Client
-	}{
-		{
-			name: "client fails to update an expected error or the role binding/role",
-			client: &fakeClient{
-				createErr: errors.New(""),
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			g := NewWithT(t)
-
-			c := &Workload{
-				Client: tt.client,
-			}
-			g.Expect(c.ReconcileKubeletRBACBinding(ctx, semver.MustParse("1.12.3"))).NotTo(Succeed())
-			g.Expect(c.ReconcileKubeletRBACRole(ctx, semver.MustParse("1.13.3"))).NotTo(Succeed())
-		})
-	}
-}
-
-func TestCluster_AllowBootstrapTokensToGetNodes_NoError(t *testing.T) {
-	tests := []struct {
-		name   string
-		client ctrlclient.Client
-	}{
-		{
-			name: "role binding and role already exist",
-			client: &fakeClient{
-				get: map[string]interface{}{
-					GetNodesClusterRoleName: &rbacv1.ClusterRoleBinding{},
+					RoleRef: rbacv1.RoleRef{
+						APIGroup: rbacv1.GroupName,
+						Kind:     "ClusterRole",
+						Name:     "cluster-admin",
+					},
+					Subjects: []rbacv1.Subject{
+						{
+							Kind: rbacv1.GroupKind,
+							Name: ClusterAdminsGroupAndClusterRoleBinding,
+						},
+					},
+				},
+				&rbacv1.ClusterRoleBinding{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: KubeletAPIAdminClusterRoleBindingName,
+					},
+					RoleRef: rbacv1.RoleRef{
+						APIGroup: rbacv1.GroupName,
+						Kind:     "ClusterRole",
+						Name:     KubeletAPIAdminClusterRoleName,
+					},
+					Subjects: []rbacv1.Subject{
+						{
+							Kind: rbacv1.UserKind,
+							Name: APIServerKubeletClientCertCommonName,
+						},
+					},
 				},
 			},
 		},
 		{
-			name:   "role binding and role don't exist",
-			client: &fakeClient{},
+			name: "Ignore kubeadm:cluster-admins and kubeadm:apiserver-kubelet-client ClusterRoleBinding if they already exist for K8s <= 1.37 (kubeadm started adding those roles in patch versions)",
+			objs: []client.Object{
+				&rbacv1.ClusterRoleBinding{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: ClusterAdminsGroupAndClusterRoleBinding,
+					},
+					// Intentionally using a different ClusterRoleBinding to check that it is not changed.
+				},
+				&rbacv1.ClusterRoleBinding{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: KubeletAPIAdminClusterRoleBindingName,
+					},
+					// Intentionally using a different ClusterRoleBinding to check that it is not changed.
+				},
+			},
+			targetVersion: semver.MustParse("1.37.0"),
+			wantObjs: []client.Object{
+				&rbacv1.ClusterRoleBinding{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: ClusterAdminsGroupAndClusterRoleBinding,
+					},
+				},
+				&rbacv1.ClusterRoleBinding{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: KubeletAPIAdminClusterRoleBindingName,
+					},
+				},
+			},
 		},
 		{
-			name: "create returns an already exists error",
-			client: &fakeClient{
-				createErr: apierrors.NewAlreadyExists(schema.GroupResource{}, ""),
+			name: "Ignore kubeadm:cluster-admins and kubeadm:apiserver-kubelet-client ClusterRoleBinding if they already exist for K8s >= 1.38 (kubeadm should add those roles or KCP in a previous update)",
+			objs: []client.Object{
+				&rbacv1.ClusterRoleBinding{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: ClusterAdminsGroupAndClusterRoleBinding,
+					},
+					// Intentionally using a different ClusterRoleBinding to check that it is not changed.
+				},
+				&rbacv1.ClusterRoleBinding{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: KubeletAPIAdminClusterRoleBindingName,
+					},
+					// Intentionally using a different ClusterRoleBinding to check that it is not changed.
+				},
+			},
+			targetVersion: semver.MustParse("1.38.0"),
+			wantObjs: []client.Object{
+				&rbacv1.ClusterRoleBinding{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: ClusterAdminsGroupAndClusterRoleBinding,
+					},
+				},
+				&rbacv1.ClusterRoleBinding{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: KubeletAPIAdminClusterRoleBindingName,
+					},
+				},
+			},
+		},
+		{
+			name:          "Do not add kubeadm:cluster-admins and kubeadm:apiserver-kubelet-client ClusterRoleBinding for K8s >= 1.38 (this should never happen, kubeadm should add those roles or KCP in a previous update)",
+			objs:          nil,
+			targetVersion: semver.MustParse("1.38.0"),
+			wantObjs:      nil,
+		},
+		{
+			name:          "Add both ClusterRoleBindings for K8s < 1.29 (no lower bound, applied even before kubeadm introduced them)",
+			objs:          nil,
+			targetVersion: semver.MustParse("1.28.0"),
+			wantObjs: []client.Object{
+				&rbacv1.ClusterRoleBinding{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: ClusterAdminsGroupAndClusterRoleBinding,
+					},
+					RoleRef: rbacv1.RoleRef{
+						APIGroup: rbacv1.GroupName,
+						Kind:     "ClusterRole",
+						Name:     "cluster-admin",
+					},
+					Subjects: []rbacv1.Subject{
+						{
+							Kind: rbacv1.GroupKind,
+							Name: ClusterAdminsGroupAndClusterRoleBinding,
+						},
+					},
+				},
+				&rbacv1.ClusterRoleBinding{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: KubeletAPIAdminClusterRoleBindingName,
+					},
+					RoleRef: rbacv1.RoleRef{
+						APIGroup: rbacv1.GroupName,
+						Kind:     "ClusterRole",
+						Name:     KubeletAPIAdminClusterRoleName,
+					},
+					Subjects: []rbacv1.Subject{
+						{
+							Kind: rbacv1.UserKind,
+							Name: APIServerKubeletClientCertCommonName,
+						},
+					},
+				},
+			},
+		},
+		{
+			name:          "Do not add kubeadm:cluster-admins and kubeadm:apiserver-kubelet-client ClusterRoleBinding for K8s 1.38 pre-release (pre-releases are treated as >= 1.38 via WithoutPreReleases)",
+			objs:          nil,
+			targetVersion: semver.MustParse("1.38.0-beta.0"),
+			wantObjs:      nil,
+		},
+		{
+			name: "Add only kubeadm:apiserver-kubelet-client when kubeadm:cluster-admins already exists for K8s <= 1.37",
+			objs: []client.Object{
+				&rbacv1.ClusterRoleBinding{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: ClusterAdminsGroupAndClusterRoleBinding,
+					},
+					// Intentionally using a different ClusterRoleBinding to check that it is not changed.
+				},
+			},
+			targetVersion: semver.MustParse("1.37.0"),
+			wantObjs: []client.Object{
+				&rbacv1.ClusterRoleBinding{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: ClusterAdminsGroupAndClusterRoleBinding,
+					},
+				},
+				&rbacv1.ClusterRoleBinding{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: KubeletAPIAdminClusterRoleBindingName,
+					},
+					RoleRef: rbacv1.RoleRef{
+						APIGroup: rbacv1.GroupName,
+						Kind:     "ClusterRole",
+						Name:     KubeletAPIAdminClusterRoleName,
+					},
+					Subjects: []rbacv1.Subject{
+						{
+							Kind: rbacv1.UserKind,
+							Name: APIServerKubeletClientCertCommonName,
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "Add only kubeadm:cluster-admins when kubeadm:apiserver-kubelet-client already exists for K8s <= 1.37",
+			objs: []client.Object{
+				&rbacv1.ClusterRoleBinding{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: KubeletAPIAdminClusterRoleBindingName,
+					},
+					// Intentionally using a different ClusterRoleBinding to check that it is not changed.
+				},
+			},
+			targetVersion: semver.MustParse("1.37.0"),
+			wantObjs: []client.Object{
+				&rbacv1.ClusterRoleBinding{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: KubeletAPIAdminClusterRoleBindingName,
+					},
+				},
+				&rbacv1.ClusterRoleBinding{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: ClusterAdminsGroupAndClusterRoleBinding,
+					},
+					RoleRef: rbacv1.RoleRef{
+						APIGroup: rbacv1.GroupName,
+						Kind:     "ClusterRole",
+						Name:     "cluster-admin",
+					},
+					Subjects: []rbacv1.Subject{
+						{
+							Kind: rbacv1.GroupKind,
+							Name: ClusterAdminsGroupAndClusterRoleBinding,
+						},
+					},
+				},
 			},
 		},
 	}
@@ -194,36 +260,28 @@ func TestCluster_AllowBootstrapTokensToGetNodes_NoError(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			g := NewWithT(t)
+			fakeClient := fake.NewClientBuilder().WithObjects(tt.objs...).Build()
 
-			c := &Workload{
-				Client: tt.client,
+			w := &Workload{
+				Client: fakeClient,
 			}
-			g.Expect(c.AllowBootstrapTokensToGetNodes(ctx)).To(Succeed())
-		})
-	}
-}
+			err := w.EnsureKubeadmPermissions(t.Context(), tt.targetVersion)
+			g.Expect(err).ToNot(HaveOccurred())
 
-func TestCluster_AllowBootstrapTokensToGetNodes_Error(t *testing.T) {
-	tests := []struct {
-		name   string
-		client ctrlclient.Client
-	}{
-		{
-			name: "client fails to retrieve an expected error or the cluster role binding/role",
-			client: &fakeClient{
-				createErr: errors.New(""),
-			},
-		},
-	}
+			crbList := &rbacv1.ClusterRoleBindingList{}
+			err = fakeClient.List(t.Context(), crbList)
+			g.Expect(err).ToNot(HaveOccurred())
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			g := NewWithT(t)
+			g.Expect(crbList.Items).To(HaveLen(len(tt.wantObjs)))
 
-			c := &Workload{
-				Client: tt.client,
+			for _, o := range tt.wantObjs {
+				obj := o.DeepCopyObject().(client.Object)
+				err := fakeClient.Get(t.Context(), client.ObjectKeyFromObject(obj), obj)
+				g.Expect(err).ToNot(HaveOccurred())
+
+				o.SetResourceVersion(obj.GetResourceVersion())
+				g.Expect(obj).To(Equal(o), cmp.Diff(obj, o))
 			}
-			g.Expect(c.AllowBootstrapTokensToGetNodes(ctx)).NotTo(Succeed())
 		})
 	}
 }

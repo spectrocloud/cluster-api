@@ -18,14 +18,15 @@ package webhooks
 
 import (
 	"testing"
-	"time"
 
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/utils/ptr"
 
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
+	controlplanev1 "sigs.k8s.io/cluster-api/api/controlplane/kubeadm/v1beta2"
+	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/cluster-api/internal/webhooks/util"
 )
 
@@ -39,25 +40,30 @@ func TestMachineHealthCheckDefault(t *testing.T) {
 			Selector: metav1.LabelSelector{
 				MatchLabels: map[string]string{"foo": "bar"},
 			},
-			RemediationTemplate: &corev1.ObjectReference{},
-			UnhealthyConditions: []clusterv1.UnhealthyCondition{
-				{
-					Type:   corev1.NodeReady,
-					Status: corev1.ConditionFalse,
+			Checks: clusterv1.MachineHealthCheckChecks{
+				UnhealthyNodeConditions: []clusterv1.UnhealthyNodeCondition{
+					{
+						Type:   corev1.NodeReady,
+						Status: corev1.ConditionFalse,
+					},
+				},
+				UnhealthyMachineConditions: []clusterv1.UnhealthyMachineCondition{
+					{
+						Type:   controlplanev1.KubeadmControlPlaneMachineEtcdPodHealthyCondition,
+						Status: metav1.ConditionFalse,
+					},
 				},
 			},
 		},
 	}
 	webhook := &MachineHealthCheck{}
 
-	t.Run("for MachineHealthCheck", util.CustomDefaultValidateTest(ctx, mhc, webhook))
+	t.Run("for MachineHealthCheck", util.CustomDefaultValidateTest[*clusterv1.MachineHealthCheck](ctx, mhc, webhook))
 	g.Expect(webhook.Default(ctx, mhc)).To(Succeed())
 
 	g.Expect(mhc.Labels[clusterv1.ClusterNameLabel]).To(Equal(mhc.Spec.ClusterName))
-	g.Expect(mhc.Spec.MaxUnhealthy.String()).To(Equal("100%"))
-	g.Expect(mhc.Spec.NodeStartupTimeout).ToNot(BeNil())
-	g.Expect(*mhc.Spec.NodeStartupTimeout).To(BeComparableTo(metav1.Duration{Duration: 10 * time.Minute}))
-	g.Expect(mhc.Spec.RemediationTemplate.Namespace).To(Equal(mhc.Namespace))
+	g.Expect(mhc.Spec.Checks.NodeStartupTimeoutSeconds).ToNot(BeNil())
+	g.Expect(*mhc.Spec.Checks.NodeStartupTimeoutSeconds).To(Equal(int32(10 * 60)))
 }
 
 func TestMachineHealthCheckLabelSelectorAsSelectorValidation(t *testing.T) {
@@ -86,10 +92,18 @@ func TestMachineHealthCheckLabelSelectorAsSelectorValidation(t *testing.T) {
 					Selector: metav1.LabelSelector{
 						MatchLabels: tt.selectors,
 					},
-					UnhealthyConditions: []clusterv1.UnhealthyCondition{
-						{
-							Type:   corev1.NodeReady,
-							Status: corev1.ConditionFalse,
+					Checks: clusterv1.MachineHealthCheckChecks{
+						UnhealthyNodeConditions: []clusterv1.UnhealthyNodeCondition{
+							{
+								Type:   corev1.NodeReady,
+								Status: corev1.ConditionFalse,
+							},
+						},
+						UnhealthyMachineConditions: []clusterv1.UnhealthyMachineCondition{
+							{
+								Type:   controlplanev1.KubeadmControlPlaneMachineEtcdPodHealthyCondition,
+								Status: metav1.ConditionFalse,
+							},
 						},
 					},
 				},
@@ -148,10 +162,18 @@ func TestMachineHealthCheckClusterNameImmutable(t *testing.T) {
 							"test": "test",
 						},
 					},
-					UnhealthyConditions: []clusterv1.UnhealthyCondition{
-						{
-							Type:   corev1.NodeReady,
-							Status: corev1.ConditionFalse,
+					Checks: clusterv1.MachineHealthCheckChecks{
+						UnhealthyNodeConditions: []clusterv1.UnhealthyNodeCondition{
+							{
+								Type:   corev1.NodeReady,
+								Status: corev1.ConditionFalse,
+							},
+						},
+						UnhealthyMachineConditions: []clusterv1.UnhealthyMachineCondition{
+							{
+								Type:   controlplanev1.KubeadmControlPlaneMachineEtcdPodHealthyCondition,
+								Status: metav1.ConditionFalse,
+							},
 						},
 					},
 				},
@@ -164,10 +186,18 @@ func TestMachineHealthCheckClusterNameImmutable(t *testing.T) {
 							"test": "test",
 						},
 					},
-					UnhealthyConditions: []clusterv1.UnhealthyCondition{
-						{
-							Type:   corev1.NodeReady,
-							Status: corev1.ConditionFalse,
+					Checks: clusterv1.MachineHealthCheckChecks{
+						UnhealthyNodeConditions: []clusterv1.UnhealthyNodeCondition{
+							{
+								Type:   corev1.NodeReady,
+								Status: corev1.ConditionFalse,
+							},
+						},
+						UnhealthyMachineConditions: []clusterv1.UnhealthyMachineCondition{
+							{
+								Type:   controlplanev1.KubeadmControlPlaneMachineEtcdPodHealthyCondition,
+								Status: metav1.ConditionFalse,
+							},
 						},
 					},
 				},
@@ -184,15 +214,15 @@ func TestMachineHealthCheckClusterNameImmutable(t *testing.T) {
 	}
 }
 
-func TestMachineHealthCheckUnhealthyConditions(t *testing.T) {
+func TestMachineHealthCheckUnhealthyNodeConditions(t *testing.T) {
 	tests := []struct {
-		name                string
-		unhealthyConditions []clusterv1.UnhealthyCondition
-		expectErr           bool
+		name                    string
+		unhealthyNodeConditions []clusterv1.UnhealthyNodeCondition
+		expectErr               bool
 	}{
 		{
-			name: "pass with correctly defined unhealthyConditions",
-			unhealthyConditions: []clusterv1.UnhealthyCondition{
+			name: "pass with correctly defined unhealthyNodeConditions",
+			unhealthyNodeConditions: []clusterv1.UnhealthyNodeCondition{
 				{
 					Type:   corev1.NodeReady,
 					Status: corev1.ConditionFalse,
@@ -201,14 +231,14 @@ func TestMachineHealthCheckUnhealthyConditions(t *testing.T) {
 			expectErr: false,
 		},
 		{
-			name:                "do not fail if the UnhealthyCondition array is nil",
-			unhealthyConditions: nil,
-			expectErr:           false,
+			name:                    "do not fail if the UnhealthyNodeCondition array is nil",
+			unhealthyNodeConditions: nil,
+			expectErr:               false,
 		},
 		{
-			name:                "do not fail if the UnhealthyCondition array is nil",
-			unhealthyConditions: []clusterv1.UnhealthyCondition{},
-			expectErr:           false,
+			name:                    "do not fail if the UnhealthyNodeCondition array is nil",
+			unhealthyNodeConditions: []clusterv1.UnhealthyNodeCondition{},
+			expectErr:               false,
 		},
 	}
 
@@ -222,7 +252,74 @@ func TestMachineHealthCheckUnhealthyConditions(t *testing.T) {
 							"test": "test",
 						},
 					},
-					UnhealthyConditions: tt.unhealthyConditions,
+					Checks: clusterv1.MachineHealthCheckChecks{
+						UnhealthyNodeConditions: tt.unhealthyNodeConditions,
+					},
+				},
+			}
+			webhook := &MachineHealthCheck{}
+
+			if tt.expectErr {
+				warnings, err := webhook.ValidateCreate(ctx, mhc)
+				g.Expect(err).To(HaveOccurred())
+				g.Expect(warnings).To(BeEmpty())
+				warnings, err = webhook.ValidateUpdate(ctx, mhc, mhc)
+				g.Expect(err).To(HaveOccurred())
+				g.Expect(warnings).To(BeEmpty())
+			} else {
+				warnings, err := webhook.ValidateCreate(ctx, mhc)
+				g.Expect(err).ToNot(HaveOccurred())
+				g.Expect(warnings).To(BeEmpty())
+				warnings, err = webhook.ValidateUpdate(ctx, mhc, mhc)
+				g.Expect(err).ToNot(HaveOccurred())
+				g.Expect(warnings).To(BeEmpty())
+			}
+		})
+	}
+}
+
+func TestMachineHealthCheckUnhealthyMachineConditions(t *testing.T) {
+	tests := []struct {
+		name                       string
+		unhealthyMachineConditions []clusterv1.UnhealthyMachineCondition
+		expectErr                  bool
+	}{
+		{
+			name: "pass with correctly defined unhealthyMachineConditions",
+			unhealthyMachineConditions: []clusterv1.UnhealthyMachineCondition{
+				{
+					Type:   controlplanev1.KubeadmControlPlaneMachineEtcdPodHealthyCondition,
+					Status: metav1.ConditionFalse,
+				},
+			},
+
+			expectErr: false,
+		},
+		{
+			name:                       "do not fail if the UnhealthyMachineCondition array is nil",
+			unhealthyMachineConditions: nil,
+			expectErr:                  false,
+		},
+		{
+			name:                       "do not fail if the UnhealthyMachineCondition array is empty",
+			unhealthyMachineConditions: []clusterv1.UnhealthyMachineCondition{},
+			expectErr:                  false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			g := NewWithT(t)
+			mhc := &clusterv1.MachineHealthCheck{
+				Spec: clusterv1.MachineHealthCheckSpec{
+					Selector: metav1.LabelSelector{
+						MatchLabels: map[string]string{
+							"test": "test",
+						},
+					},
+					Checks: clusterv1.MachineHealthCheckChecks{
+						UnhealthyMachineConditions: tt.unhealthyMachineConditions,
+					},
 				},
 			}
 			webhook := &MachineHealthCheck{}
@@ -247,15 +344,15 @@ func TestMachineHealthCheckUnhealthyConditions(t *testing.T) {
 }
 
 func TestMachineHealthCheckNodeStartupTimeout(t *testing.T) {
-	zero := metav1.Duration{Duration: 0}
-	twentyNineSeconds := metav1.Duration{Duration: 29 * time.Second}
-	thirtySeconds := metav1.Duration{Duration: 30 * time.Second}
-	oneMinute := metav1.Duration{Duration: 1 * time.Minute}
-	minusOneMinute := metav1.Duration{Duration: -1 * time.Minute}
+	zero := int32(0)
+	twentyNineSeconds := int32(29)
+	thirtySeconds := int32(30)
+	oneMinute := int32(60)
+	minusOneMinute := int32(-60)
 
 	tests := []struct {
 		name      string
-		timeout   *metav1.Duration
+		timeout   *int32
 		expectErr bool
 	}{
 		{
@@ -295,16 +392,24 @@ func TestMachineHealthCheckNodeStartupTimeout(t *testing.T) {
 
 		mhc := &clusterv1.MachineHealthCheck{
 			Spec: clusterv1.MachineHealthCheckSpec{
-				NodeStartupTimeout: tt.timeout,
 				Selector: metav1.LabelSelector{
 					MatchLabels: map[string]string{
 						"test": "test",
 					},
 				},
-				UnhealthyConditions: []clusterv1.UnhealthyCondition{
-					{
-						Type:   corev1.NodeReady,
-						Status: corev1.ConditionFalse,
+				Checks: clusterv1.MachineHealthCheckChecks{
+					NodeStartupTimeoutSeconds: tt.timeout,
+					UnhealthyNodeConditions: []clusterv1.UnhealthyNodeCondition{
+						{
+							Type:   corev1.NodeReady,
+							Status: corev1.ConditionFalse,
+						},
+					},
+					UnhealthyMachineConditions: []clusterv1.UnhealthyMachineCondition{
+						{
+							Type:   controlplanev1.KubeadmControlPlaneMachineEtcdPodHealthyCondition,
+							Status: metav1.ConditionFalse,
+						},
 					},
 				},
 			},
@@ -360,19 +465,30 @@ func TestMachineHealthCheckMaxUnhealthy(t *testing.T) {
 	for _, tt := range tests {
 		g := NewWithT(t)
 
-		maxUnhealthy := tt.value
 		mhc := &clusterv1.MachineHealthCheck{
 			Spec: clusterv1.MachineHealthCheckSpec{
-				MaxUnhealthy: &maxUnhealthy,
 				Selector: metav1.LabelSelector{
 					MatchLabels: map[string]string{
 						"test": "test",
 					},
 				},
-				UnhealthyConditions: []clusterv1.UnhealthyCondition{
-					{
-						Type:   corev1.NodeReady,
-						Status: corev1.ConditionFalse,
+				Checks: clusterv1.MachineHealthCheckChecks{
+					UnhealthyNodeConditions: []clusterv1.UnhealthyNodeCondition{
+						{
+							Type:   corev1.NodeReady,
+							Status: corev1.ConditionFalse,
+						},
+					},
+					UnhealthyMachineConditions: []clusterv1.UnhealthyMachineCondition{
+						{
+							Type:   controlplanev1.KubeadmControlPlaneMachineEtcdPodHealthyCondition,
+							Status: metav1.ConditionFalse,
+						},
+					},
+				},
+				Remediation: clusterv1.MachineHealthCheckRemediation{
+					TriggerIf: clusterv1.MachineHealthCheckRemediationTriggerIf{
+						UnhealthyLessThanOrEqualTo: ptr.To(tt.value),
 					},
 				},
 			},
@@ -401,10 +517,18 @@ func TestMachineHealthCheckSelectorValidation(t *testing.T) {
 	g := NewWithT(t)
 	mhc := &clusterv1.MachineHealthCheck{
 		Spec: clusterv1.MachineHealthCheckSpec{
-			UnhealthyConditions: []clusterv1.UnhealthyCondition{
-				{
-					Type:   corev1.NodeReady,
-					Status: corev1.ConditionFalse,
+			Checks: clusterv1.MachineHealthCheckChecks{
+				UnhealthyNodeConditions: []clusterv1.UnhealthyNodeCondition{
+					{
+						Type:   corev1.NodeReady,
+						Status: corev1.ConditionFalse,
+					},
+				},
+				UnhealthyMachineConditions: []clusterv1.UnhealthyMachineCondition{
+					{
+						Type:   controlplanev1.KubeadmControlPlaneMachineEtcdPodHealthyCondition,
+						Status: metav1.ConditionFalse,
+					},
 				},
 			},
 		},
@@ -427,10 +551,18 @@ func TestMachineHealthCheckClusterNameSelectorValidation(t *testing.T) {
 					"baz":                      "qux",
 				},
 			},
-			UnhealthyConditions: []clusterv1.UnhealthyCondition{
-				{
-					Type:   corev1.NodeReady,
-					Status: corev1.ConditionFalse,
+			Checks: clusterv1.MachineHealthCheckChecks{
+				UnhealthyNodeConditions: []clusterv1.UnhealthyNodeCondition{
+					{
+						Type:   corev1.NodeReady,
+						Status: corev1.ConditionFalse,
+					},
+				},
+				UnhealthyMachineConditions: []clusterv1.UnhealthyMachineCondition{
+					{
+						Type:   controlplanev1.KubeadmControlPlaneMachineEtcdPodHealthyCondition,
+						Status: metav1.ConditionFalse,
+					},
 				},
 			},
 		},
@@ -445,54 +577,4 @@ func TestMachineHealthCheckClusterNameSelectorValidation(t *testing.T) {
 	g.Expect(webhook.validate(nil, mhc)).To(Succeed())
 	delete(mhc.Spec.Selector.MatchLabels, clusterv1.ClusterNameLabel)
 	g.Expect(webhook.validate(nil, mhc)).To(Succeed())
-}
-
-func TestMachineHealthCheckRemediationTemplateNamespaceValidation(t *testing.T) {
-	valid := &clusterv1.MachineHealthCheck{
-		ObjectMeta: metav1.ObjectMeta{
-			Namespace: "foo",
-		},
-		Spec: clusterv1.MachineHealthCheckSpec{
-			Selector:            metav1.LabelSelector{MatchLabels: map[string]string{"foo": "bar"}},
-			RemediationTemplate: &corev1.ObjectReference{Namespace: "foo"},
-			UnhealthyConditions: []clusterv1.UnhealthyCondition{
-				{
-					Type:   corev1.NodeReady,
-					Status: corev1.ConditionFalse,
-				},
-			},
-		},
-	}
-	invalid := valid.DeepCopy()
-	invalid.Spec.RemediationTemplate.Namespace = "bar"
-
-	tests := []struct {
-		name      string
-		expectErr bool
-		c         *clusterv1.MachineHealthCheck
-	}{
-		{
-			name:      "should return error when MachineHealthCheck namespace and RemediationTemplate ref namespace mismatch",
-			expectErr: true,
-			c:         invalid,
-		},
-		{
-			name:      "should succeed when namespaces match",
-			expectErr: false,
-			c:         valid,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			g := NewWithT(t)
-			webhook := &MachineHealthCheck{}
-
-			if tt.expectErr {
-				g.Expect(webhook.validate(nil, tt.c)).NotTo(Succeed())
-			} else {
-				g.Expect(webhook.validate(nil, tt.c)).To(Succeed())
-			}
-		})
-	}
 }

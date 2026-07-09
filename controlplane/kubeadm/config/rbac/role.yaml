@@ -14,9 +14,18 @@ rules:
 - apiGroups:
   - ""
   resources:
+  - namespaces
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - ""
+  resources:
   - secrets
   verbs:
   - create
+  - delete
   - get
   - list
   - patch
@@ -30,6 +39,17 @@ rules:
   - get
   - list
   - watch
+- apiGroups:
+  - apiextensions.k8s.io
+  resourceNames:
+  - kubeadmcontrolplanes.controlplane.cluster.x-k8s.io
+  - kubeadmcontrolplanetemplates.controlplane.cluster.x-k8s.io
+  resources:
+  - customresourcedefinitions
+  - customresourcedefinitions/status
+  verbs:
+  - patch
+  - update
 - apiGroups:
   - authentication.k8s.io
   resources:
@@ -78,4 +98,12 @@ rules:
   - list
   - patch
   - update
+  - watch
+- apiGroups:
+  - runtime.cluster.x-k8s.io
+  resources:
+  - extensionconfigs
+  verbs:
+  - get
+  - list
   - watch

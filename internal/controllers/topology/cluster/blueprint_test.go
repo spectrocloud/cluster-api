@@ -18,16 +18,16 @@ package cluster
 
 import (
 	"testing"
-	"time"
 
 	"github.com/google/go-cmp/cmp"
 	. "github.com/onsi/gomega"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	. "sigs.k8s.io/controller-runtime/pkg/envtest/komega"
 
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
+	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/cluster-api/exp/topology/scope"
 	"sigs.k8s.io/cluster-api/util/test/builder"
 )
@@ -53,7 +53,6 @@ func TestGetBlueprint(t *testing.T) {
 	controlPlaneInfrastructureMachineTemplate := builder.InfrastructureMachineTemplate(metav1.NamespaceDefault, "controlplaneinframachinetemplate1").
 		Build()
 	controlPlaneTemplateWithInfrastructureMachine := builder.ControlPlaneTemplate(metav1.NamespaceDefault, "controlplanetempaltewithinfrastructuremachine1").
-		WithInfrastructureMachineTemplate(controlPlaneInfrastructureMachineTemplate).
 		Build()
 
 	workerInfrastructureMachineTemplate := builder.InfrastructureMachineTemplate(metav1.NamespaceDefault, "workerinframachinetemplate1").
@@ -62,9 +61,14 @@ func TestGetBlueprint(t *testing.T) {
 		Build()
 	workerBootstrapTemplate := builder.BootstrapTemplate(metav1.NamespaceDefault, "workerbootstraptemplate1").
 		Build()
-	machineHealthCheck := &clusterv1.MachineHealthCheckClass{
-		NodeStartupTimeout: &metav1.Duration{
-			Duration: time.Duration(1),
+	cpMachineHealthCheck := clusterv1.ControlPlaneClassHealthCheck{
+		Checks: clusterv1.ControlPlaneClassHealthCheckChecks{
+			NodeStartupTimeoutSeconds: ptr.To(int32(1)),
+		},
+	}
+	mdMachineHealthCheck := clusterv1.MachineDeploymentClassHealthCheck{
+		Checks: clusterv1.MachineDeploymentClassHealthCheckChecks{
+			NodeStartupTimeoutSeconds: ptr.To(int32(1)),
 		},
 	}
 
@@ -73,7 +77,7 @@ func TestGetBlueprint(t *testing.T) {
 		WithAnnotations(map[string]string{"a": "b"}).
 		WithInfrastructureTemplate(workerInfrastructureMachineTemplate).
 		WithBootstrapTemplate(workerBootstrapTemplate).
-		WithMachineHealthCheckClass(machineHealthCheck).
+		WithMachineHealthCheckClass(mdMachineHealthCheck).
 		Build()
 
 	mds := []clusterv1.MachineDeploymentClass{*machineDeployment}
@@ -229,7 +233,7 @@ func TestGetBlueprint(t *testing.T) {
 						},
 						InfrastructureMachineTemplate: workerInfrastructureMachineTemplate,
 						BootstrapTemplate:             workerBootstrapTemplate,
-						MachineHealthCheck:            machineHealthCheck,
+						HealthCheck:                   mdMachineHealthCheck,
 					},
 				},
 				MachinePools: map[string]*scope.MachinePoolBlueprint{},
@@ -271,7 +275,7 @@ func TestGetBlueprint(t *testing.T) {
 				WithInfrastructureClusterTemplate(infraClusterTemplate).
 				WithControlPlaneTemplate(controlPlaneTemplate).
 				WithControlPlaneInfrastructureMachineTemplate(controlPlaneInfrastructureMachineTemplate).
-				WithControlPlaneMachineHealthCheck(machineHealthCheck).
+				WithControlPlaneMachineHealthCheck(cpMachineHealthCheck).
 				Build(),
 			objects: []client.Object{
 				infraClusterTemplate,
@@ -283,13 +287,13 @@ func TestGetBlueprint(t *testing.T) {
 					WithInfrastructureClusterTemplate(infraClusterTemplate).
 					WithControlPlaneTemplate(controlPlaneTemplate).
 					WithControlPlaneInfrastructureMachineTemplate(controlPlaneInfrastructureMachineTemplate).
-					WithControlPlaneMachineHealthCheck(machineHealthCheck).
+					WithControlPlaneMachineHealthCheck(cpMachineHealthCheck).
 					Build(),
 				InfrastructureClusterTemplate: infraClusterTemplate,
 				ControlPlane: &scope.ControlPlaneBlueprint{
 					Template:                      controlPlaneTemplate,
 					InfrastructureMachineTemplate: controlPlaneInfrastructureMachineTemplate,
-					MachineHealthCheck:            machineHealthCheck,
+					HealthCheck:                   cpMachineHealthCheck,
 				},
 				MachineDeployments: map[string]*scope.MachineDeploymentBlueprint{},
 				MachinePools:       map[string]*scope.MachinePoolBlueprint{},
@@ -376,7 +380,7 @@ func TestGetBlueprint(t *testing.T) {
 
 			// If no clusterClass is defined in the test case fill in a dummy value "foo".
 			if tt.clusterClass == nil {
-				cluster.Spec.Topology.Class = "foo"
+				cluster.Spec.Topology.ClassRef.Name = "foo"
 			}
 
 			// Sets up the fakeClient for the test case.
@@ -393,8 +397,7 @@ func TestGetBlueprint(t *testing.T) {
 
 			// Calls getBlueprint.
 			r := &Reconciler{
-				Client:             fakeClient,
-				patchHelperFactory: dryRunPatchHelperFactory(fakeClient),
+				Client: fakeClient,
 			}
 			got, err := r.getBlueprint(ctx, scope.New(cluster).Current.Cluster, tt.clusterClass)
 

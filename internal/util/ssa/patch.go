@@ -35,6 +35,14 @@ type Option interface {
 	ApplyToOptions(*Options)
 }
 
+// WithDryRun enables the DryRunAll option.
+type WithDryRun struct{}
+
+// ApplyToOptions applies WithDryRun to the given Options.
+func (w WithDryRun) ApplyToOptions(in *Options) {
+	in.WithDryRun = true
+}
+
 // WithCachingProxy enables caching for the patch request.
 // The original and modified object will be used to generate an
 // identifier for the request.
@@ -53,6 +61,7 @@ func (w WithCachingProxy) ApplyToOptions(in *Options) {
 
 // Options contains the options for the Patch func.
 type Options struct {
+	WithDryRun       bool
 	WithCachingProxy bool
 	Cache            Cache
 	Original         client.Object
@@ -75,6 +84,7 @@ func Patch(ctx context.Context, c client.Client, fieldManager string, modified c
 	if err != nil {
 		return err
 	}
+	modifiedUnstructuredBeforeApply := modifiedUnstructured.DeepCopy()
 
 	gvk, err := apiutil.GVKForObject(modifiedUnstructured, c.Scheme())
 	if err != nil {
@@ -84,11 +94,14 @@ func Patch(ctx context.Context, c client.Client, fieldManager string, modified c
 	var requestIdentifier string
 	if options.WithCachingProxy {
 		// Check if the request is cached.
-		requestIdentifier, err = ComputeRequestIdentifier(c.Scheme(), options.Original, modifiedUnstructured)
+		requestIdentifier, err = ComputeRequestIdentifier(c.Scheme(), options.Original.GetResourceVersion(), modifiedUnstructured)
 		if err != nil {
 			return errors.Wrapf(err, "failed to apply object")
 		}
 		if options.Cache.Has(requestIdentifier, gvk.Kind) {
+			// Refresh the cache entry so we don't have to execute the Apply again after the cache TTL.
+			options.Cache.Add(requestIdentifier)
+
 			// If the request is cached return the original object.
 			if err := c.Scheme().Convert(options.Original, modified, ctx); err != nil {
 				return errors.Wrapf(err, "failed to write original into modified object")
@@ -99,12 +112,18 @@ func Patch(ctx context.Context, c client.Client, fieldManager string, modified c
 		}
 	}
 
-	patchOptions := []client.PatchOption{
+	applyOptions := []client.ApplyOption{
 		client.ForceOwnership,
 		client.FieldOwner(fieldManager),
 	}
-	if err := c.Patch(ctx, modifiedUnstructured, client.Apply, patchOptions...); err != nil {
-		return errors.Wrapf(err, "failed to apply %s %s", gvk.Kind, klog.KObj(modifiedUnstructured))
+	if options.WithDryRun {
+		applyOptions = append(applyOptions, client.DryRunAll)
+	}
+	// Note: Intentionally not including the name of the object in the error message
+	// as during create the name might be random generated in every reconcile.
+	// If these errors are written to conditions this would lead to an infinite reconcile.
+	if err := c.Apply(ctx, client.ApplyConfigurationFromUnstructured(modifiedUnstructured), applyOptions...); err != nil {
+		return errors.Wrapf(err, "failed to apply %s", gvk.Kind)
 	}
 
 	// Write back the modified object so callers can access the patched object.
@@ -115,11 +134,18 @@ func Patch(ctx context.Context, c client.Client, fieldManager string, modified c
 	// Recover gvk e.g. for logging.
 	modified.GetObjectKind().SetGroupVersionKind(gvk)
 
-	if options.WithCachingProxy {
-		// If the SSA call did not update the object, add the request to the cache.
-		if options.Original.GetResourceVersion() == modifiedUnstructured.GetResourceVersion() {
-			options.Cache.Add(requestIdentifier)
+	// Add the request to the cache only if dry-run was not used.
+	if options.WithCachingProxy && !options.WithDryRun {
+		// If the object changed, we need to recompute the request identifier before caching.
+		if options.Original.GetResourceVersion() != modifiedUnstructured.GetResourceVersion() {
+			// NOTE: This uses the resourceVersion from modifiedUnstructured (after apply), and the hash from
+			// modifiedUnstructuredBeforeApply (what we wanted to apply), which is what we want.
+			requestIdentifier, err = ComputeRequestIdentifier(c.Scheme(), modifiedUnstructured.GetResourceVersion(), modifiedUnstructuredBeforeApply)
+			if err != nil {
+				return errors.Wrapf(err, "failed to compute request identifier after apply")
+			}
 		}
+		options.Cache.Add(requestIdentifier)
 	}
 
 	return nil
