@@ -1,0 +1,21 @@
+# force-PICK SHAs (one per line; # = comment) — SPECTRO fork behavior that MUST carry forward.
+# engine 3-way-merges these at execute (capi-conflict-resolver). reviewer-applied (capi-plan-reviewer, v1.9.4->v1.13.3).
+
+# --- SPECTRO controller / webhook behavior (NOT in upstream v1.13.3) ---
+94e41f09  # exclusive webhook + reconcilers (main.go x3): fork controller-manager wiring
+a2e760c0  # relax KCP webhook: internal/webhooks/kubeadm_control_plane.go — CONTRACT-MIGRATED path, expect heavy 3-way
+9a1ef38d  # remove patch-version check for managed clusters: exp/internal/webhooks/machinepool.go — machinepool graduated in target, path relocation
+2cc41a75  # PCP-4630 MachinePool nodeRef UID fix: exp/ machinepool controller (relocated in target)
+c1637f9e  # PEM-10055 MachinePool phases/noderef + clustercache: exp/ relocation
+dccb4723  # PCP-6916 kubeadm v1.36 fix: touches api/v1beta1/machine_types.go — NO api/v1beta1 in target, must relocate to api/core
+7db1c291  # PCP-7005 kubeadm apiserver-kubelet-client crb on upgrade (SOURCE TIP): workload_cluster_rbac.go
+
+# --- SPECTRO drain behavior (was PICK-VERIFY; upgraded to RESOLVE) ---
+4ad35578  # SkipWaitForDeleteTimeoutSeconds=30m for reachable nodes: 3-line insert into pre-refactor drainNode; upstream moved drain to internal/controllers/machine/drain/ — will NOT apply, must re-express
+
+# --- SPECTRO CI / build infra (fork-only spectro-release.yaml + Dockerfiles) ---
+3204248e  # CICD Integration: establishes fork spectro-release.yaml
+9d3d2c51  # Capi runner changes (#229): fork CI runner
+14eeb169  # Update golang version: fork spectro-release.yaml+Dockerfile+Makefile — resolver MUST keep target go 1.25, not fork 1.24 (see regwatch)
+74389278  # PCP-6787 fix CVEs & build configs: keep build-config edits; go.mod CVE bumps re-verified by CVE gate (G)
+57adcc3a  # ubuntu-latest builder (#261): fork CI; go.mod bumps superseded but workflow change is fork state
