@@ -45,6 +45,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/config"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
+	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	bootstrapv1 "sigs.k8s.io/cluster-api/api/bootstrap/kubeadm/v1beta2"
@@ -328,7 +329,18 @@ func main() {
 
 func setupChecks(mgr ctrl.Manager) {
 	if webhookPort == 0 {
-		setupLog.V(0).Info("webhook is disabled skipping webhook healtcheck setup")
+		// Controller-only process: register ping checks so /healthz and /readyz serve
+		// a handler (else 404 → kubelet CrashLoops the pod). The webhook StartedChecker
+		// would start the webhook server + require an unmounted cert. Fork split fix.
+		setupLog.V(0).Info("webhook is disabled, registering ping health checks")
+		if err := mgr.AddReadyzCheck("ping", healthz.Ping); err != nil {
+			setupLog.Error(err, "unable to create ready check")
+			os.Exit(1)
+		}
+		if err := mgr.AddHealthzCheck("ping", healthz.Ping); err != nil {
+			setupLog.Error(err, "unable to create health check")
+			os.Exit(1)
+		}
 		return
 	}
 	if err := mgr.AddReadyzCheck("webhook", mgr.GetWebhookServer().StartedChecker()); err != nil {
