@@ -1,0 +1,1 @@
+# ── INPUT (Gate-1, you edit) — SHAs to force-pick as PICK-RESOLVE (3-way-merged at execute). One per line; '#' = comment. See ../README.md ──

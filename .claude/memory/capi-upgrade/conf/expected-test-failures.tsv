@@ -1,0 +1,3 @@
+# <test-name-regex>	<reason>	<linked-sha8>
+TestKubeadmControlPlaneValidateUpdate	fork relaxes KCP webhook to catch-all allowlist (a2e760c0) — upstream strict-validation tests fail BY DESIGN; update/remove these tests eventually	a2e760c0
+TestMachinePoolVersionValidation	fork disables MachinePool semver patch-version check (9a1ef38d) — upstream tests assert the old strict behavior	9a1ef38d
