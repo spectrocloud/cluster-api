@@ -23,7 +23,7 @@ SHELL:=/usr/bin/env bash
 #
 # Go.
 #
-GO_VERSION ?= 1.26.4
+GO_VERSION ?= 1.26.6
 GO_CONTAINER_IMAGE ?= us-central1-docker.pkg.dev/palette-images-dev/hardened-images/builder/golang:${GO_VERSION}-alpine
 
 # Use GOPROXY environment variable if set
