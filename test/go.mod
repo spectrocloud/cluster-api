@@ -1,6 +1,6 @@
 module sigs.k8s.io/cluster-api/test
 
-go 1.26.6
+go 1.26.7
 
 replace sigs.k8s.io/cluster-api => ../
 
